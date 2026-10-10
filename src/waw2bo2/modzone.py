@@ -420,7 +420,11 @@ def stage_lobby_map_table(stock: Path, project_root: Path, project: str) -> Path
         existing[5] = str(maps.index(existing))
     metadata = menu_metadata(project_root)
     if metadata:
-        existing[3] = 'WAW_MENU_' + project.upper() + '_TITLE'
+        # The loading screen shows this column (ls_mapname) while the map's
+        # zones load, before a mod localize asset exists: a key would show
+        # raw. Unknown strings pass through Localize unchanged (an unbranded
+        # map shows its plain project name here), so use the title itself.
+        existing[3] = metadata['title']
         existing[4] = metadata.get('icon', existing[4])
         existing[6] = 'WAW_MENU_' + project.upper() + '_DESC'
     result = project_root / "zm/mapstable.csv"

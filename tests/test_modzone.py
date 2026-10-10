@@ -28,7 +28,7 @@ class ModZoneTests(unittest.TestCase):
                 with output.open() as stream:
                     row = next(r for r in csv.reader(stream) if r[0] == 'zm_custom')
                 self.assertEqual((row[3], row[4], row[6]),
-                    ('WAW_MENU_ZM_CUSTOM_TITLE', 'custom_atom', 'WAW_MENU_ZM_CUSTOM_DESC'))
+                    ('Test Town', 'custom_atom', 'WAW_MENU_ZM_CUSTOM_DESC'))
                 self.assertEqual(row[11], '0')
             modes = root / 'modes.csv'
             with modes.open('w', newline='') as stream:
