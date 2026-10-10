@@ -66,7 +66,8 @@ class DamagePreludeTests(unittest.TestCase):
         self.assertIn("zombiemode__player_damage_override_prelude( eInflictor, eAttacker, iDamage, iDFlags, "
                       "sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc, psOffsetTime )", core)
         self.assertIn("return 0;", core)                  # WaW bare return = hit dropped
-        self.assertIn("return iDamage;", core)            # fall through = damage unchanged
+        self.assertIn("return -1;", core)                 # fall through: no opinion, later callbacks run
+        self.assertIn("if ( iDamage != waw2bo2_damage_in )\n\t\treturn iDamage;", core)  # changed damage kept
         self.assertNotIn("MOD_FALLING", core)             # BO2 _zm keeps the stock damage logic
         self.assertIn("register_player_damage_callback( ::zombiemode__player_damage_override_prelude )", core)
         self.assertIn("\tzombiemode__player_damage_override_prelude_register();", core)
@@ -80,6 +81,39 @@ class DamagePreludeTests(unittest.TestCase):
         core, report = self.port(body[0] + "{\n\tif( self.shielded )\n\t\treturn;\n" + body[1], older)
         self.assertIn("if( self.shielded )\n\t\treturn 0;", core)
         self.assertFalse([e for e in report.errors if "damage" in e])
+
+    def test_callbackglobal_player_damage_rules_become_a_bo2_damage_callback(self):
+        # Nuketown's PhD Flopper: the map's _callbackglobal cancels explosive and fall damage
+        stock = ("Callback_PlayerDamage( eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, "
+                 "vDir, sHitLoc, modelIndex, psOffsetTime )\n{\n"
+                 "\tif( isdefined( eAttacker ) && isPlayer( eAttacker ) )\n\t{\n\t\treturn;\n\t}\n"
+                 "\tself finishPlayerDamageWrapper( eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, "
+                 "sWeapon, vPoint, vDir, sHitLoc, modelIndex, psOffsetTime );\n}\n")
+        prelude = ("\tif( self HasPerk(\"specialty_detectexplosive\") && sMeansOfDeath == \"MOD_FALLING\" )\n\t{\n"
+                   "\t\tself.previous_health = self.health;\n\t\treturn;\n\t}\n")
+        head, tail = stock.split("{\n", 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {root / "src/maps/testmap.gsc": "main()\n{\n\tmaps\\_zombiemode::main();\n}\n",
+                     root / "src/maps/_callbackglobal.gsc": "init() {}\n" + head + "{\n" + prelude + tail,
+                     root / "stock/maps/_callbackglobal.gsc": "init() {}\n" + stock,
+                     root / "stock/maps/_zombiemode.gsc": "main() {}\n" + STOCK_DAMAGE}
+            for path, text in files.items():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+            sources = gscport.Sources([root / "src"], [], root / "stock")
+            api = _api()
+            api.methods["hasperk"] = (1, 1)
+            report = gscport.port_map(sources, api, "testmap", root / "out")
+            core = (root / "out/maps/mp/waw/_waw2bo2_core.gsc").read_text(encoding="utf-8")
+        self.assertIn("callbackglobal__callback_playerdamage_prelude( eInflictor, eAttacker, iDamage, iDFlags, "
+                      "sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc, psOffsetTime )", core)
+        self.assertIn("specialty_detectexplosive", core)
+        self.assertIn("return 0;", core)                  # the immunity drops the hit
+        self.assertNotIn("isPlayer( eAttacker )", core)   # stock body stays BO2's
+        self.assertIn("register_player_damage_callback( ::callbackglobal__callback_playerdamage_prelude )", core)
+        self.assertIn("\tcallbackglobal__callback_playerdamage_prelude_register();", core)
+        self.assertFalse([e for e in report.errors if "damage" in e.lower()])
 
     def test_stock_damage_override_registers_nothing(self):
         core, _ = self.port(STOCK_DAMAGE)

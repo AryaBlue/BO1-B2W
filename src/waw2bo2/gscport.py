@@ -1070,23 +1070,28 @@ class Translator:
         self.level_state_parts.append(gsc.emit(tokens))
         return name
 
-    def extract_damage_prelude(self) -> str | None:
+    def extract_damage_prelude(self, core: str = None, function: str = None) -> str | None:
         """A map's _zombiemode override may put its own rules in front of WaW's
         player_damage_override (e.g. a shield absorbing zombie hits). BO2's _zm
         owns player damage, so those leading statements become a BO2 player
         damage callback: a bare WaW return (no finishPlayerDamage) drops the
         hit, i.e. 0 damage; falling through keeps the (possibly changed) damage.
-        Returns the name of the extracted registration function in CORE."""
-        key = ZOMBIEMODE + ".gsc"
-        variants = self.sources.stock_variants(ZOMBIEMODE)
+        The same holds for a map's _callbackglobal Callback_PlayerDamage (e.g. a
+        custom PhD Flopper cancelling explosive and fall damage), which BO2
+        replaces as well. Returns the name of the extracted registration
+        function in CORE."""
+        core = core or ZOMBIEMODE
+        function = function or DAMAGE_OVERRIDE
+        key = core + ".gsc"
+        variants = self.sources.stock_variants(core)
         if key not in self.sources.text or not variants or self.sources.text[key] in variants:
             return None
-        script = self.sources.get(ZOMBIEMODE)
-        fn = script.functions.get(DAMAGE_OVERRIDE)
+        script = self.sources.get(core)
+        fn = script.functions.get(function)
         if fn is None:
             return None
         toks = script.tokens
-        where = self.sources.origin.get(key, ZOMBIEMODE)
+        where = self.sources.origin.get(key, core)
 
         def text(ts: list[gsc.Token], span: tuple[int, int]) -> str:
             return " ".join(t.low for t in ts[span[0]:span[1]])
@@ -1110,8 +1115,8 @@ class Translator:
         # the map's own rules end where the stock body it was edited from starts
         leads = []
         for variant in variants:
-            stock = gsc.parse(variant, ZOMBIEMODE)
-            base = stock.functions.get(DAMAGE_OVERRIDE)
+            stock = gsc.parse(variant, core)
+            base = stock.functions.get(function)
             spans = top_level_statements(stock.tokens, base.body_open, base.body_close) if base else []
             if spans and text(stock.tokens, spans[0]) in stmts:
                 leads.append(stmts.index(text(stock.tokens, spans[0])))
@@ -1119,7 +1124,7 @@ class Translator:
                 anchor = header(stock.tokens, spans[0])
                 leads.extend(i for i, span in enumerate(map_spans) if header(toks, span) == anchor)
         if not leads:
-            self.report.errors.append(f"{where}: {DAMAGE_OVERRIDE} does not keep a stock WaW body; the map's "
+            self.report.errors.append(f"{where}: {function} does not keep a stock WaW body; the map's "
                                       f"damage rules are not ported")
             return None
         lead = min(leads)
@@ -1158,24 +1163,29 @@ class Translator:
                 token.text = token.pre = ""
             self.report.rewrites["WaW zero-damage finish/return -> T6 damage cancellation"] += 1
         if len(fn.params) != 11 or any(t.low in ("finishplayerdamage", "finishplayerdamagewrapper") for t in body):
-            self.report.errors.append(f"{where}: {DAMAGE_OVERRIDE} prelude applies damage itself; not ported")
+            self.report.errors.append(f"{where}: {function} prelude applies damage itself; not ported")
             return None
-        name = f"{ZOMBIEMODE.split(chr(92))[-1].lstrip('_')}__{DAMAGE_OVERRIDE}_prelude"
+        name = f"{core.split(chr(92))[-1].lstrip('_')}__{function}_prelude"
         # BO2 callbacks get WaW's parameters without modelIndex (the 10th)
         params = fn.params[:9] + fn.params[10:]
         model_index = fn.params[9].lower()
         reset = f"\t{fn.params[9]} = undefined;\n" if any(t.low == model_index for t in body) else ""
-        source = (f"{name}( {', '.join(params)} )\n{{\n{reset}" + gsc.emit(body) +
-                  f"\n\treturn {fn.params[2]};\n}}\n")
+        # BO2 stops at the first callback returning anything but -1: a hit the
+        # rules leave unchanged must return -1, or one prelude hides the next
+        # (and every later BO2 callback).
+        damage = fn.params[2]
+        source = (f"{name}( {', '.join(params)} )\n{{\n{reset}\twaw2bo2_damage_in = {damage};\n" +
+                  gsc.emit(body) + f"\n\tif ( {damage} != waw2bo2_damage_in )\n\t\treturn {damage};\n"
+                  f"\treturn -1;\n}}\n")
         tokens = gsc.tokenize(source)
         for i in range(len(tokens) - 1, 0, -1):
             if tokens[i].low == "return" and tokens[i + 1].text == ";":
                 tokens.insert(i + 1, gsc.Token(gsc.NUMBER, "0", " "))
-        tokens[0].pre = f"\n// {ZOMBIEMODE}::{DAMAGE_OVERRIDE}: the map's leading rules, as a BO2 damage callback\n"
+        tokens[0].pre = f"\n// {core}::{function}: the map's leading rules, as a BO2 damage callback\n"
         self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
         self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
-        self.resolve_refs(tokens, script, where, set(CORE_INCLUDES), {0}, extracting=ZOMBIEMODE)
-        self.report.extracted.append(f"{ZOMBIEMODE}::{DAMAGE_OVERRIDE} (map prelude -> damage callback)")
+        self.resolve_refs(tokens, script, where, set(CORE_INCLUDES), {0}, extracting=core)
+        self.report.extracted.append(f"{core}::{function} (map prelude -> damage callback)")
         self.level_state_parts.append(gsc.emit(tokens) + f"\n{name}_register()\n{{\n"
                                       f"\tmaps\\mp\\zombies\\_zm::register_player_damage_callback( ::{name} );\n}}\n")
         return f"{name}_register"
@@ -1534,9 +1544,10 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
                        if (state := tr.extract_level_state(core, init, read))]
     if hint_registry:
         framework_state.append(hint_registry)
-    damage_prelude = tr.extract_damage_prelude()
-    if damage_prelude:
-        framework_state.append(damage_prelude)
+    for core, function in DAMAGE_PRELUDES:
+        damage_prelude = tr.extract_damage_prelude(core, function)
+        if damage_prelude:
+            framework_state.append(damage_prelude)
     drain()
     core_parts += tr.level_state_parts
     # effects loaded by extracted framework/template functions (e.g. the DLC3
@@ -1798,6 +1809,8 @@ BOX_STATE_INIT = ("maps\\_zombiemode_weapons", "init")
 # _zombiemode::init_anims); only the fields the ported scripts read are kept
 FRAMEWORK_STATE_INITS = (("maps\\_zombiemode", "init_standard_zombie_anims"),)
 DAMAGE_OVERRIDE = "player_damage_override"
+# WaW player damage entry points a map may override with leading rules of its own
+DAMAGE_PRELUDES = [(ZOMBIEMODE, DAMAGE_OVERRIDE), ("maps\\_callbackglobal", "callback_playerdamage")]
 # s: BO2 end_game's intermission wait while a map's own end_game wait runs
 END_GAME_FALLBACK = 30
 

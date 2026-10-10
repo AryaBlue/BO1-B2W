@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Port a map's own rules at the top of WaW's `_callbackglobal` `Callback_PlayerDamage` as a BO2 player-damage callback, as already done for `_zombiemode`'s `player_damage_override`. Nuketown's PhD Flopper cancels explosive, projectile, fire and fall damage there. The check never ran, so the perk did nothing.
+- Extracted damage rules that leave a hit unchanged now return -1 (no opinion). BO2 stops at the first callback that returns anything else, so one map rule (e.g. Nuketown's shield) hid every later one.
 - Keep the player's own pistol after a solo revive. BO2's solo last stand swaps in an upgraded pistol, judged against BO2's pistol list, and takes `level.laststandpistol` back on revive. WaW maps set that to their start pistol, so a revive took the player's 1911. WaW hands back exactly the weapons held when downed, so the swap is now off for maps with a WaW loadout.
 - Show the authored map title on the loading screen. The loading screen reads the map name from `zm/mapstable.csv` before the mod's localized strings are loaded, so the localized key appeared instead of the name. That column now holds the title itself; the lobby keeps its localized strings.
 - Convert the effects loaded by WaW framework and template functions the port extracts, not only those in whole ported scripts. The DLC3 template's `dlc3_fx` loads the mystery box's sky marker beam and its landing flare. Neither was converted, so the box had no light showing where it was.
