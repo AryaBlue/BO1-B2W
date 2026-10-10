@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep the player's own pistol after a solo revive. BO2's solo last stand swaps in an upgraded pistol, judged against BO2's pistol list, and takes `level.laststandpistol` back on revive. WaW maps set that to their start pistol, so a revive took the player's 1911. WaW hands back exactly the weapons held when downed, so the swap is now off for maps with a WaW loadout.
 - Show the authored map title on the loading screen. The loading screen reads the map name from `zm/mapstable.csv` before the mod's localized strings are loaded, so the localized key appeared instead of the name. That column now holds the title itself; the lobby keeps its localized strings.
 - Convert the effects loaded by WaW framework and template functions the port extracts, not only those in whole ported scripts. The DLC3 template's `dlc3_fx` loads the mystery box's sky marker beam and its landing flare. Neither was converted, so the box had no light showing where it was.
 - Give WaW projectile and grenade weapons full damage. WaW does not scale their damage by hit location, so its weapon files leave every location multiplier at 0. BO2 does scale it, so a direct hit and its explosion dealt nothing. Only BO2's small script bonus for projectile hits landed. When every multiplier is 0, they now convert to a neutral 1. This fixes Nuketown's ray gun doing little to no damage, and likely the SMAW, C4, claymores and monkey bombs too.

@@ -78,6 +78,11 @@ class AppearanceTests(unittest.TestCase):
             source = gscport.characters_source()
             self.assertIn("maps\\mp\\waw\\_loadout::give_model( self.pers[\"class\"] );", source)
             self.assertIn("maps\\mp\\waw\\_loadout::init_loadout();", source)
+            # BO2's solo last-stand pistol swap would take the WaW start pistol on revive
+            body = source[source.index("waw_loadout_weapons( start, pistol )"):source.index("give()")]
+            self.assertIn("level.pistol_value_solo_replace_below = -1;", body)
+            self.assertLess(body.index("level.laststandpistol = pistol;"),
+                            body.index("level.pistol_value_solo_replace_below = -1;"))
             main.write_text("main() {}\n")
             with self.assertRaises(ValueError):
                 gscport.hook_bo2_characters(main)
