@@ -198,6 +198,9 @@ waw_setvelocity( velocity )
 // DoDamage). T6 only ragdolls a dead actor: every stock caller (thundergun,
 // springpad, riotshield) damages first, so a live call is lost and the kill
 // plays the normal death animation. Defer ragdoll and launch until the death.
+// A WaW ragdoll stops blocking players at once; drop the actor's player
+// collision now, as BO2's zombie_ragdoll_then_explode does, so the frame
+// before the deferred ragdoll does not leave an invisible wall.
 waw_startragdoll( arg )
 {
     if ( isai( self ) && isalive( self ) )
@@ -205,6 +208,7 @@ waw_startragdoll( arg )
         if ( !isdefined( self.waw_ragdoll_pending ) )
         {
             self.waw_ragdoll_pending = 1;
+            self setplayercollision( 0 );
             self thread waw_ragdoll_after_death();
         }
         return;
@@ -233,6 +237,9 @@ waw_launchragdoll( force, bone )
 waw_ragdoll_after_death()
 {
     self waittill( "death" );
+    // Measured in game: StartRagdoll inside the death notify is ignored even
+    // though IsAlive is already false; at the end of the frame it launches.
+    waittillframeend;
     if ( !isdefined( self ) )
         return;
     self startragdoll();
