@@ -1539,6 +1539,9 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
         framework_state.append(damage_prelude)
     drain()
     core_parts += tr.level_state_parts
+    # effects loaded by extracted framework/template functions (e.g. the DLC3
+    # template's dlc3_fx: the mystery box's sky marker) are converted too
+    report.fx += re.findall(r'waw_loadfx\s*\(\s*"([^"]+)"', "\n".join(core_parts), re.IGNORECASE)
     core_parts.append("\n// level state of WaW framework inits BO2 does not run (called by waw_main_pre)\n"
                       "framework_level_state()\n{\n" + "".join(f"\t{fn}();\n" for fn in framework_state) + "}\n")
     (out_dir / "_waw2bo2_compat.gsc").write_text((COMPAT_DIR / "_waw2bo2_compat.gsc").read_text(encoding="utf-8"),

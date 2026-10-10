@@ -93,6 +93,15 @@ class FrameworkHookTests(unittest.TestCase):
                       (gscport.COMPAT_DIR / "_waw2bo2_compat.gsc").read_text(encoding="utf-8"))
         self.assertIn("precachemodel", gscport.API["compat_wrappers"])
 
+    def test_effects_of_extracted_template_functions_are_converted(self):
+        # the DLC3 template's dlc3_fx loads the mystery box's sky marker
+        _, _, report = self.port({
+            "maps/testmap.gsc": "main()\n{\n\tmaps\\dlc3_code::dlc3_fx();\n\tmaps\\_zombiemode::main();\n}\n",
+            "maps/dlc3_code.gsc": "dlc3_fx()\n{\n\tlevel._effect[\"lght_marker\"] = "
+                                  "loadfx( \"maps/zombie/fx_zombie_factory_marker\" );\n}\n",
+        })
+        self.assertIn("maps/zombie/fx_zombie_factory_marker", report.fx)
+
     def test_no_override_main_no_hooks(self):
         main, _, _ = self.port({"maps/testmap.gsc": "main()\n{\n\tmaps\\_zombiemode::main();\n}\n"})
         self.assertNotIn("inits of the map's own scripts", main)
