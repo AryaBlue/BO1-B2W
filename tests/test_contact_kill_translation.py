@@ -1,6 +1,7 @@
 import unittest
 
 from waw2bo2 import gsc, gscport
+from waw2bo2.t6api import T6Api
 
 
 class ContactKillTranslationTests(unittest.TestCase):
@@ -37,6 +38,25 @@ class ContactKillTranslationTests(unittest.TestCase):
         self.assertIn('if (!IsAlive(self)) { self', text)
         self.assertIn('return; }', text)
         gsc.parse(text, 'translated')
+
+    def test_monitor_still_matches_after_ragdoll_calls_route_through_compat(self):
+        compat = gscport.COMPAT
+        routed = (self.source
+                  .replace('self StartRagdoll()', f'self {compat}::waw_startragdoll()')
+                  .replace('self launchragdoll(', f'self {compat}::waw_launchragdoll('))
+        count, text = self.translate(routed)
+        self.assertEqual(count, 1)
+        self.assertEqual(text.count('::waw_contact_kill_begin()'), 1)
+
+    def test_ragdoll_builtins_defer_to_death_through_compat(self):
+        # T6 only ragdolls dead actors; WaW ragdolls them alive, then kills.
+        api = T6Api({}, {}, methods={"startragdoll": (0, 1), "launchragdoll": (1, 2)})
+        translator = gscport.Translator(gscport.Sources([], [], None), api, gscport.PortReport())
+        script = gsc.parse(self.source, 'test')
+        self.assertEqual(translator.resolve_builtin('startragdoll', 0, 'test', script, set(), True),
+                         gscport.COMPAT + '::waw_startragdoll')
+        self.assertEqual(translator.resolve_builtin('launchragdoll', 1, 'test', script, set(), True),
+                         gscport.COMPAT + '::waw_launchragdoll')
 
     def test_ordinary_attacks_and_exploding_enemies_are_unchanged(self):
         for text in (self.source.replace('self.health + 666', '10'),

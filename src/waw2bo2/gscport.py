@@ -207,7 +207,8 @@ def bridge_contact_kill_attacks(tokens: list[gsc.Token], script: gsc.Script) -> 
         code = "".join(t.low for t in body)
         if not ("getplayers()" in code and "isalive(self)" in code
                 and re.search(r"distance\(self\.origin,[a-z_]\w*\[[^]]+\]\.origin\)<=\d", code)
-                and "selfstartragdoll()" in code and "selflaunchragdoll(" in code
+                and re.search(r"self(?:\S*::waw_)?startragdoll\(\)", code)
+                and re.search(r"self(?:\S*::waw_)?launchragdoll\(", code)
                 and re.search(r"selfdodamage\(self\.health\+\d", code)
                 and "wait" in code):
             continue

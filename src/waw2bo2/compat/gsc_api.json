@@ -87,6 +87,8 @@
   },
   "compat_wrappers": [
     "setvelocity",
+    "startragdoll",
+    "launchragdoll",
     "loadfx",
     "playfx",
     "playfxontag",

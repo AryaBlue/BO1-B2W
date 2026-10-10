@@ -194,6 +194,56 @@ waw_setvelocity( velocity )
     self setvelocity( velocity );
 }
 
+// WaW ragdolls a living actor, then kills it (StartRagdoll; LaunchRagdoll;
+// DoDamage). T6 only ragdolls a dead actor: every stock caller (thundergun,
+// springpad, riotshield) damages first, so a live call is lost and the kill
+// plays the normal death animation. Defer ragdoll and launch until the death.
+waw_startragdoll( arg )
+{
+    if ( isai( self ) && isalive( self ) )
+    {
+        if ( !isdefined( self.waw_ragdoll_pending ) )
+        {
+            self.waw_ragdoll_pending = 1;
+            self thread waw_ragdoll_after_death();
+        }
+        return;
+    }
+    if ( isdefined( arg ) )
+        self startragdoll( arg );
+    else
+        self startragdoll();
+}
+
+waw_launchragdoll( force, bone )
+{
+    if ( isai( self ) && isalive( self ) )
+    {
+        self.waw_ragdoll_launch = force;
+        self.waw_ragdoll_launch_bone = bone;
+        self waw_startragdoll();
+        return;
+    }
+    if ( isdefined( bone ) )
+        self launchragdoll( force, bone );
+    else
+        self launchragdoll( force );
+}
+
+waw_ragdoll_after_death()
+{
+    self waittill( "death" );
+    if ( !isdefined( self ) )
+        return;
+    self startragdoll();
+    if ( !isdefined( self.waw_ragdoll_launch ) )
+        return;
+    if ( isdefined( self.waw_ragdoll_launch_bone ) )
+        self launchragdoll( self.waw_ragdoll_launch, self.waw_ragdoll_launch_bone );
+    else
+        self launchragdoll( self.waw_ragdoll_launch );
+}
+
 // ---- FX: WaW effect names resolve through the converted asset table ----
 
 waw_loadfx( name )
