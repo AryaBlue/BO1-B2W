@@ -206,6 +206,18 @@ def convert(name: str, source: dict[str, str], t4_schema: dict[str, str], t6_sch
         out.fields["offhandSlot"] = slot
         out.translations["offhandSlot"] = {"source": source["offhandClass"], "target": slot,
             "reason": "T4 offhand class -> T6 required inventory slot"}
+    # WaW does not scale projectile or grenade damage by hit location: its own
+    # compiled ray_gun has every loc multiplier 0 and still hits for 1000/1500.
+    # T6 does scale them (42 of 43 stock _zm projectiles and every stock
+    # grenade set them), so all-zero multipliers made a direct hit and its
+    # explosion deal nothing. Neutral 1 keeps WaW's unscaled damage.
+    loc_keys = [k for k in source if k.startswith("loc") and t6_schema.get(k) == "CSPFT_FLOAT"]
+    if source.get("weaponType") in ("projectile", "grenade") and loc_keys and \
+            all(float(source[k] or 0) == 0 for k in loc_keys):
+        for key in loc_keys:
+            out.fields[key] = "1"
+        out.translations["loc*"] = {"source": "0", "target": "1",
+            "reason": "WaW ignores hit-location multipliers on projectiles/grenades; T6 applies them"}
     # T4 has no melee inventory: melee always swings the held weapon. T6 swings
     # the player's melee weapon (knife) unless the held one is useAsMelee, as
     # BO2's riotshield_zm is. Held items with their own melee (a rake or axe

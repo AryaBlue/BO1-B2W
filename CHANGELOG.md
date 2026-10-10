@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Give WaW projectile and grenade weapons full damage. WaW does not scale their damage by hit location, so its weapon files leave every location multiplier at 0. BO2 does scale it, so a direct hit and its explosion dealt nothing. Only BO2's small script bonus for projectile hits landed. When every multiplier is 0, they now convert to a neutral 1. This fixes Nuketown's ray gun doing little to no damage, and likely the SMAW, C4, claymores and monkey bombs too.
 - Fling zombies that WaW scripts ragdoll while still alive. WaW scripts call `StartRagdoll`/`LaunchRagdoll` on a living zombie and then kill it, but BO2 only ragdolls dead actors. The launch was lost and the zombie played its normal death animation. The ragdoll and launch now wait for the death. This fixes Nuketown's baby gun, where shrunken zombies did not go flying when a player ran into them.
 
 - Read the script linker log correctly when its expected "Could not open BSP" error is printed in the middle of a "Compiled GSC script" line (Linux/Wine). The build no longer reports `clientscripts/mp/waw/_waw2bo2_zm.csc` as missing when it compiled.

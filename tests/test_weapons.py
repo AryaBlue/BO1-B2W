@@ -16,6 +16,18 @@ class WeaponTests(unittest.TestCase):
             self.assertEqual(converted.fields["offhandSlot"], slot)
         self.assertNotIn("offhandSlot", weapons.convert("gun", {}, {}, {}).fields)
 
+    def test_unscaled_waw_projectile_damage_gets_neutral_t6_hit_locations(self):
+        schema = {"weaponType": "WFT_WEAPONTYPE", "locNone": "CSPFT_FLOAT", "locHead": "CSPFT_FLOAT"}
+        zero = {"locNone": "0", "locHead": "0"}
+        for kind in ("projectile", "grenade"):
+            out = weapons.convert("raygun", {"weaponType": kind, **zero}, schema, schema)
+            self.assertEqual((out.fields["locNone"], out.fields["locHead"]), ("1", "1"))
+        # bullets keep their multipliers; real projectile multipliers are kept too
+        out = weapons.convert("gun", {"weaponType": "bullet", **zero}, schema, schema)
+        self.assertEqual(out.fields["locHead"], "0")
+        out = weapons.convert("rpg", {"weaponType": "projectile", "locNone": "1", "locHead": "4"}, schema, schema)
+        self.assertEqual(out.fields["locHead"], "4")
+
     def test_bounce_sound_prefix_reaches_namespaced_surface_aliases(self):
         schema = {"bounceSound": "WFT_BOUNCE_SOUND"}
         converted = weapons.convert("custom", {"bounceSound": "custom/bounce"}, schema, schema)
