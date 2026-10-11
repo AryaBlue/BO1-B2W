@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Skip weapons that a map's scripts name but that neither the map nor BO2 provides, instead of crashing with `unknown weapon` (e.g. a mod script that registers `zombie_slipgun` without shipping it). Before, any name missing from the converted weapon table was treated as BO2's own and passed to the engine. `build-mod` now records every weapon the linked `mod.ff` loads, and the compat lookup passes through only those names. Any other name is reported once as `WAW2BO2 UNSUPPORTED WEAPON <name>` and the call is skipped. Weapon queries the port did not route through compat before (`WeaponMaxAmmo`, `WeaponAltWeaponName`, `GiveStartAmmo`, ...) now go through the same lookup.
+
 - Port a map's own rules at the top of WaW's `_callbackglobal` `Callback_PlayerDamage` as a BO2 player-damage callback, as already done for `_zombiemode`'s `player_damage_override`. Nuketown's PhD Flopper cancels explosive, projectile, fire and fall damage there. The check never ran, so the perk did nothing.
 - Extracted damage rules that leave a hit unchanged now return -1 (no opinion). BO2 stops at the first callback that returns anything else, so one map rule (e.g. Nuketown's shield) hid every later one.
 - Keep the player's own pistol after a solo revive. BO2's solo last stand swaps in an upgraded pistol, judged against BO2's pistol list, and takes `level.laststandpistol` back on revive. WaW maps set that to their start pistol, so a revive took the player's 1911. WaW hands back exactly the weapons held when downed, so the swap is now off for maps with a WaW loadout.

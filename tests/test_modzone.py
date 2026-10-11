@@ -288,3 +288,12 @@ class CharacterModelTests(unittest.TestCase):
                 (raw / f"xmodel/{m}.json").write_text("{}")
             zone = "script,character/c_zombie.gsc\nscript,xmodelalias/heads.gsc\nxmodel,body\nxmodel,listed_head\n"
             self.assertEqual(modzone.character_models(zone, raw), ["head1"])
+
+    def test_loaded_weapons_come_from_the_final_link_log(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work = Path(tmp)
+            self.assertEqual(modzone.loaded_weapons(work), set())
+            (work / "linker.log").write_text('Loaded weapon "ray_gun_zm" (src: disk)\n'
+                                             'Loaded xmodel "defaultweapon" (src: disk)\n'
+                                             'Loaded weapon "gl_type95_zm" (src: disk)\n')
+            self.assertEqual(modzone.loaded_weapons(work), {"ray_gun_zm", "gl_type95_zm"})
