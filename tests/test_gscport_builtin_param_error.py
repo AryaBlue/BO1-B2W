@@ -35,5 +35,16 @@ class BuiltinArgumentCountTest(unittest.TestCase):
         self.assertNotIn("waw2bo2_never", translator.stub_source())
 
 
+class Dlc3PowerSwitchTest(unittest.TestCase):
+    def test_template_threadcalls2_runs_the_ported_power_switch(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "maps").mkdir()
+            (root / "maps/test.gsc").write_text("main()\n{\n\tlevel thread maps\\dlc3_code::dlc3_threadcalls2();\n}\n")
+            translator = gscport.Translator(gscport.Sources([root], [], None), T6Api({}, {}), gscport.PortReport())
+            source = translator.translate(r"maps\test")
+        self.assertIn(r"maps\mp\waw\_waw2bo2_compat::waw_dlc3_threadcalls2()", source)
+
+
 if __name__ == "__main__":
     unittest.main()
