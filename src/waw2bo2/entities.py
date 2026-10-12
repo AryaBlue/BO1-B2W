@@ -177,9 +177,7 @@ def convert_entities(ents: list[dict[str, str]], project: str,
                 # BO2's zone manager spawns at script_structs named volume.target;
                 # a struct without script_string also picks the nearest windows.
                 if ent.get("script_string") != "riser":
-                    out.append({"classname": "script_struct", "targetname": ent["targetname"],
-                                "origin": ent.get("origin", "0 0 0"), "angles": ent.get("angles", "0 0 0"),
-                                "script_noteworthy": "spawn_location"})
+                    out.append(spawn_struct(ent, ent["targetname"], renamed))
                     renamed["WaW zombie spawner -> spawn_location struct"] += 1
                 else:
                     renamed["WaW riser spawner (rises at its zone's _rise structs)"] += 1
@@ -214,6 +212,38 @@ def convert_entities(ents: list[dict[str, str]], project: str,
     summary = {"entities": len(out), "dropped": dict(dropped), "renamed": dict(renamed),
                "spawn_points": len(points)}
     return out, spawns, summary
+
+
+def spawn_struct(spawner: dict, targetname: str, renamed: Counter) -> dict:
+    """BO2 spawn_location struct for a WaW zombie spawner. WaW zombie_think sends
+    a spawner whose script_string is "zombie_chaser" straight at the players;
+    BO2 zombie_think reads that choice from the spawn struct's script_string
+    ("find_flesh", handed over by its "risen" notify)."""
+    struct = {"classname": "script_struct", "targetname": targetname,
+              "origin": spawner.get("origin", "0 0 0"), "angles": spawner.get("angles", "0 0 0"),
+              "script_noteworthy": "spawn_location"}
+    if spawner.get("script_string") == "zombie_chaser":
+        struct["script_string"] = "find_flesh"
+        renamed["WaW zombie_chaser spawner -> find_flesh spawn_location"] += 1
+    return struct
+
+
+def chase_without_barricades(out: list[dict], summary: dict) -> None:
+    """A map without exterior_goal structs gives WaW's stock zombie_think no
+    window to walk to (nodes[0] undefined); such maps replace the spawner logic
+    so zombies hunt the players, and BO2 does not run that replacement. BO2's
+    zombie_think then reads undefined node.origin and the zombie stands still.
+    Route every spawn to find_flesh, the behaviour those maps implement."""
+    if any(e.get("targetname") == "exterior_goal" for e in out):
+        return
+    count = 0
+    for e in out:
+        if e.get("classname") == "script_struct" and e.get("script_noteworthy") in ("spawn_location",
+                                                                                   "riser_location")                 and not e.get("script_string"):
+            e["script_string"] = "find_flesh"
+            count += 1
+    if count:
+        summary.setdefault("renamed", {})["no exterior_goal barricades: spawn -> find_flesh"] = count
 
 
 def wall_buy_null_targets(ents: list[dict], renamed: Counter) -> None:
@@ -372,9 +402,7 @@ def synthesize_zones(out: list[dict], clip, bsp_dir: Path, summary: dict) -> tup
                     "model": f"*{len(subs)}", "script_noteworthy": "player_volume"})
         for spawner in by_name[group]:
             if spawner.get("classname") == ZOMBIE_ACTOR_CLASS and (group, spawner.get("origin")) not in have_struct:
-                out.append({"classname": "script_struct", "targetname": group,
-                            "origin": spawner.get("origin", "0 0 0"), "angles": spawner.get("angles", "0 0 0"),
-                            "script_noteworthy": "spawn_location"})
+                out.append(spawn_struct(spawner, group, Counter()))
     subs_path.write_text(json.dumps({"submodels": subs}, separators=(",", ":")) + "\n", encoding="utf-8")
     summary["synthesized_zones"] = {"initial": initial, "adjacency": adjacency, "groups": groups,
                                     "never_unlocked": locked}
@@ -389,6 +417,7 @@ def write_entities(ents_file: Path, project: str, bsp_dir: Path, clip=None,
     out, spawns, summary = convert_entities(ents, project, animscripts, zone_names)
     if start_zones == [] and clip is not None and (bsp_dir / "submodels.json").exists():
         start_zones = synthesize_zones(out, clip, bsp_dir, summary)[0]
+    chase_without_barricades(out, summary)
     if any(e.get("targetname") == "initial_spawn_points" for e in out):
         chosen = add_bo2_initial_spawns(out, clip, start_zones or [], summary)
         spawns = zombies_spawns([{"origin": e.get("origin", "0 0 0"), "angles": e.get("angles", "0 0 0")}

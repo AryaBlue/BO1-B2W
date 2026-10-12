@@ -24,6 +24,23 @@ class ZoneGraphTests(unittest.TestCase):
         self.assertEqual(actors[1]['script_string'], 'riser')
         self.assertEqual(next(e for e in out if e['classname'] == 'actor_ally')['script_forcespawn'], '0')
         self.assertEqual(summary['renamed']['WaW DoSpawn -> T6 spawnactor spawner flag'], 2)
+    def test_spawn_structs_chase_like_waw(self):
+        spawner = {"classname": "actor_zombie_ger_ber_sshonor", "script_noteworthy": "zombie_spawner",
+                   "targetname": "zone_spawners", "origin": "1 2 3"}
+        chaser = dict(spawner, origin="4 5 6", script_string="zombie_chaser")
+        goal = {"classname": "script_struct", "targetname": "exterior_goal", "origin": "0 0 0"}
+        out, _, summary = entities.convert_entities([spawner, chaser, goal], "test", {})
+        entities.chase_without_barricades(out, summary)
+        structs = {e["origin"]: e.get("script_string") for e in out if e.get("script_noteworthy") == "spawn_location"}
+        # WaW zombie_chaser hunts players; plain spawners keep WaW's nearest-window path
+        self.assertEqual(structs, {"1 2 3": None, "4 5 6": "find_flesh"})
+        # without any barricade there is no window to reach: every spawn hunts players
+        out, _, summary = entities.convert_entities([spawner], "test", {})
+        entities.chase_without_barricades(out, summary)
+        self.assertEqual([e.get("script_string") for e in out if e.get("script_noteworthy") == "spawn_location"],
+                         ["find_flesh"])
+        self.assertEqual(summary["renamed"]["no exterior_goal barricades: spawn -> find_flesh"], 1)
+
     def test_qualified_calls_are_read(self):
         script = ('init_zones[0] = "start_zone";\n'
                   '    maps\\_zombiemode_zone_manager::add_adjacent_zone( "start_zone", "yard", "enter_yard" );\n')
