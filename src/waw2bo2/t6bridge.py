@@ -1368,6 +1368,11 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
             report.errors.append(f"path nodes: {exc}")
     else:
         report.errors.append(f"path nodes {paths_file.name} missing (dump gameworldsp): zombies cannot path")
+    bo2_machine_models: set[str] = set()
+    if bo2_stock_perks and bo2_root is not None:
+        from . import stockperks
+        # converted WaW models of these names would shadow BO2's machines
+        bo2_machine_models = stockperks.machine_models(bo2_root)
     if ents_file.exists():
         start_zones, zone_names = None, set()
         if waw_map_script is not None and waw_map_script.exists():
@@ -1387,6 +1392,14 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
             if synthesized["never_unlocked"]:
                 report.warnings.append(f"ZONE_SPAWNERS_UNREACHED {synthesized['never_unlocked']}: no door or debris "
                                        f"adds these spawners; they stay inactive unless the map script enables them")
+        if bo2_machine_models:
+            # BO2 owns the perk machines: native perk names and machine models
+            try:
+                stockperks.translate_entities(project_root / 'BSP/entities.json', bo2_root)
+            except ValueError as exc:
+                raise StageError(f"map entities: {exc}") from exc
+            script_models = (script_models & entities.placed_models(project_root / 'BSP/entities.json')) - \
+                bo2_machine_models
         entity_box_models = set(script_models)
         if (project_root / "BSP" / "paths.json").exists():
             report.warnings += entities.link_barrier_traversals(project_root / "BSP")
@@ -1446,7 +1459,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
         # models "weapons/sp/bar": weapon paths typed as models): WaW loads
         # its default model. Keep the entity for scripts, without a model.
         absent = entities.placed_models(entities_json) - resolved - clip_models - \
-            {m.name for m in world.static_models}
+            {m.name for m in world.static_models} - bo2_machine_models
         if absent:
             count = entities.strip_models(entities_json, absent)
             script_models -= absent
@@ -1544,9 +1557,8 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
                 raise ValueError("BO2 runtime sources required to stage WaW perk ownership")
             gscport.stage_bo2_perk_support(project_root, bo2_root, bo2_stock_perks=bo2_stock_perks)
             if bo2_stock_perks:
-                from . import stockperks
-                stockperks.translate_entities(project_root / 'BSP/entities.json')
-                report.warnings.append('BO2_STOCK_PERKS: opted in to native BO2 perk purchases, HUD and last stand')
+                report.warnings.append('BO2_STOCK_PERKS: native BO2 perk machines, purchases, HUD and last stand; '
+                                       'the WaW Pack-a-Punch stays')
             gscport.hook_bo2_perk_server(main_gsc)
             gscport.hook_bo2_perk_client(project_root / "clientscripts" / "mp" / f"{project}.csc")
             gscport.hook_bo2_animtrees(main_gsc, project_root / "clientscripts" / "mp" / f"{project}.csc", project_root,
@@ -2312,6 +2324,12 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
     wrapped |= stock_wrapped_models(sources, port.ported, model_roots)
     wanted |= wrapped
     stock_models = api.stock_assets.get("xmodel", set())
+    if bo2_stock_perks:
+        # BO2's perk machine models come from mod.ff (stockperks.asset_lines)
+        from . import stockperks
+        machines = stockperks.machine_models(bo2_root)
+        wanted -= machines
+        stock_models = stock_models | {m.lower() for m in machines}
     models = recover_script_models(report, wanted, model_roots, stock_waw, source_waw)
     missing = {name for name in wanted if name not in models and name.lower() not in stock_models}
     guarded = []

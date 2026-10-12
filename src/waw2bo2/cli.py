@@ -517,7 +517,7 @@ def parser() -> argparse.ArgumentParser:
                       help="compat: bind WaW falloff curves no stock BO2 curve matches to the nearest shape "
                            "(each one reported as APPROXIMATED_SOUND_CURVE)")
     sb_p.add_argument('--bo2-stock-perks', action='store_true',
-                      help='Opt in to stock BO2 perk gameplay; only for maps whose perks all have BO2 equivalents')
+                      help='Stock BO2 perk machines and perk gameplay (the WaW Pack-a-Punch stays); every machine perk needs a BO2 equivalent')
     sb_p.add_argument('--remaster-bo2-materials', action='store_true',
                       help='Draw model materials that are ports of BO2 materials with the original BO2 material '
                            '(textures, specular/gloss, shaders); each one reported as REMASTER')

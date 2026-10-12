@@ -230,7 +230,7 @@ class Launcher(ttk.Frame):
         check = ttk.Checkbutton(build, text='Refresh source files (slower rebuild)', variable=self.redump)
         check.pack(anchor='w', pady=(8, 4))
         self.action_widgets.append(check)
-        check = ttk.Checkbutton(build, text='Use BO2 stock perks (maps with BO2 perks only)', variable=self.bo2_stock_perks)
+        check = ttk.Checkbutton(build, text='Use BO2 stock perks and machines (keeps the WaW Pack-a-Punch)', variable=self.bo2_stock_perks)
         check.pack(anchor='w', pady=(0, 4))
         self.action_widgets.append(check)
         check = ttk.Checkbutton(build, text='Remaster with BO2 materials (props ported from BO2)', variable=self.remaster)

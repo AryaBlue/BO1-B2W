@@ -699,6 +699,9 @@ class Translator:
         self.level_state_parts: list[str] = []
         self.anim_neutralized = False
         self.bo2_stock_perks = False
+        # stock-perks mode: WaW perk scripts -> functions that stay WaW's
+        # (Pack-a-Punch, power relays; waw_pack_a_punch_source)
+        self.waw_perk_parts: dict[str, set[str]] = {}
         # calls waw_main_post makes after BO2's _zm::init (framework overrides)
         self.post_calls: list[str] = []
         self.intermission_funcs: set[tuple[str, str]] = set()
@@ -885,7 +888,15 @@ class Translator:
             where = f"{where_file}:{tok.line}"
             argc = None if ref.pointer else _argc(tokens, ref.index)
             perk_owner = norm(ref.qualifier) if ref.qualifier else self.owner(script, name)
-            if self.bo2_stock_perks and stockperks.is_perk_framework(perk_owner):
+            if self.bo2_stock_perks and name in self.waw_perk_parts.get(perk_owner, ()):
+                if ref.qualifier is None and perk_owner != script.path:
+                    # its include became BO2's _zm_perks: name the WaW script
+                    self.want(perk_owner)
+                    if ref.pointer:
+                        tokens[ref.index - 1].text = ""
+                    tok.text = f"{ported_path(perk_owner)}::{ref.name}"
+                    continue
+            elif self.bo2_stock_perks and stockperks.is_perk_framework(perk_owner):
                 native = r"maps\mp\zombies\_zm_perks"
                 if name == "init":
                     repl = f"{COMPAT}::stock_perks_noop"
@@ -1131,7 +1142,17 @@ class Translator:
         stmts = top_level_statements(toks, fn.body_open, fn.body_close)
         if lead == 0:
             return None
-        body = copy.deepcopy(toks[stmts[0][0]:stmts[lead - 1][1]])
+        rules = stmts[:lead]
+        if self.bo2_stock_perks:
+            # BO2 owns the perks: a rule gated on a perk (a WaW PhD Flopper
+            # cancelling explosive damage) is the WaW perk itself.
+            perk_rules = [span for span in rules if re.search(r"\bhasperk \(", header(toks, span))]
+            rules = [span for span in rules if span not in perk_rules]
+            if perk_rules:
+                self.report.rewrites["WaW perk damage rules dropped (BO2 stock perks)"] += len(perk_rules)
+            if not rules:
+                return None
+        body = copy.deepcopy([t for start, end in rules for t in toks[start:end]])
         # Some solo-revive preludes finish a zero-damage hit before returning.
         # A T6 callback must leave damage application to _zm; this exact
         # zero-hit/return idiom is equivalent to the callback cancelling it.
@@ -1381,7 +1402,8 @@ class Translator:
             if ref.qualifier is None or ref.pointer or ref.method:
                 continue
             target = norm(ref.qualifier)
-            if self.bo2_stock_perks and stockperks.is_perk_framework(target):
+            if self.bo2_stock_perks and stockperks.is_perk_framework(target) and \
+                    ref.name.lower() not in self.waw_perk_parts.get(target, ()):
                 continue
             if is_core(target, self.sources):
                 continue
@@ -1474,9 +1496,18 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
         sources.text = {key: stockperks.translate_literals(text) for key, text in sources.text.items()}
         sources.stock = {key: stockperks.translate_literals(text) for key, text in sources.stock.items()}
         sources._parsed = {}
+    waw_perk_parts: dict[str, set[str]] = {}
+    if bo2_stock_perks:
+        for key in sorted({*sources.text, *sources.stock}):
+            if not key.endswith(".gsc") or not stockperks.is_perk_framework(norm(key)):
+                continue
+            kept = waw_pack_a_punch_source(sources.text.get(key, sources.stock.get(key)), norm(key))
+            if kept is not None:
+                sources.text[key], waw_perk_parts[norm(key)] = kept
     report = PortReport(map_main=f"maps\\{map_name}")
     tr = Translator(sources, api, report)
     tr.bo2_stock_perks = bo2_stock_perks
+    tr.waw_perk_parts = waw_perk_parts
     tr.animtrees = {a.lower() for a in animtrees or ()}
     tr.core_animtrees = {t.lower(): {a.lower() for a in names} for t, names in (core_animtrees or {}).items()}
     main = f"maps\\{map_name}"
@@ -1815,6 +1846,61 @@ DAMAGE_PRELUDES = [(ZOMBIEMODE, DAMAGE_OVERRIDE), ("maps\\_callbackglobal", "cal
 END_GAME_FALLBACK = 30
 
 
+# Statements of a WaW perk script's init that start its Pack-a-Punch
+PACK_A_PUNCH_MARKERS = ("upgrade", "packapunch", "pack_a_punch", "knuckle")
+
+
+def _power_relay(script: gsc.Script, fn: gsc.Function) -> bool:
+    """A function that only waits and then notifies level events (a perk
+    pack's wait_for_power: flag_wait electricity_on; notify staminup_on)."""
+    spans = top_level_statements(script.tokens, fn.body_open, fn.body_close)
+    texts = ["".join(t.low for t in script.tokens[a:b]) for a, b in spans]
+    return any(t.startswith("levelnotify(") for t in texts) and all(
+        t.startswith(("flag_wait(", "wait", "levelwaittill(", "levelnotify(")) for t in texts)
+
+
+def waw_pack_a_punch_source(source: str, path: str) -> tuple[str, set[str]] | None:
+    """With BO2 stock perks, a WaW perk script keeps only what BO2 does not
+    replace: its Pack-a-Punch and the power relays that turn machines on.
+    Returns the script reduced to an init with those statements and the
+    functions they reach, and the kept function names; None if nothing."""
+    script = gsc.parse(source, path)
+    init = script.functions.get("init")
+    if init is None:
+        return None
+    toks = script.tokens
+    own = norm(path)
+
+    def callees(start: int, end: int) -> set[str]:
+        return {r.name.lower() for r in gsc.references(toks, start, end)
+                if (r.qualifier is None or norm(r.qualifier) == own) and r.name.lower() in script.functions}
+
+    kept = []
+    for start, end in top_level_statements(toks, init.body_open, init.body_close):
+        text = "".join(t.low for t in toks[start:end])
+        relays = [script.functions[n] for n in callees(start, end) if n != "init"]
+        if any(m in text for m in PACK_A_PUNCH_MARKERS) or \
+                (relays and all(_power_relay(script, fn) for fn in relays) and "thread" in text):
+            kept.append((start, end))
+    if not kept:
+        return None
+    reached: set[str] = set()
+    queue = [n for span in kept for n in callees(*span)]
+    while queue:
+        name = queue.pop()
+        if name in reached or name == "init":
+            continue
+        reached.add(name)
+        fn = script.functions[name]
+        queue += callees(fn.body_open, fn.body_close)
+    directives = [t.text for t in toks if t.kind == gsc.DIRECTIVE]
+    parts = ["\n".join(directives), "init()\n{" + "".join(gsc.emit(toks[a:b]) for a, b in kept) + "\n}"]
+    parts += [gsc.emit(toks[fn.start:fn.body_close + 1]).strip()
+              for fn in sorted((script.functions[n] for n in reached), key=lambda f: f.start)]
+    header = f"// waw2bo2: BO2 stock perks; the WaW Pack-a-Punch and power relays of {path} stay.\n"
+    return header + "\n\n".join(parts) + "\n", reached | {"init"}
+
+
 def top_level_statements(tokens: list[gsc.Token], open_: int, close: int) -> list[tuple[int, int]]:
     """[start, end) token spans of the statements directly inside the block
     whose braces are at ``open_`` / ``close`` (an if/else chain is one)."""
@@ -2055,6 +2141,11 @@ def ensure_owned_client_bootstrap(out_root: Path, bo2_root: Path) -> Path:
 
 
 PERK_OVERRIDE_HEADER = "// waw2bo2: WaW owns perk gameplay; BO2 runtime support only.\n"
+# WaW has no difficulty: its zombies speed up by round * 8 and sprint from
+# about round 10. BO2's Easy (zmDifficulty 0, also what a lobby without the
+# setting reads) uses round * 2 and never sprints. Keep WaW's pace.
+WAW_DIFFICULTY = ('level.gamedifficulty = getgametypesetting( "zmDifficulty" );',
+                  'level.gamedifficulty = 1; // waw2bo2: WaW zombie speed (no Easy mode in WaW)')
 BO2_PERK_OVERRIDES = (
     "maps/mp/zombies/_zm_perks.gsc",
     "clientscripts/mp/zombies/_zm_perks.csc",
@@ -2143,6 +2234,9 @@ def stage_bo2_perk_support(out_root: Path, bo2_root: Path, *, bo2_stock_perks: b
     bootstrap = (bo2_root / "raw/maps/mp/zombies/_zm.gsc").read_text(encoding="utf-8")
     if native + "::init" not in bootstrap:
         raise ValueError("BO2 server bootstrap has no perk initializer")
+    if WAW_DIFFICULTY[0] not in bootstrap:
+        raise ValueError("BO2 server bootstrap does not read zmDifficulty")
+    bootstrap = bootstrap.replace(*WAW_DIFFICULTY)
     (server_dir / "_waw2bo2_zm.gsc").write_text(
         PERK_OVERRIDE_HEADER + bootstrap.replace(native, owned), encoding="utf-8")
 

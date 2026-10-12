@@ -81,7 +81,8 @@ class PerkOwnershipTests(unittest.TestCase):
             (root / 'bo2/raw/maps/mp/zombies/_zm.gsc').write_text(
                 '#include maps\\mp\\zombies\\_zm_perks;\n'
                 'init() { maps\\mp\\zombies\\_zm_perks::init(); '
-                'maps\\mp\\zombies\\_zm_score::init(); }\n')
+                'maps\\mp\\zombies\\_zm_score::init();\n'
+                '    level.gamedifficulty = getgametypesetting( "zmDifficulty" );\n}\n')
             out = root / 'out'
             client_stock = self.write_client_stock(root)
             gscport.stage_bo2_perk_support(out, root / 'bo2')
@@ -124,6 +125,9 @@ class PerkOwnershipTests(unittest.TestCase):
             bootstrap_server = out / 'maps/mp/waw/_waw2bo2_zm.gsc'
             self.assertIn('maps\\mp\\waw\\_waw2bo2_perks::init()', bootstrap_server.read_text())
             self.assertNotIn('maps\\mp\\zombies\\_zm_perks', bootstrap_server.read_text())
+            # WaW zombie speed whatever the lobby difficulty
+            self.assertIn('level.gamedifficulty = 1;', bootstrap_server.read_text())
+            self.assertNotIn('zmDifficulty', bootstrap_server.read_text())
             server_main = out / 'maps/mp/any_project.gsc'
             server_main.write_text('main() { maps\\mp\\zombies\\_zm::init(); '
                                    'level thread maps\\mp\\zombies\\_zm_perks::perk_unpause_all_perks(); }')

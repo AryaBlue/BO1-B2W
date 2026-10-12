@@ -23,6 +23,8 @@ init()
     if ( isdefined( level.player_out_of_playable_area_monitor_callback ) )
         level.waw2bo2_out_of_playable_area_callback = level.player_out_of_playable_area_monitor_callback;
     level.player_out_of_playable_area_monitor_callback = ::waw_out_of_playable_area;
+    if ( !isdefined( level.get_player_weapon_limit ) )
+        level.get_player_weapon_limit = ::waw_player_weapon_limit;
     level.waw2bo2_reported = [];
     if ( !isdefined( level.waw_effect ) )
         level.waw_effect = [];
@@ -934,6 +936,7 @@ waw_player_stats()
     {
         self.waw2bo2_grenade_monitor = 1;
         self thread waw_grenade_diagnostics();
+        self thread waw_inventory_size();
     }
     if ( isdefined( self.stats ) )
         return;
@@ -945,6 +948,40 @@ waw_player_stats()
     self.stats["perks"] = 0;
     self.stats["headshots"] = 0;
     self.stats["zombie_gibs"] = 0;
+}
+
+// WaW Mule Kick packs keep self.InventorySize (2, or 3 with the perk) for the
+// map's own box and weapon scripts to read. With BO2 stock perks that pack no
+// longer runs: BO2's Mule Kick decides the limit, as for BO2's wall buys.
+waw_inventory_size()
+{
+    self endon( "disconnect" );
+    waittillframeend;
+    if ( !( isdefined( level.waw2bo2_stock_perks ) && level.waw2bo2_stock_perks ) )
+        return;
+    for ( ;; )
+    {
+        self.inventorysize = bo2_weapon_limit( self );
+        wait 0.1;
+    }
+}
+
+bo2_weapon_limit( player )
+{
+    if ( player hasperk( "specialty_additionalprimaryweapon" ) && isdefined( level.additionalprimaryweapon_limit ) )
+        return level.additionalprimaryweapon_limit;
+    return 2;
+}
+
+// BO2's wall buys, box and too-many-weapons monitor only count BO2's Mule
+// Kick. A WaW Mule Kick (its own perk, specialty_extraammo in community
+// packs) raises self.InventorySize instead: honor whichever is higher.
+waw_player_weapon_limit( player )
+{
+    limit = bo2_weapon_limit( player );
+    if ( isdefined( player.inventorysize ) && player.inventorysize > limit )
+        return player.inventorysize;
+    return limit;
 }
 
 // WaW's framework maintains these session counters in stats; T6 keeps
@@ -1255,10 +1292,14 @@ waw_perk_emulated( perk )
 
 waw_setperk( perk )
 {
-    if ( isdefined( level.waw2bo2_stock_perks ) && level.waw2bo2_stock_perks )
+    // With BO2 stock perks a perk the player does not own yet is BO2's
+    // give_perk (HUD, effects, loss on down). WaW scripts also take an owned
+    // perk away for a moment and give it back (d2p and galvaknuckles toggle
+    // Speed Cola around their animations): that stays an engine toggle.
+    if ( isdefined( level.waw2bo2_stock_perks ) && level.waw2bo2_stock_perks && !waw_perk_emulated( perk )
+        && !( isdefined( self.perks_active ) && isinarray( self.perks_active, perk ) ) )
     {
-        if ( !self hasperk( perk ) )
-            self maps\mp\waw\_waw2bo2_perks::give_perk( perk, false );
+        self maps\mp\waw\_waw2bo2_perks::give_perk( perk, false );
         return;
     }
     if ( !waw_perk_emulated( perk ) )
@@ -1267,7 +1308,8 @@ waw_setperk( perk )
         // WaW's native perk only speeds up reviving another player. Register
         // the life BO2's last-stand/game-over logic requires for self revive.
         // The source map still owns its machine, purchase limit and perk HUD.
-        if ( perk == "specialty_quickrevive" && getnumconnectedplayers() == 1 )
+        if ( perk == "specialty_quickrevive" && getnumconnectedplayers() == 1
+            && !( isdefined( level.waw2bo2_stock_perks ) && level.waw2bo2_stock_perks ) )
             self.lives = 1;
         return;
     }

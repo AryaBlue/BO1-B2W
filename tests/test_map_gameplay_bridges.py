@@ -82,15 +82,12 @@ class DamagePreludeTests(unittest.TestCase):
         self.assertIn("if( self.shielded )\n\t\treturn 0;", core)
         self.assertFalse([e for e in report.errors if "damage" in e])
 
-    def test_callbackglobal_player_damage_rules_become_a_bo2_damage_callback(self):
-        # Nuketown's PhD Flopper: the map's _callbackglobal cancels explosive and fall damage
+    def port_callbackglobal(self, prelude: str, bo2_stock_perks: bool = False) -> tuple[str, gscport.PortReport]:
         stock = ("Callback_PlayerDamage( eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, sWeapon, vPoint, "
                  "vDir, sHitLoc, modelIndex, psOffsetTime )\n{\n"
                  "\tif( isdefined( eAttacker ) && isPlayer( eAttacker ) )\n\t{\n\t\treturn;\n\t}\n"
                  "\tself finishPlayerDamageWrapper( eInflictor, eAttacker, iDamage, iDFlags, sMeansOfDeath, "
                  "sWeapon, vPoint, vDir, sHitLoc, modelIndex, psOffsetTime );\n}\n")
-        prelude = ("\tif( self HasPerk(\"specialty_detectexplosive\") && sMeansOfDeath == \"MOD_FALLING\" )\n\t{\n"
-                   "\t\tself.previous_health = self.health;\n\t\treturn;\n\t}\n")
         head, tail = stock.split("{\n", 1)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -104,8 +101,15 @@ class DamagePreludeTests(unittest.TestCase):
             sources = gscport.Sources([root / "src"], [], root / "stock")
             api = _api()
             api.methods["hasperk"] = (1, 1)
-            report = gscport.port_map(sources, api, "testmap", root / "out")
-            core = (root / "out/maps/mp/waw/_waw2bo2_core.gsc").read_text(encoding="utf-8")
+            report = gscport.port_map(sources, api, "testmap", root / "out", bo2_stock_perks=bo2_stock_perks)
+            return (root / "out/maps/mp/waw/_waw2bo2_core.gsc").read_text(encoding="utf-8"), report
+
+    PHD = ("\tif( self HasPerk(\"specialty_detectexplosive\") && sMeansOfDeath == \"MOD_FALLING\" )\n\t{\n"
+           "\t\tself.previous_health = self.health;\n\t\treturn;\n\t}\n")
+
+    def test_callbackglobal_player_damage_rules_become_a_bo2_damage_callback(self):
+        # Nuketown's PhD Flopper: the map's _callbackglobal cancels explosive and fall damage
+        core, report = self.port_callbackglobal(self.PHD)
         self.assertIn("callbackglobal__callback_playerdamage_prelude( eInflictor, eAttacker, iDamage, iDFlags, "
                       "sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc, psOffsetTime )", core)
         self.assertIn("specialty_detectexplosive", core)
@@ -114,6 +118,15 @@ class DamagePreludeTests(unittest.TestCase):
         self.assertIn("register_player_damage_callback( ::callbackglobal__callback_playerdamage_prelude )", core)
         self.assertIn("\tcallbackglobal__callback_playerdamage_prelude_register();", core)
         self.assertFalse([e for e in report.errors if "damage" in e.lower()])
+
+    def test_perk_damage_rules_are_dropped_when_bo2_owns_the_perks(self):
+        # BO2's own PhD Flopper (_zm_perk_divetonuke) replaces the WaW one
+        shield = "\tif( self.shielded )\n\t\treturn;\n"
+        core, report = self.port_callbackglobal(self.PHD + shield, bo2_stock_perks=True)
+        self.assertNotIn("previous_health", core)
+        self.assertIn("if( self.shielded )", core)        # other map rules stay
+        core, _ = self.port_callbackglobal(self.PHD, bo2_stock_perks=True)
+        self.assertNotIn("callbackglobal__callback_playerdamage_prelude", core)
 
     def test_stock_damage_override_registers_nothing(self):
         core, _ = self.port(STOCK_DAMAGE)
