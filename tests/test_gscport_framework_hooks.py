@@ -14,6 +14,32 @@ def _api() -> T6Api:
 
 
 class FrameworkHookTests(unittest.TestCase):
+    def test_template_spawnfx_bootstrap_is_not_the_engine_builtin(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                'maps/testmap.gsc': 'main() { maps\\dlc3_code::spawnFX(); }',
+                'maps/dlc3_code.gsc': 'spawnFX() { [[level.DLC3.createFX]](); '
+                                      'maps\\createfx\\dlc3_fx::main(); }',
+                'maps/createfx/dlc3_fx.gsc': 'main() { loadfx("custom/teleporter"); }',
+            }
+            for name, text in files.items():
+                p = root / name
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(text)
+            tr = gscport.Translator(gscport.Sources([root], [], None), _api(), gscport.PortReport())
+            main = tr.translate(r'maps\testmap')
+            parts = []
+            while tr.core_queue:
+                parts.append(tr.translate_extracted(*tr.core_queue.pop(0)))
+        core = '\n'.join(parts)
+        self.assertIn(gscport.CORE + '::dlc3_code__spawnfx()', main)
+        self.assertIn('[[level.DLC3.createFX]]()', core)
+        self.assertIn(gscport.CORE + '::dlc3_fx__main()', core)
+        self.assertIn('waw_loadfx("custom/teleporter")', core)
+        self.assertNotIn('waw_spawnfx()', main + core)
+        self.assertEqual(tr.report.unsupported, {})
+
     def port(self, files: dict[str, str]) -> tuple[str, str, gscport.PortReport]:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

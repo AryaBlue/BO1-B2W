@@ -77,6 +77,19 @@ namespace GAME
 
     NLOHMANN_DEFINE_TYPE_EXTENSION(JsonXModelCollSurf, tris, mins, maxs, bone, contents, surfFlags);
 
+    class JsonXModelBoneInfo
+    {
+    public:
+        std::string bone;
+        std::vector<float> mins;
+        std::vector<float> maxs;
+        std::vector<float> offset;
+        float radiusSquared;
+        std::optional<std::string> hitloc;
+    };
+
+    NLOHMANN_DEFINE_TYPE_EXTENSION(JsonXModelBoneInfo, bone, mins, maxs, offset, radiusSquared, hitloc);
+
     class JsonXModel
     {
     public:
@@ -96,6 +109,7 @@ namespace GAME
         unsigned flags;
         std::optional<std::vector<JsonXModelCollSurf>> collSurfs;
         std::optional<int> contents;
+        std::optional<std::vector<JsonXModelBoneInfo>> boneInfo;
     };
 
     NLOHMANN_DEFINE_TYPE_EXTENSION(
@@ -115,6 +129,7 @@ namespace GAME
 #endif
         flags,
         collSurfs,
-        contents
+        contents,
+        boneInfo
     );
 } // namespace GAME

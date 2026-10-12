@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from pathlib import Path
 from contextlib import ExitStack
+import json
 import shutil
 import struct
 import subprocess
 
-from . import all2raw, progress
+from . import all2raw, modelhitboxes, progress
 from .launcher import BuildPaths, Settings, cli_command
 from .resources import resource_root
 
@@ -144,8 +145,17 @@ def _build(settings: Settings, *, redump: bool = False, root: Path | None = None
             raise ValueError(f'Audit cleanup target is outside staging: {audit}')
         if audit.exists():
             shutil.rmtree(audit)
+        model_source = stage / 'zone_raw' / project
+        audit_hitboxes = ff.stem == project and modelhitboxes.has_authored_hitboxes(model_source)
         run([str(t6), '--no-color', '--search-path', str(bo2 / 'zone/all'), '--include-assets',
-             'material,techniqueset', '--output-folder', str(audit), str(ff)], stage / (audit.name + '.log'))
+             'material,techniqueset' + (',xmodel' if audit_hitboxes else ''),
+             '--output-folder', str(audit), str(ff)], stage / (audit.name + '.log'))
         from .launcher import python_command
         run(python_command() + [str(resource_root() / 'tools/audit_material_args.py'), str(audit), str(stock)])
+        if audit_hitboxes:
+            result = modelhitboxes.audit(model_source, audit)
+            (stage / 'bone_hitbox_audit.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+            if result['errors'] or not result['models']:
+                raise RuntimeError('Authored bone hitboxes changed during linking; see bone_hitbox_audit.json')
+            print(f'{result["bones"]} authored bone hitboxes checked across {result["models"]} models, 0 violations', flush=True)
     return 0

@@ -2,12 +2,46 @@
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from waw2bo2 import gscport, t6bridge, wawsource
+from waw2bo2.t6api import T6Api
 
 
 class ScriptModelSourcesTest(unittest.TestCase):
+    def test_extracted_template_models_and_hud_are_staged_and_precached(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'source'
+            (source / 'maps').mkdir(parents=True)
+            main = source / 'maps/test.gsc'
+            main.write_text('main() { maps\\dlc3_code::precacheDLC3(); }')
+            (source / 'maps/dlc3_code.gsc').write_text(
+                'precacheDLC3() { precachemodel("trap_red"); self setmodel("trap_green"); '
+                'precacheshader("trap_hud"); }\n'
+                'unused() { precachemodel("unused_model"); }')
+            (source / 'maps/_loadout.gsc').write_text('init_loadout() {}\ngive_model() {}')
+            (source / 'materials').mkdir()
+            (source / 'materials/trap_hud.json').write_text('{}')
+            stock = root / 'stock'
+            stock.mkdir()
+            report = t6bridge.StageReport('test')
+            with patch.object(t6bridge.t6api, 'build', return_value=T6Api(
+                    {'precacheshader': (1, 1)}, {}, methods={'setmodel': (1, 1)})), \
+                 patch.object(t6bridge, 'stage_core_animtrees', return_value=({}, set())), \
+                 patch.object(t6bridge, 'recover_script_models',
+                              side_effect=lambda report, wanted, *args: wanted) as recover:
+                models = t6bridge.port_scripts(report, root / 'stage', root / 'project', main,
+                                              root / 'bo2', [source], [], stock, None, [source])
+            self.assertEqual(models, {'trap_red', 'trap_green'})
+            self.assertEqual(recover.call_args.args[1], models)
+            self.assertEqual(report.scripts['precached_models'], ['trap_green', 'trap_red'])
+            self.assertEqual(report.scripts['hud_materials'], ['trap_hud'])
+            precache = (root / 'project/maps/mp/waw/_waw2bo2_precache.gsc').read_text()
+            self.assertIn('waw_precachemodel( "trap_red" )', precache)
+            self.assertIn('waw_precachemodel( "trap_green" )', precache)
+            self.assertNotIn('unused_model', precache)
+
     def test_models_named_through_helpers_are_found(self):
         # WaW _loadout: the player's arms reach precacheModel through a helper;
         # without them T6 draws no viewmodel (hands nor gun)

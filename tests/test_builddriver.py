@@ -1,4 +1,5 @@
 import os
+import json
 from pathlib import Path
 import struct
 import sys
@@ -86,6 +87,33 @@ class BuildDriverTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'dump failed'):
                 builddriver.build(self.settings)
         self.assertEqual(run.call_count, 1)
+
+    def test_authored_hitbox_loss_fails_the_build_automatically(self):
+        paths = BuildPaths.for_settings(self.settings)
+        source = paths.stage / 'zone_raw/zm_bankjob/xmodel/body.json'
+        source.parent.mkdir(parents=True)
+        head = {'bone': 'j_head', 'mins': [-1, -2, -3], 'maxs': [1, 2, 3],
+                'offset': [0, 0, 0], 'radiusSquared': 14, 'hitloc': 'head'}
+        source.write_text(json.dumps({'type': 'animated', 'boneInfo': [head]}))
+        commands = []
+        def fake_run(command, log=None):
+            commands.append(command)
+            if 'bridge-link' in command:
+                for ff in (paths.stage / 'zone_out/zm_bankjob/zm_bankjob.ff', paths.mod / 'out/mod.ff'):
+                    ff.parent.mkdir(parents=True, exist_ok=True)
+                    ff.touch()
+            if Path(command[0]).name == 'Unlinker.exe':
+                output = Path(command[command.index('--output-folder') + 1]) / 'xmodel/body.json'
+                output.parent.mkdir(parents=True)
+                output.write_text(json.dumps({'boneInfo': [dict(head, radiusSquared=0)]}))
+        with patch.object(builddriver, 'run', side_effect=fake_run):
+            with self.assertRaisesRegex(RuntimeError, 'Authored bone hitboxes changed'):
+                builddriver.build(self.settings)
+        result = json.loads((paths.stage / 'bone_hitbox_audit.json').read_text())
+        self.assertIn('radiusSquared changed', result['errors'][0])
+        unlinks = [c for c in commands if Path(c[0]).name == 'Unlinker.exe']
+        self.assertEqual(len(unlinks), 1)
+        self.assertIn('xmodel', unlinks[0][unlinks[0].index('--include-assets') + 1])
 
     def test_failed_cache_preparation_stops_before_any_native_build(self):
         with patch.object(builddriver.all2raw, 'ready', side_effect=RuntimeError('Run Extract All')), \

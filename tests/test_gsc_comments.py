@@ -62,6 +62,21 @@ class ParenthesisedCallerTests(unittest.TestCase):
         self.assertEqual(gscport.fix_syntax(script.tokens), 0)
         self.assertEqual(gsc.emit(script.tokens), source)
 
+    def test_unwrapped_callers_still_resolve_as_methods(self):
+        script = gsc.parse('f(who, pad) { (who) IsTouching(pad); (who.part) hide(); '
+                           'if (who) plain(); while (who) other(); }', 'maps/teleporter')
+        gscport.fix_syntax(script.tokens)
+        refs = {r.name.lower(): r for r in gsc.references(script.tokens)
+                if r.name.lower() != 'f'}
+        self.assertTrue(refs['istouching'].method)
+        self.assertTrue(refs['hide'].method)
+        self.assertFalse(refs['plain'].method)
+        self.assertFalse(refs['other'].method)
+        # A later linker pass sees the emitted source, with no empty tokens.
+        reparsed = gsc.parse(gsc.emit(script.tokens), script.path)
+        self.assertEqual([(r.name, r.method) for r in gsc.references(script.tokens)],
+                         [(r.name, r.method) for r in gsc.references(reparsed.tokens)])
+
 
 class IndentedDirectiveTests(unittest.TestCase):
     def test_indented_includes_start_their_line_like_t6_requires(self):

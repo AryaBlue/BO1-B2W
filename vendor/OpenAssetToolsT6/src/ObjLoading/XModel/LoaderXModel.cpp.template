@@ -352,6 +352,53 @@ namespace
 
                 ApplyBasePose(xmodel.baseMat[boneIndex], bone);
                 CalculateBoneBounds(xmodel.boneInfo[boneIndex], boneIndex, common);
+                // Source bone-space hitboxes can cover invisible geometry.
+                // Match names because GLTF import may reorder the skeleton.
+                if (jXModel.boneInfo)
+                {
+                    const auto& source = *jXModel.boneInfo;
+                    const auto found = std::find_if(source.begin(), source.end(), [&bone](const auto& info) { return info.bone == bone.name; });
+                    if (found != source.end())
+                    {
+                        if (found->mins.size() != 3 || found->maxs.size() != 3 || found->offset.size() != 3
+                            || !std::isfinite(found->radiusSquared) || found->radiusSquared < 0.0f)
+                        {
+                            PrintError(xmodel, "Invalid source bone hitbox");
+                            return false;
+                        }
+                        for (auto axis = 0u; axis < 3; ++axis)
+                        {
+                            if (!std::isfinite(found->mins[axis]) || !std::isfinite(found->maxs[axis])
+                                || !std::isfinite(found->offset[axis]) || found->mins[axis] > found->maxs[axis])
+                            {
+                                PrintError(xmodel, "Invalid source bone hitbox bounds");
+                                return false;
+                            }
+                        }
+                        auto& info = xmodel.boneInfo[boneIndex];
+#if defined(FEATURE_IW4) || defined(FEATURE_IW5)
+                        info.bounds.midPoint = {found->offset[0], found->offset[1], found->offset[2]};
+                        info.bounds.halfSize = {(found->maxs[0] - found->mins[0]) * 0.5f,
+                                                (found->maxs[1] - found->mins[1]) * 0.5f,
+                                                (found->maxs[2] - found->mins[2]) * 0.5f};
+#else
+                        info.bounds[0] = {found->mins[0], found->mins[1], found->mins[2]};
+                        info.bounds[1] = {found->maxs[0], found->maxs[1], found->maxs[2]};
+                        info.offset = {found->offset[0], found->offset[1], found->offset[2]};
+#endif
+                        info.radiusSquared = found->radiusSquared;
+                        if (found->hitloc)
+                        {
+                            const auto location = std::find(std::begin(HITLOC_NAMES), std::end(HITLOC_NAMES), *found->hitloc);
+                            if (location == std::end(HITLOC_NAMES))
+                            {
+                                PrintError(xmodel, "Unknown source bone hit location");
+                                return false;
+                            }
+                            xmodel.partClassification[boneIndex] = static_cast<unsigned char>(location - std::begin(HITLOC_NAMES));
+                        }
+                    }
+                }
 
 #if defined(FEATURE_T5) || defined(FEATURE_T6)
                 // Other boneInfo data is filled when calculating bone bounds

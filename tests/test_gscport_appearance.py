@@ -190,10 +190,10 @@ class WawBoxExtractionTests(unittest.TestCase):
         self.assertIn("::zombiemode_weapons__treasure_chest_think", code)
         self.assertNotIn("_zm_magicbox", code)
         self.assertIn("level.waw_chests", code)
-        self.assertIn('#using_animtree( "nuketown" );\nzombiemode_weapons__treasure_chest_think', code)
+        self.assertIn('#using_animtree( "waw2bo2_nuketown" );\nzombiemode_weapons__treasure_chest_think', code)
         self.assertEqual(state, "zombiemode_weapons__init_level_state")
         state_code = tr.level_state_parts[0]
-        self.assertIn("level.boxAnim[\"open\"] = %box_open;", state_code)
+        self.assertIn("level.boxAnim[\"open\"] = %waw_anim_box_open;", state_code)
         self.assertIn("level.boxAnim[\"fake\"] = undefined;", state_code)    # no WaW xanim
         self.assertNotIn("level.unused", state_code)    # not read by the box
         self.assertNotIn("init_weapons", state_code)    # BO2 owns the rest of init

@@ -15,6 +15,7 @@
 #include "Qdb/QdbDumperT6.h"
 #include "RawFile/RawFileDumperT6.h"
 #include "Script/ScriptDumperT6.h"
+#include "SkinnedVerts/SkinnedVertsDumperT6.h"
 #include "Slug/SlugDumperT6.h"
 #include "Sound/SndBankDumperT6.h"
 #include "Sound/SndDriverGlobalsDumperT6.h"
@@ -90,7 +91,7 @@ bool ObjWriter::DumpZone(AssetDumpingContext& context) const
     // REGISTER_DUMPER(AssetDumperMemoryBlock, m_memory_block)
     // REGISTER_DUMPER(AssetDumperAddonMapEnts, m_addon_map_ents)
     REGISTER_DUMPER(tracer::DumperT6, m_tracer)
-    // REGISTER_DUMPER(AssetDumperSkinnedVertsDef, m_skinned_verts)
+    REGISTER_DUMPER(skinned_verts::DumperT6, m_skinned_verts)
     REGISTER_DUMPER(qdb::DumperT6, m_qdb)
     REGISTER_DUMPER(slug::DumperT6, m_slug)
     // REGISTER_DUMPER(AssetDumperFootstepTableDef, m_footstep_table)
