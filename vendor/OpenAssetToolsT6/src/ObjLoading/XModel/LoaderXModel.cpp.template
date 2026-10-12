@@ -230,25 +230,49 @@ namespace
             offset.z = 0.0f;
             info.radiusSquared = 0.0f;
 
+            // Hit traces place these bounds on the animated bone, so they are
+            // in the bone's space (stock T6 boneInfo: j_head -1..7.8 forward),
+            // not model space. Each vertex counts for its dominant bone only.
+            const auto& bone = common.m_bones[boneIndex];
+            const Eigen::Quaternionf boneRotation(bone.globalRotation.w, bone.globalRotation.x, bone.globalRotation.y, bone.globalRotation.z);
+            const Eigen::Quaternionf toBone = boneRotation.squaredNorm() < std::numeric_limits<float>::epsilon()
+                                                  ? Eigen::Quaternionf::Identity()
+                                                  : boneRotation.normalized().conjugate();
+            const Eigen::Vector3f boneOrigin(bone.globalOffset[0], bone.globalOffset[1], bone.globalOffset[2]);
+            auto found = false;
+
             const auto vertexCount = common.m_vertex_bone_weights.size();
             for (auto vertexIndex = 0u; vertexIndex < vertexCount; vertexIndex++)
             {
                 const auto& vertex = common.m_vertices[vertexIndex];
                 const auto& vertexWeights = common.m_vertex_bone_weights[vertexIndex];
                 const auto* weights = &common.m_bone_weight_data.weights[vertexWeights.weightOffset];
+                const XModelBoneWeight* dominant = nullptr;
                 for (auto weightIndex = 0u; weightIndex < vertexWeights.weightCount; weightIndex++)
                 {
-                    const auto& weight = weights[weightIndex];
-                    if (weight.boneIndex != boneIndex)
-                        continue;
-
-                    minCoordinate.x = std::min(minCoordinate.x, vertex.coordinates[0]);
-                    minCoordinate.y = std::min(minCoordinate.y, vertex.coordinates[1]);
-                    minCoordinate.z = std::min(minCoordinate.z, vertex.coordinates[2]);
-                    maxCoordinate.x = std::max(maxCoordinate.x, vertex.coordinates[0]);
-                    maxCoordinate.y = std::max(maxCoordinate.y, vertex.coordinates[1]);
-                    maxCoordinate.z = std::max(maxCoordinate.z, vertex.coordinates[2]);
+                    if (!dominant || weights[weightIndex].weight > dominant->weight)
+                        dominant = &weights[weightIndex];
                 }
+                if (!dominant || dominant->boneIndex != boneIndex)
+                    continue;
+
+                const Eigen::Vector3f local =
+                    toBone * (Eigen::Vector3f(vertex.coordinates[0], vertex.coordinates[1], vertex.coordinates[2]) - boneOrigin);
+                if (!found)
+                {
+                    minCoordinate.x = maxCoordinate.x = local.x();
+                    minCoordinate.y = maxCoordinate.y = local.y();
+                    minCoordinate.z = maxCoordinate.z = local.z();
+                    found = true;
+                    continue;
+                }
+
+                minCoordinate.x = std::min(minCoordinate.x, local.x());
+                minCoordinate.y = std::min(minCoordinate.y, local.y());
+                minCoordinate.z = std::min(minCoordinate.z, local.z());
+                maxCoordinate.x = std::max(maxCoordinate.x, local.x());
+                maxCoordinate.y = std::max(maxCoordinate.y, local.y());
+                maxCoordinate.z = std::max(maxCoordinate.z, local.z());
             }
 
             const Eigen::Vector3f minEigen(minCoordinate.x, minCoordinate.y, minCoordinate.z);
