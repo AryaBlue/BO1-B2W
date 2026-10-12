@@ -365,8 +365,11 @@ SYNTHESIZED_IMAGES = {
 # mean RGBA of the three pages of stock zm_nuked *lightmap0_secondary
 # Near black: WaW materials have no specular maps, so T6 applies a default
 # gloss and adds the probe as reflection. Any bright probe gives a wet sheen that
-# slides with the view (it looked like a scrolling texture).
-NEUTRAL_PROBE_RGBA = (6, 6, 6, 255)
+# slides with the view (it looked like a scrolling texture). Black, not near
+# black: translated WaW programs read the probe back in gamma (sqrt), where 6/255
+# linear is 0.15 grey, and WaW's envMapParms fresnel scales it up to 12x (gore
+# materials turned chrome).
+NEUTRAL_PROBE_RGBA = (0, 0, 0, 255)
 NEUTRAL_LIGHTMAP_PAGES = [(116, 164, 181, 154), (132, 172, 191, 111), (129, 129, 192, 147)]
 # ``~$white-rgb&<x>-l`` is a linker-packed spec map: RGB = $white, alpha =
 # luminance of <x>. When neither it nor <x> exists anywhere, alpha is mid gloss.
@@ -463,7 +466,7 @@ def stage_images(report: StageReport, image_roots: list[Path], project_root: Pat
             # reflection, turning every glossy world surface red.
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_bytes(iwi.solid_cube_rgba_iwi(4, NEUTRAL_PROBE_RGBA))
-            why = "near-black cube probe; the WaW probe is a solid red placeholder"
+            why = "black cube probe; the WaW probe is a solid red placeholder"
             report.warnings.append(f"image {asset}: synthesized, {why}")
             report.images.append({"name": asset, "source": None, "synthesized": why})
             written.append(asset)
