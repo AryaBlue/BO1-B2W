@@ -186,6 +186,58 @@ power_bridge()
     level thread maps\mp\waw\_waw2bo2_perks::perk_unpause_all_perks();
 }
 
+// WaW DLC3 mod-tools template, maps\dlc3_code::DLC3_threadCalls2: only the power
+// is ported (the rest reports itself). BO2's template switch looks for
+// use_elec_switch/elec_switch; the WaW template's are use_power_switch and
+// power_switch, so without this a template map never gets power.
+waw_dlc3_threadcalls2()
+{
+    report( "GSC", "maps\\dlc3_code::dlc3_threadcalls2 (only the power switch is ported)" );
+    if ( isdefined( level.dlc3 ) && isdefined( level.dlc3.useelectricswitch ) && level.dlc3.useelectricswitch )
+        level thread waw_dlc3_power_electric_switch();
+    else
+        level thread waw_dlc3_power_electric_switch_on();
+}
+
+// maps\dlc3_code::power_electric_switch
+waw_dlc3_power_electric_switch()
+{
+    trig = getent( "use_power_switch", "targetname" );
+    master_switch = getent( "power_switch", "targetname" );
+    if ( !isdefined( trig ) || !isdefined( master_switch ) )
+    {
+        report( "GSC", "dlc3 power switch: use_power_switch/power_switch entities absent" );
+        return;
+    }
+    master_switch notsolid();
+    trig sethintstring( &"ZOMBIE_ELECTRIC_SWITCH" );
+    trig waittill( "trigger", user );
+    master_switch rotateroll( -90, 0.3 );
+    master_switch waw_playsound( "switch_flip" );
+    waw_dlc3_power_electric_switch_on();
+    fx_spot = getstruct( "power_switch_fx", "targetname" );
+    if ( isdefined( fx_spot ) && isdefined( level._effect["switch_sparks"] ) )
+        playfx( level._effect["switch_sparks"], fx_spot.origin );
+    trig delete();
+}
+
+// maps\dlc3_code::power_electric_switch_on: the level notifies, BO2 power_on and
+// the perk machines follow from "electricity_on" (power_bridge).
+waw_dlc3_power_electric_switch_on()
+{
+    if ( !isdefined( level.flag["electricity_on"] ) )
+        flag_init( "electricity_on" );
+    flag_set( "electricity_on" );
+    wait_network_frame();
+    clientnotify( "revive_on" );
+    wait_network_frame();
+    clientnotify( "fast_reload_on" );
+    wait_network_frame();
+    clientnotify( "doubletap_on" );
+    wait_network_frame();
+    clientnotify( "jugger_on" );
+}
+
 power_bridge_bo2_to_waw()
 {
     flag_wait( "power_on" );
