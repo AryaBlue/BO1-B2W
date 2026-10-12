@@ -89,6 +89,13 @@ report( api, detail )
     println( "WAW2BO2 UNSUPPORTED " + key );
 }
 
+// WaW setSavedDvar sets a server dvar that is also sent to clients; T6 has
+// no such builtin, and its server-side setdvar is the equivalent.
+waw_setsaveddvar( dvar, value )
+{
+    setdvar( dvar, value );
+}
+
 // T6 applies the attacker's custom damage function at the point of a swipe.
 // Source contact-kill monitors retain their own proximity checks and kills;
 // suppress the competing ASD attack until the monitor returns.

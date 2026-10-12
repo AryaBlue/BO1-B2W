@@ -689,6 +689,7 @@ class Translator:
         self.queue: list[str] = []
         self.done: dict[str, str] = {}        # waw path -> BO2 source text
         self.stubs: dict[str, tuple[str, int]] = {}   # stub name -> (description, max argc)
+        self.halting_stubs: set[str] = set()   # stubs standing for a WaW runtime error
         self.core_funcs: dict[tuple[str, str], str] = {}  # (core script, function) -> extracted name
         self.core_queue: list[tuple[str, str]] = []
         self.animtrees: set[str] = set()      # animtrees available in BO2 (lower-case)
@@ -739,8 +740,12 @@ class Translator:
         hits = [p for p in self.api.by_name.get(name, []) if BO2_SHARED.match(p)]
         return f"{hits[0]}::{name}" if len(hits) == 1 else None
 
+    @staticmethod
+    def stub_name(desc: str) -> str:
+        return "stub_" + re.sub(r"\W+", "_", desc.replace("::", "__")).strip("_")
+
     def stub(self, desc: str, name: str, argc: int | None, where: str) -> str:
-        stub = "stub_" + re.sub(r"\W+", "_", desc.replace("::", "__")).strip("_")
+        stub = self.stub_name(desc)
         old = self.stubs.get(stub, (desc, 0))
         self.stubs[stub] = (desc, max(old[1], argc or 0))
         self.report.unsupported.setdefault(f"GSC {desc}", []).append(where)
@@ -801,6 +806,12 @@ class Translator:
             return unique
         if accepts is False:
             rng = self.api.builtin_range(name, method)
+            if argc is not None and argc < rng[0]:
+                # Too few arguments is a WaW runtime error, which ends the calling
+                # thread outside developer mode; the stub stops the thread too.
+                desc = f"{name}/{argc}args(T6 takes {rng[0]}-{rng[1]}; WaW runtime error ends the thread)"
+                self.halting_stubs.add(self.stub_name(desc))
+                return self.stub(desc, name, argc, where)
             return self.stub(f"{name}/{argc}args(T6 takes {rng[0]}-{rng[1]})", name, argc, where)
         return self.stub(name, name, argc, where)
 
@@ -1467,7 +1478,10 @@ class Translator:
         for stub, (desc, argc) in sorted(self.stubs.items()):
             params = ", ".join(f"p{i}" for i in range(argc))
             lines += [f"{stub}({params})", "{",
-                      f'    {COMPAT}::report( "GSC", "{desc.replace(chr(92), chr(92) * 2)}" );', "}", ""]
+                      f'    {COMPAT}::report( "GSC", "{desc.replace(chr(92), chr(92) * 2)}" );']
+            if stub in self.halting_stubs:
+                lines.append('    level waittill( "waw2bo2_never" );')
+            lines += ["}", ""]
         return "\n".join(lines)
 
 

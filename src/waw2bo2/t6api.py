@@ -39,7 +39,8 @@ def _sections(pe: bytes):
 
 def extract_tables(exe: Path) -> list[list[tuple[str, int, int]]]:
     """The executable's builtin tables: runs of 24-byte records
-    {fn; int 0; const char *name; int id; int minArgs; int maxArgs}.
+    {fn; int 0; const char *name; int id; int minArgs; int maxArgs}, or the
+    same fields as {name; id; minArgs; maxArgs; fn; int 0}.
     Server/client and function/method tables are separate runs."""
     pe = exe.read_bytes()
     secs = _sections(pe)
@@ -51,8 +52,11 @@ def extract_tables(exe: Path) -> list[list[tuple[str, int, int]]]:
                 return raw + va - sva
         return None
 
-    def record(j):
-        p_fn, zero, p_name, _ident, lo, hi = struct.unpack_from("<IIIIII", pe, j)
+    def record(j, layout):
+        if layout == "fn_first":
+            p_fn, zero, p_name, _ident, lo, hi = struct.unpack_from("<IIIIII", pe, j)
+        else:
+            p_name, _ident, lo, hi, p_fn, zero = struct.unpack_from("<IIIIII", pe, j)
         if zero or lo > 32 or hi > 32 or lo > hi or not any(a <= p_fn < b for a, b in code):
             return None
         off = va_to_off(p_name)
@@ -60,22 +64,25 @@ def extract_tables(exe: Path) -> list[list[tuple[str, int, int]]]:
         return (m.group()[:-1].decode(), lo, hi) if m else None
 
     tables = []
-    for _, _, _, raw, rsize, chars in secs:
-        if chars & 0x20000000:
-            continue
-        j, end = raw, raw + rsize - 24
-        while j < end:
-            run = []
+    # Most tables are {fn; 0; name; id; min; max}; some (e.g. the server
+    # ScriptMover methods moveto/rotateto) are {name; id; min; max; fn; 0}.
+    for layout in ("fn_first", "name_first"):
+        for _, _, _, raw, rsize, chars in secs:
+            if chars & 0x20000000:
+                continue
+            j, end = raw, raw + rsize - 24
             while j < end:
-                r = record(j)
-                if r is None:
-                    break
-                run.append(r)
-                j += 24
-            if run:
-                tables.append(run)
-            else:
-                j += 4
+                run = []
+                while j < end:
+                    r = record(j, layout)
+                    if r is None:
+                        break
+                    run.append(r)
+                    j += 24
+                if run:
+                    tables.append(run)
+                else:
+                    j += 4
     return tables
 
 
@@ -140,7 +147,7 @@ class T6Api:
 SCRIPT_DIRS = ("maps", "common_scripts", "codescripts", "animscripts", "character", "clientscripts")
 
 
-CACHE_VERSION = 3
+CACHE_VERSION = 4
 # zones loaded before every zombies map (their assets need not be in the map zone)
 STOCK_ZONES = ("code_pre_gfx_zm", "code_post_gfx_zm", "common_zm", "patch_zm")
 

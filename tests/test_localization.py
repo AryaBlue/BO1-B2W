@@ -119,6 +119,13 @@ class LocalizationTests(unittest.TestCase):
         self.assertIn('#"ZOMBIE_OFF"', self.script.read_text())
         self.assertIn('"Press &&1"', self.script.read_text())
 
+    def test_plain_value_matching_a_short_raw_reference_stays_literal(self):
+        # stock menu.str has REFERENCE 30 ("30%"); a dvar value "30" is not a reference
+        self.strings(self.root, 'menu', {'30': '30%'})
+        self.script.write_text('a() { setsaveddvar( "player_laststandbleedouttime", "30" ); }')
+        self.stage()
+        self.assertIn('"30" )', self.script.read_text())
+
     def test_shared_fallback_never_overrides_present_source(self):
         self.script.write_text('a() { x = &"PATCH_ZOMBIE_MONKEY"; }')
         self.strings(self.root, 'source', {'PATCH_ZOMBIE_MONKEY': 'Custom monkey name'})

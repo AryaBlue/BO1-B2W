@@ -112,7 +112,8 @@ def stage(project: Path, roots: list[Path], iwd_dirs: list[Path], stock=None,
                     text = unquote(token.text.lstrip('&#'))
                     if token.text.startswith('&"'):
                         requested.add(original(text))
-                    elif token.text.startswith('"'):
+                    elif token.text.startswith('"') and KEY.fullmatch(original(text)):
+                        # a plain string is a reference only in key form (not "30")
                         strings.add(original(text))
     for path in sorted((project / 'content_source/weapons').rglob('*')):
         if path.is_file():
@@ -228,7 +229,7 @@ def stage(project: Path, roots: list[Path], iwd_dirs: list[Path], stock=None,
             if token.kind != gsc.STRING or token.text.startswith('#'):
                 continue
             text = original(unquote(token.text.lstrip('&')))
-            if text in mapping and (token.text.startswith('&') or text in known):
+            if text in mapping and (token.text.startswith('&') or (text in known and text in strings)):
                 token.text = ('&' if token.text.startswith('&') else '') + quote(mapping[text])
         after = gsc.emit(tokens)
         if after != before:
