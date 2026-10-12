@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Keep zombies at their close-range models when several are on screen. The T6 linker sized the map's skinned-vertex cache (`skinnedverts` asset, `maxSkinnedVerts`) from the number of world vertices, so a simple map such as Cheese Cube Unlimited (28,841) or Bank Job (24,928) got a fraction of the stock 163,840. Once a few zombies filled 90% of it, BO2's adaptive skin LOD scaled every skinned model's LOD distance up, and zombies next to the player drew their lowest LOD. Converted maps now use the stock size. The unlinker also dumps `skinnedverts` now.
 - Fix perk-machine and other effect lights glowing far too bright on every map. BO2 adds an effect omni light with linear colour sRGB->linear(rgb) x alpha x 32, a factor authored for stock exposure (HDR scale about 1/64). Converted maps run at HDR scale 1 so WaW lighting stays 1:1, which made every WaW effect light about 32 times too strong. The light's alpha (its intensity) now converts by 1/32.
 - Translate WaW `setSavedDvar` to BO2's `setdvar` (through `waw_setsaveddvar` in the compat script). It was stubbed, so a map's dvar settings (player speed, gravity, melee range, last-stand bleed-out time...) never applied. A community member fixed another map by making this change by hand.
 - Read the BO2 builtin tables stored name-first (`{name; id; min; max; fn; 0}`), such as the server mover methods (`moveto`, `rotateto`, `movez`...). Their argument counts were unknown, so the port could not see a wrong call and BO2 refused to load the map ("Unresolved external: moveto with 1 parameters").
