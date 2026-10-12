@@ -8,6 +8,18 @@ from waw2bo2 import entities, zones
 
 
 class ZoneGraphTests(unittest.TestCase):
+    def test_dlc3_initial_zone_fields_are_preserved(self):
+        script = ('level.DLC3.initialZones[0] = "spawn";\n'
+                  'level.dlc3.initialzones[1] = "courtyard";\n'
+                  'add_adjacent_zone("spawn", "yard", "door_open");\n')
+        initial, adjacency = zones.read_waw_zones(script)
+        self.assertEqual(initial, ['spawn', 'courtyard'])
+        patched = zones.patch_bo2_script(
+            'main()\n{\n    init_zones[0] = "start_zone";\n}\nzm_x_zone_init()\n{\n}\n',
+            'zm_x', initial, adjacency)
+        self.assertIn('init_zones[0] = "spawn";', patched)
+        self.assertIn('init_zones[1] = "courtyard";', patched)
+
     def test_zombie_spawners_without_waw_force_flag_can_spawn_in_t6(self):
         source = [
             {"classname": "actor_zombie_ger_ber_sshonor", "script_noteworthy": "zombie_spawner",

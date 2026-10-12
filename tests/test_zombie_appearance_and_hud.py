@@ -7,6 +7,30 @@ from waw2bo2 import gsc, gscport, zombieappearance, t6bridge, entities
 
 
 class ZombieAppearanceAndHudTests(unittest.TestCase):
+    def test_headless_body_keeps_authored_head_hitbox_without_mesh_vertices(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / 'source'
+            output = Path(folder) / 'output'
+            (source / 'xmodel').mkdir(parents=True)
+            (source / 'body.gltf').write_text('{"nodes":[],"materials":[]}')
+            bounds = [{'bone': 'j_head', 'mins': [-1.5, -4.1, -3.7],
+                       'maxs': [7.7, 5.9, 3.7], 'offset': [3.1, 0.9, 0],
+                       'radiusSquared': 59.9, 'hitloc': 'head'}]
+            (source / 'xmodel/body.json').write_text(json.dumps({
+                'type': 'animated', 'lods': [{'file': 'body.gltf', 'distance': 250}],
+                'boneInfo': bounds}))
+            (source / 'partclassification.csv').write_text('j_head,head\n')
+            report = t6bridge.StageReport('sample')
+            with patch.object(t6bridge, 'OAT_T6_RAW', source):
+                t6bridge.stage_models(report, SimpleNamespace(static_models=[]), 'sample',
+                                      source, output, {'body'}, [source])
+            self.assertEqual(report.errors, [])
+            model = json.loads((output / 'xmodel/body.json').read_text())
+            self.assertEqual(model['boneInfo'], bounds)
+            self.assertEqual(model['flags'], 0x80000)
+
     def test_unrotated_camera_structs_have_native_vector_defaults(self):
         source = [{'classname': 'script_struct', 'targetname': 'camera_end', 'origin': '8 9 10'},
                   {'classname': 'script_struct', 'angle': '45'},

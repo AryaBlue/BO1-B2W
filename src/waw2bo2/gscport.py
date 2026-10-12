@@ -65,6 +65,20 @@ def ported_path(path: str) -> str:
     return "maps\\mp\\waw\\" + p.removeprefix("maps\\")
 
 
+def animation_tree_name(tree: str) -> str:
+    return "waw2bo2_" + norm(tree).replace("\\", "_")
+
+
+def animation_asset_name(name: str) -> str:
+    return "waw_anim_" + name.lower()
+
+
+def animation_names(tokens: list[gsc.Token]) -> set[str]:
+    return {tokens[i + 1].low for i in range(1, len(tokens) - 1)
+            if tokens[i].text == "%" and tokens[i + 1].kind == gsc.IDENT
+            and tokens[i - 1].text in ("(", ",", "=", "[", "return", "[[")}
+
+
 @dataclass
 class PortReport:
     map_main: str = ""
@@ -156,7 +170,14 @@ class Sources:
         return texts
 
     def is_stock(self, path: str, ext: str = ".gsc") -> bool:
-        return norm(path) + ext in self.stock
+        key = norm(path) + ext
+        if key not in self.stock:
+            for root in self.variant_roots:
+                raw = root / (norm(path).replace('\\', '/') + ext)
+                if raw.is_file():
+                    self.stock[key] = raw.read_text(encoding='utf-8', errors='replace')
+                    break
+        return key in self.stock
 
 
 def is_core(path: str, sources: Sources) -> bool:
@@ -165,7 +186,9 @@ def is_core(path: str, sources: Sources) -> bool:
         return False
     if p in API["core_scripts"] or p in API["template_scripts"]:
         return True
-    return sources.is_stock(p) and any(re.search(r, p) for r in API["core_patterns"])
+    # Check raw stock variants even when the map supplies an override. Porting
+    # the entire animscripts file would pull WaW's AI framework into T6.
+    return any(re.search(r, p) for r in API["core_patterns"]) and sources.is_stock(p)
 
 
 LINE_COMMENT_BACKSLASH = re.compile(r"(//[^\n]*?)\\+[ \t]*(?=\r?\n|$)")
@@ -699,6 +722,8 @@ class Translator:
         self.core_animtrees: dict[str, set[str]] = {}
         self.level_state_parts: list[str] = []
         self.anim_neutralized = False
+        self.animation_discovery = False
+        self.animation_requirements: dict[str, set[str]] = defaultdict(set)
         self.bo2_stock_perks = False
         # stock-perks mode: WaW perk scripts -> functions that stay WaW's
         # (Pack-a-Punch, power relays; waw_pack_a_punch_source)
@@ -760,6 +785,13 @@ class Translator:
         renamed = API["function_renames"].get(name)
         if renamed:
             return renamed
+        # Template functions are authored source behavior. In particular,
+        # DLC3's spawnFX() bootstraps createFX; it is not the engine spawnfx
+        # builtin wrapped by waw_spawnfx(fx, origin, ...).
+        if core in API["template_scripts"]:
+            extracted = self.extract(core, name)
+            if extracted:
+                return extracted
         if any(self.api.defines(inc, name) for inc in included):
             self.report.rewrites[f"{core}::{name} -> included BO2 script"] += 1
             return None
@@ -824,6 +856,10 @@ class Translator:
     def translate(self, path: str, main_split: bool = False) -> str:
         script = self.sources.get(path)
         tokens = script.tokens
+        for fn in script.functions.values():
+            if fn.animtree:
+                self.animation_requirements[fn.animtree.lower()].update(
+                    animation_names(tokens[fn.start:fn.body_close + 1]))
         self.report.rewrites["stationary FX carriers lowered to authored-position FX"] += lower_stationary_fx_carriers(tokens)
         self.report.rewrites["launch volume includes its activation trigger"] += bridge_launch_triggers(tokens)
         where_file = self.sources.origin.get(norm(path) + ".gsc", path)
@@ -853,11 +889,25 @@ class Translator:
                 self.want(inc)
                 t.text = f"#include {ported_path(inc)};"
         self.anim_neutralized = False
+        neutralized_ranges = []
         if script.animtree:
-            self.report.animtrees.setdefault(script.animtree, []).append(path)
-            if script.animtree.lower() not in self.animtrees:
-                self.anim_neutralized = True
-                neutralize_animations(tokens, script.animtree)
+            for token in tokens:
+                match = gsc.ANIMTREE_RE.match(token.text) if token.kind == gsc.DIRECTIVE else None
+                if not match:
+                    continue
+                tree = match[1].lower()
+                self.report.animtrees.setdefault(match[1], []).append(path)
+                if tree in self.core_animtrees:
+                    token.text = f'#using_animtree( "{animation_tree_name(tree)}" );'
+                elif tree not in self.animtrees:
+                    token.text = f'// waw2bo2: {token.text} (animtree not converted)'
+            for fn in script.functions.values():
+                tree = (fn.animtree or '').lower()
+                if tree in self.core_animtrees:
+                    self.rewrite_animation_refs(tokens, tree, path, fn.start, fn.body_close + 1)
+                elif tree and tree not in self.animtrees:
+                    neutralize_animations(tokens[fn.start:fn.body_close + 1], tree)
+                    neutralized_ranges.append((fn.start, fn.body_close + 1))
 
         if main_split:
             self._split_main(script)
@@ -873,7 +923,8 @@ class Translator:
             if self.shadows_builtin(name):
                 tokens[fn.start].text = shadowed_name(tokens[fn.start].text)
                 self.report.rewrites["map functions named like T6 builtins renamed (waw_*)"] += 1
-        self.resolve_refs(tokens, script, where_file, included_bo2, defs)
+        self.resolve_refs(tokens, script, where_file, included_bo2, defs,
+                          neutralized_ranges=neutralized_ranges)
         self.report.rewrites["WaW contact-kill monitors own AI attacks"] += bridge_contact_kill_attacks(tokens, script)
         self.report.rewrites["WaW being_revived reads bridged to T6 revive state"] += bridge_revive_reads(tokens)
         self.report.rewrites["WaW session stat reads bridged to T6 counters"] += bridge_player_stat_reads(tokens)
@@ -882,7 +933,8 @@ class Translator:
         return header + gsc.emit(tokens)
 
     def resolve_refs(self, tokens: list[gsc.Token], script: gsc.Script, where_file: str,
-                     included_bo2: set[str], skip: set[int], extracting: str | None = None) -> None:
+                     included_bo2: set[str], skip: set[int], extracting: str | None = None,
+                     neutralized_ranges: list[tuple[int, int]] | None = None) -> None:
         """Rewrite every function reference in ``tokens`` (code of ``script``).
         ``extracting``: the core script whose functions are being extracted;
         its own functions are extracted too instead of kept."""
@@ -892,6 +944,8 @@ class Translator:
             if tokens[i].text.lower() == "zombie_hints" and tokens[i - 1].text == "." and tokens[i - 2].text.lower() == "level":
                 tokens[i].text = "waw2bo2_hints"
         for ref in gsc.references(tokens):
+            if neutralized_ranges is not None:
+                self.anim_neutralized = any(start <= ref.index < end for start, end in neutralized_ranges)
             if ref.index in skip or not tokens[ref.index].text:
                 continue    # a definition, or inside arguments already dropped
             tok = tokens[ref.index]
@@ -1015,10 +1069,13 @@ class Translator:
             return None
         key = (core, name)
         fn = script.functions[name]
+        tree = (fn.animtree or "").lower()
+        if tree:
+            self.animation_requirements[tree].update(animation_names(script.tokens[fn.start:fn.body_close + 1]))
         if key not in self.core_funcs and uses_animations(script.tokens, fn.body_open, fn.body_close) and \
-                (script.animtree or "").lower() not in self.core_animtrees:
+                tree not in self.core_animtrees and not self.animation_discovery:
             # needs its WaW animtree and xanims, which are not converted yet
-            self.report.animtrees.setdefault(script.animtree or "?", []).append(f"{core}::{name}")
+            self.report.animtrees.setdefault(fn.animtree or "?", []).append(f"{core}::{name}")
             return None
         if key not in self.core_funcs:
             self.core_funcs[key] = f"{core.split(chr(92))[-1].lstrip('_')}__{name}"
@@ -1079,10 +1136,12 @@ class Translator:
         tokens = [gsc.Token(gsc.IDENT, name, f"\n// {core}::{init}: level state its extracted functions read\n"),
                   gsc.Token(gsc.PUNCT, "("), gsc.Token(gsc.PUNCT, ")"), gsc.Token(gsc.PUNCT, "{", "\n"),
                   *kept, gsc.Token(gsc.PUNCT, "}", "\n"), gsc.Token(gsc.EOF, "")]
-        self.keep_core_animations(script, tokens, f"{core}::{init}")
-        tree = (script.animtree or "").lower()
+        if fn.animtree:
+            self.animation_requirements[fn.animtree.lower()].update(animation_names(tokens))
+        self.keep_core_animations(script, tokens, f"{core}::{init}", fn.animtree)
+        tree = (fn.animtree or "").lower()
         if tree and tree not in self.core_animtrees and tree not in self.animtrees:
-            neutralize_animations(tokens, script.animtree)
+            neutralize_animations(tokens, fn.animtree)
         where = self.sources.origin.get(core + ".gsc", core)
         self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
         self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
@@ -1222,36 +1281,46 @@ class Translator:
                                       f"\tmaps\\mp\\zombies\\_zm::register_player_damage_callback( ::{name} );\n}}\n")
         return f"{name}_register"
 
-    def keep_core_animations(self, script: gsc.Script, tokens: list[gsc.Token], where: str) -> None:
+    def rewrite_animation_refs(self, tokens: list[gsc.Token], tree: str, where: str,
+                               start: int = 0, end: int | None = None) -> None:
+        available = self.core_animtrees[tree.lower()]
+        for i in range(max(start, 1), (len(tokens) if end is None else end) - 1):
+            if tokens[i].text != "%" or tokens[i + 1].kind != gsc.IDENT or \
+                    tokens[i - 1].text not in ("(", ",", "=", "[", "return", "[["):
+                continue
+            name = tokens[i + 1].low
+            if name in available:
+                tokens[i + 1].text = animation_asset_name(name)
+            else:
+                self.report.unsupported.setdefault(f"XANIM {name} (animtree {tree}: no WaW xanim)", []).append(where)
+                tokens[i].text = ""
+                tokens[i + 1].text = "undefined"
+
+    def keep_core_animations(self, script: gsc.Script, tokens: list[gsc.Token], where: str,
+                             animtree: str | None = None) -> None:
         """Extracted code with ``%anim`` references from a staged animtree: name
         the tree before the function (the extracted functions share one file),
         and drop references to animations with no WaW xanim (``undefined``)."""
-        tree = (script.animtree or "").lower()
+        tree = (animtree or script.animtree or "").lower()
         uses_tree = any(t.text == "#" and tokens[i + 1].low == "animtree" for i, t in enumerate(tokens[:-1]))
         if tree not in self.core_animtrees or not (uses_tree or uses_animations(tokens, 0, len(tokens) - 1)):
             return
-        available = self.core_animtrees[tree]
-        tokens[0].pre += f'#using_animtree( "{script.animtree}" );\n'
-        for i in range(1, len(tokens) - 1):
-            t = tokens[i]
-            if t.text == "%" and tokens[i + 1].kind == gsc.IDENT and \
-                    tokens[i - 1].text in ("(", ",", "=", "[", "return", "[[") and \
-                    tokens[i + 1].low not in available:
-                self.report.unsupported.setdefault(f"XANIM {tokens[i + 1].text} (animtree {script.animtree}: "
-                                                   f"no WaW xanim)", []).append(where)
-                t.text = ""
-                tokens[i + 1].text = "undefined"
+        tokens[0].pre += f'#using_animtree( "{animation_tree_name(tree)}" );\n'
+        self.rewrite_animation_refs(tokens, tree, where)
 
     def translate_extracted(self, core: str, name: str) -> str:
         script = self.sources.get(core)
         fn = script.functions[name]
+        if fn.animtree:
+            self.animation_requirements[fn.animtree.lower()].update(
+                animation_names(script.tokens[fn.start:fn.body_close + 1]))
         tokens = [gsc.Token(t.kind, t.text, t.pre, t.line) for t in script.tokens[fn.start:fn.body_close + 1]]
         tokens.append(gsc.Token(gsc.EOF, ""))
         tokens[0].text = self.core_funcs[(core, name)]
         self.anim_neutralized = False
         tokens[0].pre = f"\n// {core}::{name} ({'map override' if core + '.gsc' in self.sources.text else 'stock'})\n"
-        self.keep_core_animations(script, tokens, f"{core}::{name}")
-        tree = (script.animtree or "").lower()
+        self.keep_core_animations(script, tokens, f"{core}::{name}", fn.animtree)
+        tree = (fn.animtree or "").lower()
         uses_tree = any(t.text == "#" and tokens[i + 1].low == "animtree" for i, t in enumerate(tokens[:-1]))
         if uses_tree and tree not in self.core_animtrees:
             # The extracted functions share one file, so the source script's
@@ -1259,9 +1328,9 @@ class Translator:
             # UseAnimTree( #animtree ) with no %anim: "trying to use animtree
             # without specified using animtree").
             if tree in self.animtrees:
-                tokens[0].pre += f'#using_animtree( "{script.animtree}" );\n'
+                tokens[0].pre += f'#using_animtree( "{fn.animtree}" );\n'
             else:
-                neutralize_animations(tokens, script.animtree or "")
+                neutralize_animations(tokens, fn.animtree or "")
         where = self.sources.origin.get(core + ".gsc", core)
         self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
         self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
@@ -1485,6 +1554,52 @@ class Translator:
         return "\n".join(lines)
 
 
+def discover_animation_dependencies(sources: Sources, api: T6Api, map_name: str,
+                                    actor_types: set[str] = frozenset()) -> dict[str, set[str]]:
+    """Run the normal dependency resolver with animation extraction enabled.
+
+    Discovery uses a private source copy because translation edits tokens.
+    No files are emitted, and no source function name needs a special list.
+    """
+    sources = copy.deepcopy(sources)
+    for name in sorted(actor_types):
+        path = 'aitype\\' + name
+        original = sources.text.get(path + '.gsc', sources.stock.get(path + '.gsc'))
+        if original is not None:
+            sources.text[path + '.gsc'] = zombieappearance.appearance_script(original)
+            sources._parsed.pop(path + '.gsc', None)
+    tr = Translator(sources, api, PortReport())
+    tr.animation_discovery = True
+    tr.queue.append(norm(f"maps/{map_name}"))
+    tr.extract_custom_intermission()
+    tr.extract_end_game()
+    tr.extract_entry(ZOMBIEMODE, "init_strings")
+    for name in sorted(actor_types):
+        tr.want('aitype\\' + name)
+    if has_waw_appearance(sources):
+        tr.want(LOADOUT)
+    for entries in WEAPON_REGISTRATION.values():
+        for core, name in entries:
+            tr.extract_entry(core, name)
+    parts = []
+
+    def drain():
+        while tr.queue or tr.core_queue:
+            if tr.core_queue:
+                parts.append(tr.translate_extracted(*tr.core_queue.pop(0)))
+            else:
+                path = tr.queue.pop(0)
+                if path not in tr.done:
+                    tr.done[path] = tr.translate(path, main_split=(path == norm(f"maps/{map_name}")))
+
+    drain()
+    read = set().union(*(level_fields_read(gsc.tokenize(text)) for text in [*tr.done.values(), *parts]))
+    for core, name in [BOX_STATE_INIT, *FRAMEWORK_STATE_INITS]:
+        tr.extract_level_state(core, name, read)
+    drain()
+    return {tree: names for tree, names in tr.animation_requirements.items() if names}
+
+
 def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
              fx_table: dict[str, str] | None = None, animtrees: set[str] | None = None,
              core_animtrees: dict[str, set[str]] | None = None, bo2_stock_perks: bool = False,
@@ -1584,7 +1699,7 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
             drain()
     # WaW framework tables BO2 never builds that the ported scripts read
     # (e.g. level._zombie_tesla_death for a custom Electric Cherry)
-    read = set().union(*(level_fields_read(gsc.tokenize(text)) for text in tr.done.values()))
+    read = set().union(*(level_fields_read(gsc.tokenize(text)) for text in [*tr.done.values(), *core_parts]))
     framework_state = [state for core, init in FRAMEWORK_STATE_INITS
                        if (state := tr.extract_level_state(core, init, read))]
     if hint_registry:

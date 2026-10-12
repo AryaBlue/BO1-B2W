@@ -80,6 +80,8 @@ class WeaponTests(unittest.TestCase):
             (root / "xmodel").mkdir(parents=True)
             (root / "model_export").mkdir()
             model = {"_game": "t4", "flags": 0, "lods": [{"distance": 10, "file": "model_export/gun.gltf"}]}
+            model['boneInfo'] = [{'bone': 'tag_view', 'mins': [0, 0, 0], 'maxs': [1, 1, 1],
+                                  'offset': [0.5, 0.5, 0.5], 'radiusSquared': 0.75}]
             data = {"nodes": [{"name": "tag_view", "children": [1]}, {"name": "tag_weapon"}],
                     "skins": [{"joints": [0, 1]}], "materials": [{"name": "custom_skin"}],
                     "images": [{"uri": "../images/preview.dds"}],
@@ -89,6 +91,9 @@ class WeaponTests(unittest.TestCase):
             project = Path(temp) / "valid"
             report = weapons.stage_models([root], project, {"gun"})
             self.assertEqual(len(report["models"]), 1)
+            definition = json.loads((project / 'xmodel/waw_xmodel/gun.json').read_text())
+            self.assertNotIn('boneInfo', definition)
+            self.assertEqual(definition['wawBoneInfo'], model['boneInfo'])
             staged = json.loads((project / "model_export/waw_xmodel/gun_lod0.gltf").read_text())
             self.assertEqual(staged["skins"], data["skins"])
             self.assertEqual(staged["meshes"], data["meshes"])

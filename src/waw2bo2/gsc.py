@@ -106,6 +106,7 @@ class Function:
     start: int          # index of the name token
     body_open: int      # index of '{'
     body_close: int     # index of matching '}'
+    animtree: str | None = None  # #using_animtree active at this definition
 
 
 @dataclass
@@ -159,7 +160,8 @@ def parse(source: str, path: str) -> Script:
             if tokens[close + 1].text == "{":
                 body_close = _match(tokens, close + 1, "{", "}")
                 params = [tokens[k].text for k in range(i + 2, close) if tokens[k].kind == IDENT]
-                script.functions.setdefault(t.low, Function(t.text, params, i, close + 1, body_close))
+                script.functions.setdefault(t.low, Function(t.text, params, i, close + 1, body_close,
+                                                           script.animtree))
                 i = body_close + 1
                 continue
         if t.kind == PUNCT and t.text == "{":
@@ -189,7 +191,12 @@ def references(tokens: list[Token], start: int = 0, end: int | None = None) -> l
         t = tokens[i]
         if t.kind != IDENT:
             continue
-        prev = tokens[i - 1] if i else None
+        # tokens emptied by rewrites (fix_syntax drops the parentheses of
+        # ``(who) IsTouching(...)``) are not there for the compiler either
+        p = i - 1
+        while p >= 0 and tokens[p].text == "" and tokens[p].kind == PUNCT:
+            p -= 1
+        prev = tokens[p] if p >= 0 else None
         nxt = tokens[i + 1]
         if prev is not None and prev.text == "::":
             if i >= 2 and tokens[i - 2].kind == PATH:
@@ -207,7 +214,7 @@ def references(tokens: list[Token], start: int = 0, end: int | None = None) -> l
         if method and prev.text == ")":
             # `if ( x ) f()` / `while (...) f()` is a statement, not `(expr) f()`
             depth = 0
-            for k in range(i - 1, -1, -1):
+            for k in range(p, -1, -1):
                 if tokens[k].text == ")":
                     depth += 1
                 elif tokens[k].text == "(":

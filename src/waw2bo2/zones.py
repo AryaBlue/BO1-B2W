@@ -12,7 +12,9 @@ import re
 from pathlib import Path
 
 ADJACENT_RE = re.compile(r"^\s*(?:[\w\\/]+::)?add_adjacent_zone\s*\(([^;]*)\)\s*;", re.MULTILINE)
-INIT_ZONE_RE = re.compile(r'^\s*(?:zones|init_zones)\s*\[[^\]]*\]\s*=\s*"([^"]+)"\s*;', re.MULTILINE)
+INIT_ZONE_RE = re.compile(
+    r'^\s*(?:zones|init_zones|level\s*\.\s*dlc3\s*\.\s*initialzones)'
+    r'\s*\[[^\]]*\]\s*=\s*"([^"]+)"\s*;', re.MULTILINE | re.IGNORECASE)
 
 
 class ZoneError(ValueError):

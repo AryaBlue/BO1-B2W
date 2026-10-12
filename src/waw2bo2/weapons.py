@@ -329,6 +329,12 @@ def stage_models(roots: list[Path], project: Path, names: set[str]) -> dict:
         if model.pop("collSurfs", None):
             no_collision.append(name)
         model.pop("contents", None)
+        # The gameplay-mod linker has a different boneInfo JSON schema
+        # (its mins/maxs are vector objects). Keep the original metadata in
+        # a namespaced field here; the map bridge imports authored hitboxes
+        # from the original model definition, before this weapon staging.
+        if "boneInfo" in model:
+            model["wawBoneInfo"] = model.pop("boneInfo")
         model["lods"] = [lod for lod, _, _ in lods]
         model["lightingOriginOffset"] = {"x": 0.0, "y": 0.0, "z": 0.0}
         model["lightingOriginRange"] = 0.0

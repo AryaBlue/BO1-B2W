@@ -8,6 +8,7 @@
     "  the source map's override wins, otherwise stock WaW is used. WaW owns all perk machines and purchases.",
     "core_patterns: regexes; stock WaW scripts matching one are core too (value null).",
     "template_scripts: files of the WaW mod tools' zombie map template. Maps carry them, stock zones do not.",
+    "  DLC3 code and teleporter functions are extracted recursively from the map's own template copy.",
     "function_renames: WaW function (any script or builtin) -> BO2 qualified function or builtin.",
     "compat_wrappers: WaW builtins routed through maps\\mp\\waw\\_waw2bo2_compat even though T6 has a builtin",
     "  of that name, because the semantics or the asset namespace differ.",
@@ -17,8 +18,8 @@
     "  precache/give-character hooks.",
     "anim_builtins: animation builtins -> compat waw_anim_<value>, used in scripts whose WaW animtree is not available in BO2 (their %anim references become strings).",
     "extract_exceptions: function-name suffixes still extracted from no_extract scripts: gameplay callbacks such as",
-    "  the DLC3 template's mystery box weighting functions (ray gun odds), and its environment bootstrap",
-    "  (dlc3_fx/spawnfx: the map's effect table, footsteps, createart vision+fog, createfx ambient effects).",
+    "  DLC3 extraction is unrestricted except for unsupported animation functions; its legacy suffix entries",
+    "  below remain valid if a caller deliberately disables full template extraction.",
     "library_functions: functions of third-party WaW map libraries -> compat waw_<value>, where BO2 has the native",
     "  feature the library worked around (e.g. treminaor's trem_hintstrings drew hints through a WaW menu)."
   ],
@@ -83,7 +84,8 @@
     "get_zombie_hint": "maps\\mp\\waw\\_waw2bo2_compat::waw_get_zombie_hint",
     "set_hint_string": "maps\\mp\\waw\\_waw2bo2_compat::waw_set_hint_string",
     "include_weapon": "maps\\mp\\waw\\_waw2bo2_compat::waw_include_weapon",
-    "add_zombie_weapon": "maps\\mp\\waw\\_waw2bo2_compat::waw_add_zombie_weapon"
+    "add_zombie_weapon": "maps\\mp\\waw\\_waw2bo2_compat::waw_add_zombie_weapon",
+    "manage_zones": "maps\\mp\\waw\\_waw2bo2_compat::waw_manage_zones"
   },
   "compat_wrappers": [
     "setvelocity",
@@ -128,9 +130,6 @@
     "precachemodel"
   ],
   "no_extract": [
-    "maps\\dlc3_code",
-    "maps\\dlc3_teleporter",
-    "maps\\createfx\\dlc3_fx",
     "maps\\_zombiemode",
     "maps\\_load",
     "maps\\_callbackglobal",

@@ -2134,7 +2134,7 @@ def stage_fx(report: StageReport, names: list[str], converted: dict[str, str], m
     (project_root / MOD_EXTRA_ZONE).write_text("".join(f"fx,{n}\n" for n in mod_fx), encoding="utf-8")
 
 
-SCRIPT_PRECACHE_MODEL_RE = re.compile(r'\bprecachemodel\s*\(\s*"([^"]+)"', re.IGNORECASE)
+SCRIPT_PRECACHE_MODEL_RE = re.compile(r'\b(?:waw_)?precachemodel\s*\(\s*"([^"]+)"', re.IGNORECASE)
 SCRIPT_SHADER_RE = re.compile(r'\b(?:precacheshader|setshader)\s*\(\s*"([^"]+)"', re.IGNORECASE)
 # Builtins whose screen overlay material the engine draws by a hard-coded name
 # (CoDWaW.exe and t6zm.exe both hold the string). BO2 loads it only in the
@@ -2145,47 +2145,58 @@ ANIM_REF_RE = re.compile(r'(?:[(,=\[]|\breturn|\[\[)\s*%\s*([A-Za-z_]\w*)')
 
 
 def stage_core_animtrees(report: StageReport, sources, roots: list[Path], project_root: Path,
-                         bo2_trees: set[str]) -> tuple[dict[str, set[str]], list[str]]:
-    """The WaW animtrees of framework overrides whose entry points the
-    converter extracts (gscport.WEAPON_REGISTRATION, e.g. the mystery box), as
-    BO2 animtrees: animtrees/<tree>.atr lists the tree's animations that have a
-    WaW raw xanim, which is staged as xanim/<name> for mod.ff (BO2's linker
-    reads WaW's raw xanims). Returns ({tree: animations}, staged xanim names)."""
+                         bo2_trees: set[str], *, api=None, map_name: str | None = None,
+                         stock_waw=None, actor_types: set[str] = frozenset()) -> tuple[dict[str, set[str]], list[str]]:
+    """Stage original animations reached by the normal script resolver.
+
+    Namespace both trees and clips so a native BO2 asset with the same name
+    cannot replace the source animation. Missing clips remain reported.
+    Returns ({source tree: source animation names}, staged xanim names).
+    """
     trees: dict[str, set[str]] = {}
     staged: list[str] = []
-    # only the box's script: other registration scripts (dlc3_code) name the
-    # stock AI tree, whose animations BO2's own zombies replace
-    cores = {core for core, _ in gscport.WEAPON_REGISTRATION["box"]}
-    for core in sorted(cores):
-        script = sources.get(core)
-        if script is None or not script.animtree or script.animtree.lower() in {t.lower() for t in bo2_trees}:
-            continue
-        wanted = sorted(set(ANIM_REF_RE.findall(sources.text.get(core + ".gsc", ""))))
+    if api is not None and map_name is not None:
+        requirements = gscport.discover_animation_dependencies(sources, api, map_name, actor_types)
+    else:
+        # Backwards-compatible callers without a map entry point still stage
+        # the original box's animation declarations.
+        requirements = {}
+        for core, _ in gscport.WEAPON_REGISTRATION["box"]:
+            script = sources.get(core)
+            if script:
+                for fn in script.functions.values():
+                    if fn.animtree:
+                        requirements.setdefault(fn.animtree.lower(), set()).update(
+                            gscport.animation_names(script.tokens[fn.start:fn.body_close + 1]))
+    resolver = assetresolve.Resolver(roots, stock_waw)
+    for tree, wanted in sorted(requirements.items()):
         found, missing = [], []
-        for name in wanted:
-            src = next((r / "xanim" / name for r in roots if (r / "xanim" / name).is_file()), None)
+        for name in sorted(wanted):
+            src = resolver.find("xanim", name)
             if src is None:
                 missing.append(name)
                 continue
-            dst = project_root / "xanim" / name
+            target = gscport.animation_asset_name(name)
+            dst = project_root / "xanim" / target
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
             found.append(name)
+            staged.append(target)
         for name in missing:
-            report.warnings.append(f"UNSUPPORTED_XANIM {name} (animtree {script.animtree}, {core}): no WaW xanim "
+            report.warnings.append(f"UNSUPPORTED_XANIM {name} (animtree {tree}): no WaW xanim "
                                    f"in any zone dump; references become undefined")
         if not found:
             continue
-        atr = project_root / "animtrees" / f"{script.animtree}.atr"
+        atr = project_root / "animtrees" / f"{gscport.animation_tree_name(tree)}.atr"
         atr.parent.mkdir(parents=True, exist_ok=True)
-        atr.write_text(f"{CORE_ANIMTREE_HEADER} {script.animtree} ({core}), animations with WaW xanims\n" +
-                       "".join(f"{n}\n" for n in found), encoding="utf-8")
-        trees[script.animtree] = set(found)
-        staged += found
+        atr.write_text(f"{CORE_ANIMTREE_HEADER} {tree}, animations with WaW xanims\n" +
+                       "".join(f"{gscport.animation_asset_name(n)}\n" for n in found), encoding="utf-8")
+        trees[tree] = set(found)
+    roots[:] = list(dict.fromkeys(resolver.roots))
     return trees, staged
 
 
-SCRIPT_MODEL_RE = re.compile(r'\b(?:precachemodel|setmodel|setviewmodel|attach)\s*\(\s*"([^"]+)"', re.IGNORECASE)
+SCRIPT_MODEL_RE = re.compile(r'\b(?:waw_)?(?:precachemodel|setmodel|setviewmodel|attach)\s*\(\s*"([^"]+)"', re.IGNORECASE)
 SCRIPT_FUNC_RE = re.compile(r'^([A-Za-z_]\w*)\s*\(([^)]*)\)\s*\{', re.MULTILINE)
 
 
@@ -2204,7 +2215,7 @@ def wrapped_model_literals(texts: list[str]) -> set[str]:
                     break
             body = text[m.end():end]
             for index, param in enumerate(p.strip() for p in m.group(2).split(",")):
-                if param and re.search(rf'\b(?:precachemodel|setmodel|setviewmodel|attach)\s*\(\s*{re.escape(param)}\s*[,)]',
+                if param and re.search(rf'\b(?:waw_)?(?:precachemodel|setmodel|setviewmodel|attach)\s*\(\s*{re.escape(param)}\s*[,)]',
                                        body, re.IGNORECASE):
                     wrappers[m.group(1).lower()] = index
     found = set()
@@ -2286,7 +2297,8 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
             old.unlink()    # staged by an earlier run (stage_core_animtrees)
     animtrees = {p.stem for d in (bo2_root / "raw" / "animtrees", project_root / "animtrees") if d.exists()
                  for p in d.glob("*.atr")}
-    core_trees, xanims = stage_core_animtrees(report, sources, model_roots, project_root, animtrees)
+    core_trees, xanims = stage_core_animtrees(report, sources, model_roots, project_root, animtrees,
+                                           api=api, map_name=map_name, stock_waw=stock_waw, actor_types=actor_types)
     port = gscport.port_map(sources, api, map_name, project_root, animtrees=animtrees, core_animtrees=core_trees,
                             bo2_stock_perks=bo2_stock_perks, actor_types=actor_types,
                             actor_template=actor_template)
@@ -2294,7 +2306,7 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
         gscport.zombieappearance.bind_actor_types(project_root, actor_types)
     report.scripts = port.to_json()
     report.scripts["staged_xanims"] = xanims
-    report.scripts["staged_animtrees"] = sorted(core_trees)
+    report.scripts["staged_animtrees"] = sorted(gscport.animation_tree_name(t) for t in core_trees)
     report.errors += [f"scripts: {e}" for e in port.errors]
     # empty converted-asset table for the link check; stage_fx writes the real
     # one once the effects are converted (stage_bridge)
@@ -2308,7 +2320,7 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
         report.warnings.append(f"UNSUPPORTED_GSC_API {api_name.removeprefix('GSC ')} ({len(where)} uses, first "
                                f"{where[0]}): stubbed, reports at runtime")
     for tree, users in sorted(port.animtrees.items()):
-        if tree.lower() not in {a.lower() for a in animtrees}:
+        if tree.lower() not in {a.lower() for a in animtrees} | set(core_trees):
             report.warnings.append(f"UNSUPPORTED_XANIM animtree {tree} used by {', '.join(sorted(set(users)))}: "
                                    f"WaW animations are not converted yet")
     report.warnings.append(f"scripts: {len(port.ported)} WaW scripts ported, {len(port.extracted)} framework "
@@ -2317,13 +2329,17 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
         report.warnings.append(f"scripts: the map overrides WaW framework scripts BO2 replaces with its own "
                                f"(behaviour changes there are not ported): {', '.join(port.core_overrides)}")
     # models the scripts precache / set / attach
-    wanted = set()
+    # Extracted framework functions execute too (DLC3 traps, teleporters,
+    # and the original mystery box). Scan the emitted code, not the entire
+    # source framework, so unused source functions add no dependencies.
+    core_text = (project_root / 'maps/mp/waw/_waw2bo2_core.gsc').read_text(encoding='utf-8')
+    wanted = set(SCRIPT_MODEL_RE.findall(core_text))
     for path in port.ported:
         text = sources.text.get(path + '.gsc', sources.stock.get(path + '.gsc', ''))
         wanted |= set(SCRIPT_MODEL_RE.findall(text))
         if path.startswith('xmodelalias\\'):
             wanted |= {t.text[1:-1] for t in gscport.gsc.tokenize(text) if t.kind == gscport.gsc.STRING}
-    wrapped = wrapped_model_literals([sources.text.get(path + ".gsc", "") for path in port.ported])
+    wrapped = wrapped_model_literals([core_text, *[sources.text.get(path + ".gsc", "") for path in port.ported]])
     wrapped |= stock_wrapped_models(sources, port.ported, model_roots)
     wanted |= wrapped
     stock_models = api.stock_assets.get("xmodel", set())
@@ -2350,6 +2366,7 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
     # also precache late, which T6 rejects); only the ones the zones carry
     precached = {m for path in port.ported
                  for m in SCRIPT_PRECACHE_MODEL_RE.findall(sources.text.get(path + ".gsc", ""))}
+    precached |= set(SCRIPT_PRECACHE_MODEL_RE.findall(core_text))
     # T6 also requires models referenced only by setModel/attach to be cached
     # during startup; waiting until a power-on thread runs is too late.
     precached |= models | wrapped
@@ -2363,6 +2380,8 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
     # map script names them (for example the teammate revive waypoint).
     shaders = set(SCRIPT_SHADER_RE.findall(
         (gscport.COMPAT_DIR / "_waw2bo2_compat.gsc").read_text(encoding="utf-8")))
+    shaders |= set(SCRIPT_SHADER_RE.findall(core_text))
+    shaders |= {m for b, m in ENGINE_BUILTIN_MATERIALS.items() if re.search(rf"\b{b}\s*\(", core_text, re.I)}
     for path in port.ported:
         text = sources.text.get(path + ".gsc", "")
         shaders |= set(SCRIPT_SHADER_RE.findall(text))

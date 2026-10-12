@@ -41,9 +41,62 @@ class Dlc3PowerSwitchTest(unittest.TestCase):
             root = Path(temp)
             (root / "maps").mkdir()
             (root / "maps/test.gsc").write_text("main()\n{\n\tlevel thread maps\\dlc3_code::dlc3_threadcalls2();\n}\n")
+            (root / "maps/dlc3_code.gsc").write_text(
+                'dlc3_threadcalls2() { level thread power_electric_switch(); '
+                'thread init_elec_trap_trigs(); teleporter_init(); thread intro_screen(); }\n'
+                'power_electric_switch() { level notify("electricity_on"); }\n'
+                'init_elec_trap_trigs() {}\nintro_screen() {}\n'
+                'teleporter_init() { maps\\dlc3_teleporter::player_is_near_pad(self); }\n')
+            (root / "maps/dlc3_teleporter.gsc").write_text(
+                'player_is_near_pad(who) { return (who) IsTouching(self); }\n')
             translator = gscport.Translator(gscport.Sources([root], [], None), T6Api({}, {}), gscport.PortReport())
+            translator.api.methods['istouching'] = (1, 1)
             source = translator.translate(r"maps\test")
-        self.assertIn(r"maps\mp\waw\_waw2bo2_compat::waw_dlc3_threadcalls2()", source)
+            core = []
+            while translator.core_queue:
+                core.append(translator.translate_extracted(*translator.core_queue.pop(0)))
+        self.assertIn(gscport.CORE + '::dlc3_code__dlc3_threadcalls2()', source)
+        extracted = '\n'.join(core)
+        for name in ('power_electric_switch', 'init_elec_trap_trigs', 'teleporter_init', 'intro_screen'):
+            self.assertIn('dlc3_code__' + name + '()', extracted)
+        self.assertIn('who IsTouching(self)', extracted)
+        self.assertEqual(translator.report.unsupported, {})
+
+    def test_zone_manager_rename_takes_precedence_over_native_counterpart(self):
+        translator = gscport.Translator(gscport.Sources([], [], None),
+            T6Api({}, {r'maps\mp\zombies\_zm_zonemgr': {'manage_zones': 1}}), gscport.PortReport())
+        self.assertEqual(translator.resolve_core(r'maps\_zombiemode_zone_manager', 'manage_zones',
+                                                1, 'template', set()),
+                         gscport.COMPAT + '::waw_manage_zones')
+
+    def test_template_callback_setup_preserves_native_lifecycle(self):
+        translator = gscport.Translator(gscport.Sources([], [], None), T6Api({}, {}), gscport.PortReport())
+        self.assertEqual(translator.resolve_core(r'maps\_callbacksetup', 'setupcallbacks',
+                                                0, 'template', set()),
+                         gscport.COMPAT + '::waw_setupcallbacks')
+        self.assertEqual(translator.report.unsupported, {})
+
+    def test_lazy_stock_animation_helper_is_extracted_without_porting_whole_framework(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'maps').mkdir()
+            (root / 'animscripts').mkdir()
+            (root / 'maps/dlc3_code.gsc').write_text(
+                'dlc3_fx() { animscripts\\utility::setFootstepEffect("wood", 1); }')
+            (root / 'animscripts/utility.gsc').write_text(
+                '#include animscripts\\missing_campaign_dependency;\n'
+                'setFootstepEffect(name, fx) { level._effect[name] = fx; }\n'
+                'unrelated_ai() { missing_builtin(); }')
+            # A map's copy still counts as an override of a raw stock script.
+            sources = gscport.Sources([root], [], None, [root])
+            translator = gscport.Translator(sources, T6Api({}, {}), gscport.PortReport())
+            translator.extract(r'maps\dlc3_code', 'dlc3_fx')
+            while translator.core_queue:
+                translator.translate_extracted(*translator.core_queue.pop(0))
+        self.assertIn((r'animscripts\utility', 'setfootstepeffect'), translator.core_funcs)
+        self.assertEqual(translator.queue, [])
+        self.assertEqual(translator.report.errors, [])
+        self.assertEqual(translator.report.unsupported, {})
 
 
 if __name__ == "__main__":

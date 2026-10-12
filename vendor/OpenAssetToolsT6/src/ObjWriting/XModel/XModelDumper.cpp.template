@@ -5,6 +5,7 @@
 #set DUMPER_HEADER "\"XModelDumper" + GAME + ".h\""
 #set COMMON_HEADER "\"Game/" + GAME + "/Common" + GAME + ".h\""
 #set JSON_HEADER "\"Game/" + GAME + "/XModel/JsonXModel" + GAME + ".h\""
+#set CONSTANTS_HEADER "\"Game/" + GAME + "/XModel/XModelConstants" + GAME + ".h\""
 
 #if GAME == "IW3"
 #define FEATURE_IW3
@@ -31,6 +32,7 @@
 
 #include COMMON_HEADER
 #include JSON_HEADER
+#include CONSTANTS_HEADER
 
 #include "ObjWriting.h"
 #include "Utils/DistinctMapper.h"
@@ -678,7 +680,7 @@ namespace
     {
     public:
         JsonDumper(AssetDumpingContext& context, std::ostream& stream)
-            : m_stream(stream)
+            : m_stream(stream), m_context(context)
         {
         }
 
@@ -687,6 +689,27 @@ namespace
             JsonXModel jsonXModel;
             CreateJsonXModel(jsonXModel, *xmodel);
             nlohmann::json jRoot = jsonXModel;
+#if defined(FEATURE_T6)
+            if (xmodel->boneInfo && xmodel->boneNames)
+            {
+                jRoot["boneInfo"] = nlohmann::json::array();
+                for (auto bone = 0u; bone < xmodel->numBones; ++bone)
+                {
+                    if (xmodel->boneNames[bone] >= m_context.m_zone.m_script_strings.Count())
+                        continue;
+                    const auto& info = xmodel->boneInfo[bone];
+                    const auto hitloc = xmodel->partClassification ? xmodel->partClassification[bone] : HITLOC_NONE;
+                    jRoot["boneInfo"].push_back({
+                        {"bone", m_context.m_zone.m_script_strings[xmodel->boneNames[bone]]},
+                        {"mins", {info.bounds[0].x, info.bounds[0].y, info.bounds[0].z}},
+                        {"maxs", {info.bounds[1].x, info.bounds[1].y, info.bounds[1].z}},
+                        {"offset", {info.offset.x, info.offset.y, info.offset.z}},
+                        {"radiusSquared", info.radiusSquared},
+                        {"hitloc", HITLOC_NAMES[hitloc < HITLOC_COUNT ? hitloc : HITLOC_NONE]}
+                    });
+                }
+            }
+#endif
 
             jRoot["$schema"] = "http://openassettools.dev/schema/xmodel.v1.json";
             jRoot["_type"] = "xmodel";
@@ -839,6 +862,7 @@ namespace
         }
 
         std::ostream& m_stream;
+        AssetDumpingContext& m_context;
     };
 
 #if defined(FEATURE_T6)
@@ -877,6 +901,22 @@ namespace
         if (!assetFile)
             return;
         auto& out = *assetFile;
+        for (auto bone = 0u; bone < model->numBones; ++bone)
+        {
+            const std::string name = model->boneNames[bone] < context.m_zone.m_script_strings.Count()
+                                        ? context.m_zone.m_script_strings[model->boneNames[bone]] : "INVALID_BONE_NAME";
+            out << "bone " << bone << " " << name << " hitloc "
+                << (model->partClassification ? static_cast<unsigned>(model->partClassification[bone]) : 0u);
+            if (model->boneInfo)
+            {
+                const auto& info = model->boneInfo[bone];
+                out << " min " << info.bounds[0].x << " " << info.bounds[0].y << " " << info.bounds[0].z
+                    << " max " << info.bounds[1].x << " " << info.bounds[1].y << " " << info.bounds[1].z
+                    << " offset " << info.offset.x << " " << info.offset.y << " " << info.offset.z
+                    << " radiusSquared " << info.radiusSquared;
+            }
+            out << "\n";
+        }
         auto collTris = 0;
         for (auto s = 0; s < model->numCollSurfs && model->collSurfs; s++)
             collTris += model->collSurfs[s].numCollTris;

@@ -216,7 +216,7 @@ index 592e20e..1ba27c2 100644
          assert(material->info.gameFlags < 0x400);
          assert(material->maxStreamedMips == 0);
 diff --git a/src/ObjWriting/XModel/XModelDumper.cpp.template b/src/ObjWriting/XModel/XModelDumper.cpp.template
-index 9398f99..c336987 100644
+index 9398f998..c5c4e05a 100644
 --- a/src/ObjWriting/XModel/XModelDumper.cpp.template
 +++ b/src/ObjWriting/XModel/XModelDumper.cpp.template
 @@ -393,6 +393,39 @@ namespace
@@ -259,6 +259,44 @@ index 9398f99..c336987 100644
          if (model.physPreset && model.physPreset->name)
              jXModel.physPreset = AssetName(model.physPreset->name);
  
+@@ -427,7 +460,36 @@ namespace
+         JsonXModel jsonXModel;
+         CreateJsonXModel(context, jsonXModel, model);
+         nlohmann::json jRoot = jsonXModel;
+-
++#if defined(FEATURE_T4)
++        // Preserve authored hitboxes, including bones without visible geometry
++        // (headless bodies with collision-disabled head attachments).
++        static constexpr const char* hitlocNames[]{
++            "none", "helmet", "head", "neck", "torso_upper", "torso_lower",
++            "right_arm_upper", "left_arm_upper", "right_arm_lower", "left_arm_lower",
++            "right_hand", "left_hand", "right_leg_upper", "left_leg_upper",
++            "right_leg_lower", "left_leg_lower", "right_foot", "left_foot", "gun"
++        };
++        static_assert(std::size(hitlocNames) == HITLOC_COUNT);
++        if (model.boneInfo && model.boneNames)
++        {
++            jRoot["boneInfo"] = nlohmann::json::array();
++            for (auto bone = 0u; bone < model.numBones; ++bone)
++            {
++                if (model.boneNames[bone] >= context.m_zone.m_script_strings.Count())
++                    continue;
++                const auto& info = model.boneInfo[bone];
++                const auto hitloc = model.partClassification ? model.partClassification[bone] : HITLOC_NONE;
++                jRoot["boneInfo"].push_back({
++                    {"bone", context.m_zone.m_script_strings[model.boneNames[bone]]},
++                    {"mins", {info.bounds[0].x, info.bounds[0].y, info.bounds[0].z}},
++                    {"maxs", {info.bounds[1].x, info.bounds[1].y, info.bounds[1].z}},
++                    {"offset", {info.offset.x, info.offset.y, info.offset.z}},
++                    {"radiusSquared", info.radiusSquared},
++                    {"hitloc", hitlocNames[hitloc < HITLOC_COUNT ? hitloc : HITLOC_NONE]}
++                });
++            }
++        }
++#endif
+         jRoot["$schema"] = "http://openassettools.dev/schema/xmodel.v1.json";
+         jRoot["_type"] = "xmodel";
+         jRoot["_version"] = 2;
 diff --git a/src/ObjWriting/Game/T4/Fx/FxJsonDumperT4.cpp b/src/ObjWriting/Game/T4/Fx/FxJsonDumperT4.cpp
 new file mode 100644
 index 0000000..1d86b29
