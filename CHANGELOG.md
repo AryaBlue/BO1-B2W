@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix perk-machine and other effect lights glowing far too bright on every map. BO2 adds an effect omni light with linear colour sRGB->linear(rgb) x alpha x 32, a factor authored for stock exposure (HDR scale about 1/64). Converted maps run at HDR scale 1 so WaW lighting stays 1:1, which made every WaW effect light about 32 times too strong. The light's alpha (its intensity) now converts by 1/32.
 - Translate WaW `setSavedDvar` to BO2's `setdvar` (through `waw_setsaveddvar` in the compat script). It was stubbed, so a map's dvar settings (player speed, gravity, melee range, last-stand bleed-out time...) never applied. A community member fixed another map by making this change by hand.
 - Read the BO2 builtin tables stored name-first (`{name; id; min; max; fn; 0}`), such as the server mover methods (`moveto`, `rotateto`, `movez`...). Their argument counts were unknown, so the port could not see a wrong call and BO2 refused to load the map ("Unresolved external: moveto with 1 parameters").
 - Stop a thread where WaW's own runtime error stopped it. A WaW builtin called with fewer arguments than it needs (Cheese Cube Unlimited: `cheese_bottom MoveTo(cheese_bottom_start)`, an entity and no time) is a runtime error in WaW, which ends the calling thread outside developer mode. Its stub now reports and halts the thread instead of returning, so later code (Cheese Cube's rising cheese) does not run where WaW never ran it.

@@ -155,9 +155,19 @@ def _color(c: list[int]) -> list[int]:
     return [r, g, b, a]
 
 
-def _vis_state(s: dict) -> dict:
+# T6 adds an FX omni light (sub_80DA70 -> sub_725200) with linear colour
+# sRGB->linear(rgb/255) * (alpha/255) * 32: the 32 is authored for stock BO2
+# exposure (HDR scale ~1/64). Converted maps run at a net HDR scale of 1, where
+# a WaW gamma value g is T6 linear g*g (see GfxWorldLinker exposure), so the
+# WaW light colour must arrive with intensity alpha/255 instead.
+T6_FX_LIGHT_INTENSITY = 32
+
+
+def _vis_state(s: dict, light: bool = False) -> dict:
     out = dict(s)
     out["color"] = _color(s["color"])
+    if light and out["color"][3]:
+        out["color"][3] = max(1, round(out["color"][3] / T6_FX_LIGHT_INTENSITY))
     return out
 
 
@@ -187,7 +197,8 @@ def convert_elem(e: dict, material_names: dict[str, str], notes: list[str], wher
         "colIndexBits": a["colIndexBits"], "rowIndexBits": a["rowIndexBits"],
         "entryCountAndIndexRange": (count | (1 << 9)) if count else 0,
     }
-    out["visSamples"] = [{"base": _vis_state(s["base"]), "amplitude": _vis_state(s["amplitude"])}
+    light = t6_type == T6_OMNI
+    out["visSamples"] = [{"base": _vis_state(s["base"], light), "amplitude": _vis_state(s["amplitude"], light)}
                          for s in e["visSamples"]]
 
     visuals = []

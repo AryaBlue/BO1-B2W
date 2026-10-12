@@ -118,6 +118,15 @@ class ElementTranslation(unittest.TestCase):
         out, _ = fx.convert_effect(t4_effect([t4_elem()]))
         self.assertEqual(out["elemDefs"][0]["visSamples"][0]["base"]["color"], [30, 20, 10, 40])
 
+    def test_omni_light_intensity_in_converted_hdr_units(self):
+        # T6 lights rgb * alpha/255 * 32 (stock exposure); converted maps run at unit HDR scale
+        light = t4_elem(7, visuals=[{}])
+        for sample in light["visSamples"]:
+            sample["base"] = _state([64, 64, 128, 255])
+        out, _ = fx.convert_effect(t4_effect([light, t4_elem()]))
+        self.assertEqual(out["elemDefs"][0]["visSamples"][0]["base"]["color"], [128, 64, 64, 8])
+        self.assertEqual(out["elemDefs"][1]["visSamples"][0]["base"]["color"], [30, 20, 10, 40])
+
     def test_atlas_packing(self):
         out, _ = fx.convert_effect(t4_effect([t4_elem(entry_count=64)]))
         self.assertEqual(out["elemDefs"][0]["atlas"]["entryCountAndIndexRange"], 64 | 1 << 9)
