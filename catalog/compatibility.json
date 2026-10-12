@@ -1,5 +1,18 @@
 {
   "schema_version": 1,
   "description": "Maintainer-reviewed conversion and in-game compatibility evidence, keyed by CodRepo WordPress post ID.",
-  "maps": {}
+  "maps": {
+    "234": {
+      "compile": "passed",
+      "play": "unknown",
+      "evidence": [
+        {
+          "date": "2026-10-12",
+          "converter_version": "0.2.14",
+          "tester": "maintainer",
+          "notes": "Cheese Cube Unlimited v1.0 (nazi_zombie_ccube_u.ff) converts and links after the T6 linker accepted LODs over 65,535 vertices; installed for a first playtest."
+        }
+      ]
+    }
+  }
 }

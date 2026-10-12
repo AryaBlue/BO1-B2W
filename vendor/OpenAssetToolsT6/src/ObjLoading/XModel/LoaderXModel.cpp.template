@@ -937,14 +937,16 @@ namespace
             }
 
             constexpr auto maxVertices = std::numeric_limits<decltype(XSurface::vertCount)>::max();
-            if (vertexOffset + xmodelToCommonVertexIndexLookup.size() > maxVertices)
+            if (xmodelToCommonVertexIndexLookup.size() > maxVertices)
             {
-                con::error("Lod exceeds limit of {} vertices", maxVertices);
+                con::error("Surface cannot have more than {} vertices", maxVertices);
                 return false;
             }
 
             ReorderVerticesByWeightCount(xmodelToCommonVertexIndexLookup, surface, common);
 
+            // Only the surface's own vertCount is bounded: every surface owns its vertex buffer.
+            // WaW models may sum past 65535 per LOD (their baseVertIndex wraps the same way).
             surface.baseVertIndex = static_cast<uint16_t>(vertexOffset);
             surface.vertCount = static_cast<uint16_t>(xmodelToCommonVertexIndexLookup.size());
             surface.verts0 = m_memory.Alloc<GfxPackedVertex>(surface.vertCount);
