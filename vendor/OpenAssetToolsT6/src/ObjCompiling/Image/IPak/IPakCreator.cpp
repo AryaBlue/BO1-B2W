@@ -185,7 +185,13 @@ namespace
             }
 
             AlignToChunk();
-            m_chunk_buffer_window_start = m_current_offset;
+
+            // The game reads a file in fixed windows from the file's first chunk (it only
+            // looks for the next block header at a window start). Advance on that grid: a
+            // block ending exactly on a chunk boundary must not restart the window there.
+            constexpr auto windowSize = static_cast<int64_t>(ipak_consts::IPAK_CHUNK_COUNT_PER_READ * ipak_consts::IPAK_CHUNK_SIZE);
+            while (m_current_offset >= m_chunk_buffer_window_start + windowSize)
+                m_chunk_buffer_window_start += windowSize;
         }
 
         void StartNewBlock()
