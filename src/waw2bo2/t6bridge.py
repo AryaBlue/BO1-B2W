@@ -34,7 +34,7 @@ from .resources import resource_root
 from . import progress, zombiebehavior
 
 from . import assetresolve, audio, entities, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, oneway, paths, projectilecollision, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones
-from .fbx import collision_material_slots, write_collision_fbx, write_world_fbx
+from .fbx import collision_material_slots, collision_slot_models, write_collision_fbx, write_world_fbx
 from .world import layer_formats_from_strides, read_collision, read_gfx_world
 
 REQUIRED_WORLD_IMAGES = {
@@ -1271,9 +1271,11 @@ def stage_geometry(report: StageReport, world, clip, roots: list[Path], project_
     # bridge linker gives every terrain partition its own clip material.
     clip_materials = [{"fbx": "waw_collision", "name": "waw_collision", "contentFlags": 1, "surfaceFlags": 0}
                       if m < 0 else
-                      {"fbx": f"clip_{m}", "name": clip.materials[m].name,
+                      {"fbx": f"clip_{m}" + (f"_bm{model}" if model else ""), "name": clip.materials[m].name,
+                       "model": model,
                        "contentFlags": hulls._signed(clip.materials[m].content_flags),
-                       "surfaceFlags": hulls._signed(clip.materials[m].surface_flags)} for m in slot_materials]
+                       "surfaceFlags": hulls._signed(clip.materials[m].surface_flags)}
+                      for m, model in zip(slot_materials, collision_slot_models(clip))]
     (bsp / "clipmaterials.json").write_text(json.dumps({"materials": clip_materials}, indent=1) + "\n", encoding="utf-8")
     edge_summary = write_collision_edges(clip, bsp / "collisionedges.bin")
     brushes, summary = hulls.collision_brushes(clip)
@@ -1283,6 +1285,8 @@ def stage_geometry(report: StageReport, world, clip, roots: list[Path], project_
     (bsp / "submodels.json").write_text(json.dumps({"submodels": subs}, separators=(",", ":")) + "\n",
                                         encoding="utf-8")
     summary["collision_triangle_materials"] = len(clip_materials)
+    summary["moving_terrain_models"] = sorted({entry.get("model", 0) for entry in clip_materials
+                                                if entry.get("model", 0)})
     summary["collision_triangles_noncolliding_dropped"] = sum(
         1 for m in clip.triangle_materials if m == 0xFFFF or not clip.materials[m].content_flags)
     sheets = oneway.one_way_sheets(clip)

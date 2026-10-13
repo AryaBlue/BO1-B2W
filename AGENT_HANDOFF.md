@@ -2188,3 +2188,34 @@ Open:
   limit cases warn with the model name. Linker rebuilt (MSBuild Tools\Linker Release Win32, LAA kept).
   Nuketown remaster relinked + INSTALLED 23:09-23:10. Pre-existing for all converted maps; coop likely exposes
   it by tracing the other player's held weapon world model. Not yet re-tested in coop.
+
+## 2026-10-13: Cheese Cube lethal water / moving terrain ownership
+
+- Branch: `codex/cheese-cube-lethal-water`. The source water hazard is
+  `damage_test`: a 0.05-second `IsTouching(cheese_bottom)` loop followed by
+  `DoDamage(self.health + 666, self.origin)`. Its calls were preserved.
+- Root cause: cmodel `*242` has no brushes, but its terrain AABB root
+  `(30443, 1, 32)` owns 32 local-space water triangles. Collision export
+  treated all terrain as static world geometry; the native linker cleared
+  every moving cmodel's terrain leaf. Consequently the moving water could
+  not satisfy the source contact check.
+- Clip interchange v9 exports cmodel terrain roots. Python resolves ownership
+  through source trees/partitions; FBX material slots and clipmaterials carry
+  model indices. T6 excludes owned partitions from the world tree and fills
+  each cmodel's local-space terrain roots/contents. No map-specific damage
+  rewrite or replacement collision box. Legacy moving-terrain dumps fail
+  with a re-extraction instruction. T6 collision dumps now expose model and
+  world leaf roots for round-trip audits.
+- Validation: 504 unit tests pass; both native tools build; the upstream T4
+  patch reverse-checks against its patched source. A fresh Cheese Cube dump
+  confirms the root. Native link/unlink verifies exact geometry for all 2,125
+  exported terrain triangles: world 1,935; models 121/123/129/146/164/225/226/
+  227/242 own 128/4/4/6/4/4/4/4/32. Model 242 has 16 partition AABBs and
+  water contents 0x20, with no world-tree overlap. All 99 rebuilt scripts
+  equal the previously installed scripts byte-for-byte.
+- Installed verified FF/IPAK to the existing `zm_ccube_u_waw` mod; saved
+  previous map files and T4 Unlinker in `work/lethal_water/backup`. Updated
+  the local T4 extractor for future conversions. Evidence and hashes:
+  `work/lethal_water/verification.json`; native logs and source/roundtrip
+  dumps are alongside it. Live gameplay, including solo/co-op outcomes,
+  still needs testing after restarting the map.
