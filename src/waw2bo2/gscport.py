@@ -1742,6 +1742,21 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
             speed_function = tr.extract_entry(speed_definition['script'], speed_definition['function'])
             report.rewrites['source WaW zombie speed selector -> native spawn callback'] += 1
     tr.post_calls.insert(0, zombiebehavior.RUNTIME + '::init();')
+    selection_source = zombiebehavior.source_selection(sources, API['zombie_runtime'])
+    selection_function = None
+    if selection_source:
+        sources.text = dict(sources.text)
+        sources._parsed = dict(sources._parsed)
+        sources.origin = dict(sources.origin)
+        sources.text[zombiebehavior.SELECTION + '.gsc'] = selection_source
+        selection_contract = API['zombie_runtime']['source_selection']
+        sources.origin[zombiebehavior.SELECTION + '.gsc'] = (
+            sources.origin.get(selection_contract['script'] + '.gsc', selection_contract['script']) +
+            '::' + selection_contract['function'] + ' (selection statements)')
+        sources._parsed.pop(zombiebehavior.SELECTION + '.gsc', None)
+        tr.want(zombiebehavior.SELECTION)
+        selection_function = ported_path(zombiebehavior.SELECTION) + '::choose'
+        report.rewrites['source WaW spawner selection -> native round spawning'] += 1
     registration = {role: [tr.extract_entry(core, fn) for core, fn in entries if sources.get(core) is not None
                            and fn in sources.get(core).functions]
                     for role, entries in WEAPON_REGISTRATION.items()}
@@ -1812,7 +1827,8 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
         (out_dir / "_waw2bo2_characters.gsc").write_text(characters_source(), encoding="utf-8")
     (out_dir / "_waw2bo2_weapons.gsc").write_text(weapons_source(registration), encoding="utf-8")
     (out_dir / '_waw2bo2_zombie_behavior.gsc').write_text(
-        zombiebehavior.runtime_source(API['zombie_runtime'], f'{CORE}::{speed_function}' if speed_function else None),
+        zombiebehavior.runtime_source(API['zombie_runtime'], f'{CORE}::{speed_function}' if speed_function else None,
+                                      selection_function),
         encoding='utf-8')
     report.weapon_registration = {role: [f for f in fns if f] for role, fns in registration.items()}
     report.characters = appearance
