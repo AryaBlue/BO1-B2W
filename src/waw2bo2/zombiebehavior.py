@@ -82,9 +82,23 @@ def source_speed_state(sources, definition: dict) -> str | None:
         # End-of-round scalar updates belong to the previous source round.
         # A conditional update requires a control-flow slice, not a guessed rate.
         depth = 0
+        guards = []
         for i in range(finish.body_open + 1, finish.body_close - 3):
             depth += tokens[i].text == '{'
             depth -= tokens[i].text == '}'
+            if tokens[i].text == '{':
+                header = None
+                if tokens[i - 1].text == ')':
+                    nesting, opening = 1, i - 2
+                    while opening > finish.body_open and nesting:
+                        nesting += tokens[opening].text == ')'
+                        nesting -= tokens[opening].text == '('
+                        opening -= 1
+                    if tokens[opening].low == 'if':
+                        header = copy.deepcopy(tokens[opening:i])
+                guards.append(header)
+            elif tokens[i].text == '}' and guards:
+                guards.pop()
             if [t.low for t in tokens[i:i + 2]] != ['level', '.'] or tokens[i + 2].low not in reads:
                 continue
             if tokens[i + 3].text not in ('=', '+=', '-=', '++', '--'):
@@ -92,13 +106,20 @@ def source_speed_state(sources, definition: dict) -> str | None:
             boundary = max((j for j in range(finish.body_open, i) if tokens[j].text in (';', '{', '}')),
                            default=finish.body_open)
             prefix = [t.low for t in tokens[boundary + 1:i]]
-            if depth > 1 or any(word in ('if', 'else', 'for', 'switch', 'case') for word in prefix):
+            if (any(word in ('if', 'else', 'for', 'switch', 'case') for word in prefix)
+                    or (depth > 1 and any(header is None for header in guards[1:]))):
                 raise ValueError(f'{framework.path}::{finish.name}: conditional source speed state needs a control-flow slice')
             j = next(j for j in range(i, finish.body_close) if tokens[j].text == ';')
             stmt = copy.deepcopy(tokens[i:j + 1])
             if depth == 0:
                 initial.append(gsc.emit(stmt))
                 continue
+            headers = [header for header in guards if header is not None]
+            if headers:
+                guarded = []
+                for header in headers:
+                    guarded += header + [gsc.Token(gsc.PUNCT, '{')]
+                stmt = guarded + stmt + [gsc.Token(gsc.PUNCT, '}') for _ in headers]
             for k in range(len(stmt) - 2):
                 if [t.low for t in stmt[k:k + 3]] == ['level', '.', 'round_number']:
                     stmt[k].text, stmt[k + 1].text, stmt[k + 2].text = 'source_round', '', ''

@@ -37,6 +37,7 @@ init()
     if ( !isdefined( level.waw2bo2_runtime_weapons ) )
         level.waw2bo2_runtime_weapons = [];
     maps\mp\waw\_waw2bo2_assets::init();
+    maps\mp\waw\_waw2bo2_hint_defaults::init();
     maps\mp\waw\_waw2bo2_visions::init();
     maps\mp\_utility::registerclientsys( "waw_sun" );
     maps\mp\_utility::registerclientsys( "waw_vision_global" );

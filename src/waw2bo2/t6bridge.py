@@ -33,7 +33,7 @@ from pathlib import Path
 from .resources import resource_root
 from . import progress, zombiebehavior
 
-from . import assetresolve, audio, entities, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, oneway, paths, projectilecollision, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones
+from . import assetresolve, audio, entities, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, materialisolation, oneway, paths, projectilecollision, scorebehavior, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones
 from .fbx import collision_material_slots, collision_slot_models, write_collision_fbx, write_world_fbx
 from .world import layer_formats_from_strides, read_collision, read_gfx_world
 
@@ -1573,6 +1573,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
                 raise ValueError("BO2 runtime sources required to stage WaW perk ownership")
             gscport.stage_bo2_perk_support(project_root, bo2_root, bo2_stock_perks=bo2_stock_perks)
             zombiebehavior.stage_native_support(project_root, bo2_root, gscport.API['zombie_runtime'])
+            scorebehavior.stage_native(project_root, bo2_root)
             if bo2_stock_perks:
                 report.warnings.append('BO2_STOCK_PERKS: native BO2 perk machines, purchases, HUD and last stand; '
                                        'the WaW Pack-a-Punch stays')
@@ -1806,6 +1807,9 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
         if bo2_stock_perks:
             zone.write('// Opt-in stock BO2 perk dependencies\n')
             zone.write(''.join(line + '\n' for line in stockperks.asset_lines(project_root)))
+    material_names = materialisolation.stage(report, project_root, techset_dump) if techset_dump else {}
+    report.content['material_identities'] = material_names
+    hud_materials = {material_names.get(name, name) for name in hud_materials}
     staged = {m["name"] for m in report.materials}
     from . import rumbles
     rumble_report = rumbles.stage(project_root,
@@ -2325,6 +2329,18 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
     if actor_types:
         gscport.zombieappearance.bind_actor_types(project_root, actor_types)
     report.scripts = port.to_json()
+    rule_path = project_root / (scorebehavior.RULES.replace('\\', '/') + '.gsc')
+    rules = None if bo2_stock_perks else scorebehavior.source_rules(sources.get(r'maps\_zombiemode_score'))
+    if rules:
+        rule_sources = copy.copy(sources)
+        rule_sources.text = dict(sources.text)
+        rule_sources._parsed = {}
+        rule_sources.text[r'maps\_waw2bo2_score_rules.gsc'] = rules
+        translator = gscport.Translator(rule_sources, api, gscport.PortReport())
+        rule_path.write_text(translator.translate(r'maps\_waw2bo2_score_rules'), encoding='utf-8')
+        report.scripts['source_score_rules'] = rule_path.relative_to(project_root).as_posix()
+    else:
+        rule_path.unlink(missing_ok=True)
     if actor_types and bo2_root is not None:
         movement = zombiebehavior.stage_actor_movement(sources, project_root, bo2_root, gscport.API['zombie_runtime'])
         if movement:

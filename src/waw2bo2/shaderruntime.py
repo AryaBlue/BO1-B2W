@@ -403,14 +403,16 @@ def add_material_texture(native_pass, output_material, source_material, hash_val
     previous match, so both stay ordered by name hash (as in stock data).
     Returns the new argument, or None when the source has no such texture."""
     texture = next((t for t in (source_material or {}).get('textures', [])
-                    if t.get('name') and waw_hash(t['name']) == hash_value and t.get('image')), None)
-    if texture is None or t6_hash(texture['name']) != hash_value:
+                    if t.get('image') and (waw_hash(t['name']) if t.get('name') else t.get('nameHash')) == hash_value), None)
+    if texture is None or (texture.get('name') and t6_hash(texture['name']) != hash_value):
         return None
     textures = output_material.setdefault('textures', [])
-    if not any(t.get('name') == texture['name'] for t in textures):
-        entry = {k: copy.deepcopy(v) for k, v in texture.items() if k in ('image', 'isMatureContent', 'name', 'samplerState', 'semantic')}
+    texture_hash = lambda t: t6_hash(t['name']) if t.get('name') else t.get('nameHash')
+    if not any(texture_hash(t) == hash_value for t in textures):
+        entry = {k: copy.deepcopy(v) for k, v in texture.items() if k in
+                 ('image', 'isMatureContent', 'name', 'nameHash', 'nameStart', 'nameEnd', 'samplerState', 'semantic')}
         textures.append(entry)
-        textures.sort(key=lambda t: t6_hash(t.get('name', '')))
+        textures.sort(key=texture_hash)
     slot = _free_texture_slot(native_pass, native_ps)
     arg = {'buffer': 0, 'location': slot | (slot << 8), 'size': 1, 'type': 2, 'u': {'value': hash_value}}
     start = native_pass['perPrimArgCount'] + native_pass['perObjArgCount']

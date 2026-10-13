@@ -2242,3 +2242,36 @@ Open:
   32 triangles / 16 roots. Candidate and evidence: work/suit_hud_check/.
   Candidate is NOT installed: user is testing the previously installed water
   fix. Live suit behavior remains unverified.
+
+## 2026-10-13: Cheese Cube perks, default prompts and cheese materials
+
+- Investigation: `docs/CHEESE_CUBE_TEXTURES_AND_PERKS.md`. User confirmed the
+  Cheese-o-matic source texture and wants cheese on both the machine and
+  upgraded weapons. The reported Cheese Gun's upgrade state is unknown.
+- Double Dew's source `specialty_shades` doubles kill points. Native scoring
+  replaced its framework and dropped that arithmetic. `scorebehavior.py`
+  extracts pure direct-event perk rules and applies them before native scoring's
+  final multiplier, routing owned spawn/death callbacks to owned native scoring.
+  Nested source conditions, side effects and unknown locals are not guessed.
+- Empty source trigger_use hints now receive WaW's original localized default
+  before source initialization. Authored hints remain authoritative. The arm
+  pickup shown in the report had no explicit hint, exposing T6's missing-text
+  sentinel rather than WaW's default.
+- Converted materials colliding with stock names receive isolated identities;
+  25 in this map, including Pack-a-Punch and four perk HUD materials. GLTF,
+  world FBX, FX, zone dependencies and HUD script references are updated.
+- Source cheese camo's reveal/scroll texture entries have opaque hashes, without
+  readable parameter names. Shader adaptation now resolves and preserves those
+  entries. The material has 16 active shader slots instead of only 0 and 2.
+- A full rebuild also required preserving a braced source ending guard in the
+  zombie speed-state slice; unsupported control flow still fails explicitly.
+- 512 tests pass. Full native build: no missing assets; material audits check
+  31,150 map / 45,822 mod arguments, zero violations; 5,210 authored bone hitboxes
+  preserved. Recompiled after the HUD rename update. 107 compiled scripts
+  round-trip byte-exact. Source MP40, camo and machine image pixels match;
+  terrain geometry and model 242 water roots/contents match the installed fix.
+- Candidate/evidence: `work/cheese_visuals_perks/build`, `verification.json`,
+  `build.log`, `relink.log`, and `roundtrip/`. NOT installed while the user tests
+  the water fix. Source unupgraded Cheese Gun image/model/material chain was
+  already correct in the installed mod; further runtime trouble there remains
+  unconfirmed. Live gameplay and visual results still require testing.

@@ -1830,6 +1830,8 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
                       "framework_level_state()\n{\n" + "".join(f"\t{fn}();\n" for fn in framework_state) + "}\n")
     (out_dir / "_waw2bo2_compat.gsc").write_text((COMPAT_DIR / "_waw2bo2_compat.gsc").read_text(encoding="utf-8"),
                                                  encoding="utf-8")
+    from . import hintdefaults
+    (out_dir / '_waw2bo2_hint_defaults.gsc').write_text(hintdefaults.source(out_root), encoding='utf-8')
     core_head = ["// waw2bo2: WaW framework functions BO2 has no counterpart for, extracted from the map's",
                  "// framework scripts (its overrides, else stock WaW) and translated.",
                  *[f"#include {inc};" for inc in CORE_INCLUDES], ""]
