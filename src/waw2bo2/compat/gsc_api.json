@@ -20,9 +20,23 @@
     "extract_exceptions: function-name suffixes still extracted from no_extract scripts: gameplay callbacks such as",
     "  DLC3 extraction is unrestricted except for unsupported animation functions; its legacy suffix entries",
     "  below remain valid if a caller deliberately disables full template extraction.",
+    "zombie_runtime: source speed selector contract and native spawn callback/location adaptation; preserve source bodies, not map-name speed presets.",
     "library_functions: functions of third-party WaW map libraries -> compat waw_<value>, where BO2 has the native",
     "  feature the library worked around (e.g. treminaor's trem_hintstrings drew hints through a WaW menu)."
   ],
+  "zombie_runtime": {
+    "source_selection": {"script": "maps\\_zombiemode", "function": "round_spawning", "array_field": "enemy_spawns", "candidate": "spawn_point", "previous": "old_spawn"},
+    "source_movement": {"script": "maps\\_zombiemode", "function": "init_standard_zombie_anims", "field": "scr_anim", "row": "zombie", "states": {"walk": "zm_move_walk", "run": "zm_move_run", "sprint": "zm_move_sprint"}},
+    "source_speed": {"script": "maps\\_zombiemode_spawner", "function": "set_run_speed", "arguments": 0, "receiver": "zombie", "result_field": "zombie_move_speed", "owned_result_field": "waw_zombie_move_speed"},
+    "source_round_state": {"script": "maps\\_zombiemode", "start_function": "round_spawning", "end_function": "round_think"},
+    "native_spawner": "maps\\mp\\zombies\\_zm_spawner",
+    "owned_spawner": "maps\\mp\\waw\\_waw2bo2_spawner",
+    "native_spawn_init": "zombie_spawn_init",
+    "native_speed_init": "init_zombie_run_cycle",
+    "native_movement": {"script": "maps\\mp\\animscripts\\zm_run", "function": "setanimstatefromspeed", "callback": "setanimstatefromspeed"},
+    "native_location_function": "do_zombie_spawn",
+    "plain_spawn_location": "spawn_location"
+  },
   "core_scripts": {
     "common_scripts\\utility": "common_scripts\\utility",
     "maps\\_utility": "maps\\mp\\_utility",

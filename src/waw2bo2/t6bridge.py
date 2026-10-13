@@ -31,7 +31,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from .resources import resource_root
-from . import progress
+from . import progress, zombiebehavior
 
 from . import assetresolve, audio, entities, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, oneway, paths, projectilecollision, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones
 from .fbx import collision_material_slots, write_collision_fbx, write_world_fbx
@@ -1455,6 +1455,11 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
             with (project_root / MOD_EXTRA_ZONE).open("a", encoding="utf-8") as zone:
                 zone.write("".join(f"rawfile,animtrees/{t}.atr\n" for t in trees))
                 zone.write("".join(f"xanim,{n}\n" for n in xanims))
+        movement = report.scripts.get('actor_movement', {}) if report.scripts else {}
+        if movement:
+            with (project_root / MOD_EXTRA_ZONE).open('a', encoding='utf-8') as zone:
+                zone.write(f"rawfile,animtrees/{movement['tree']}.atr\n")
+                zone.write(f"rawfile,animstatedefs/{movement['tree']}.asd\n")
     # clipmap static models reference their xmodel (collSurfs) in the map zone
     clip_models = {m.name for m in clip.static_models if m.contents and m.surfaces}
     # Entity placements need the same complete lookup as script-only models.
@@ -1563,6 +1568,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
             if bo2_root is None:
                 raise ValueError("BO2 runtime sources required to stage WaW perk ownership")
             gscport.stage_bo2_perk_support(project_root, bo2_root, bo2_stock_perks=bo2_stock_perks)
+            zombiebehavior.stage_native_support(project_root, bo2_root, gscport.API['zombie_runtime'])
             if bo2_stock_perks:
                 report.warnings.append('BO2_STOCK_PERKS: native BO2 perk machines, purchases, HUD and last stand; '
                                        'the WaW Pack-a-Punch stays')
@@ -2161,6 +2167,9 @@ def stage_core_animtrees(report: StageReport, sources, roots: list[Path], projec
     staged: list[str] = []
     if api is not None and map_name is not None:
         requirements = gscport.discover_animation_dependencies(sources, api, map_name, actor_types)
+        movement_tree, movement = zombiebehavior.movement_sets(sources, gscport.API['zombie_runtime'])
+        if movement_tree and movement:
+            requirements.setdefault(movement_tree, set()).update(n for names in movement.values() for n in names)
     else:
         # Backwards-compatible callers without a map entry point still stage
         # the original box's animation declarations.
@@ -2292,6 +2301,9 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
         return set()
     api = t6api.build(bo2_root, stage / "t6api_cache.json", t6_unlinker)
     sources = gscport.Sources(script_roots, iwds, stock, stock_variant_roots)
+    # Movement declarations must come from the same recognized startup
+    # framework as the selector and its round state, including renamed copies.
+    sources.bind_zombie_framework(f'maps/{map_name}')
     actor_types = gscport.zombieappearance.source_actor_types(project_root)
     actor_template = None
     if actor_types:
@@ -2309,6 +2321,10 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
     if actor_types:
         gscport.zombieappearance.bind_actor_types(project_root, actor_types)
     report.scripts = port.to_json()
+    if actor_types and bo2_root is not None:
+        movement = zombiebehavior.stage_actor_movement(sources, project_root, bo2_root, gscport.API['zombie_runtime'])
+        if movement:
+            report.scripts['actor_movement'] = movement
     report.scripts["staged_xanims"] = xanims
     report.scripts["staged_animtrees"] = sorted(gscport.animation_tree_name(t) for t in core_trees)
     report.errors += [f"scripts: {e}" for e in port.errors]

@@ -225,6 +225,8 @@ def spawn_struct(spawner: dict, targetname: str, renamed: Counter) -> dict:
     if spawner.get("script_string") == "zombie_chaser":
         struct["script_string"] = "find_flesh"
         renamed["WaW zombie_chaser spawner -> find_flesh spawn_location"] += 1
+    if spawner.get('target'):
+        struct['target'] = spawner['target']
     return struct
 
 
