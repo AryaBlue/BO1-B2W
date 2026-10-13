@@ -10,7 +10,109 @@
           "date": "2026-10-12",
           "converter_version": "0.2.14",
           "tester": "maintainer",
+          "notes": "Cheese Cube Unlimited v1.0: complete native build and installation passed after source texture-priority and buildable/runtime fixes (main fb45af2). 99 scripts round-trip exactly; linked cheese skins retain the source pixels; material audits and 5,210 authored hitbox checks across 115 models pass. Evidence: work/cheese_quirks_20261012/skins_build.log and verification.json. Gameplay still requires validation."
+        },
+        {
+          "date": "2026-10-12",
+          "converter_version": "0.2.14",
+          "tester": "maintainer",
           "notes": "Cheese Cube Unlimited v1.0 (nazi_zombie_ccube_u.ff) converts and links after the T6 linker accepted LODs over 65,535 vertices; installed for a first playtest."
+        }
+      ]
+    },
+    "728": {
+      "compile": "passed",
+      "play": "unknown",
+      "evidence": [
+        {
+          "date": "2026-10-08",
+          "converter_version": "0.2.14",
+          "tester": "maintainer",
+          "notes": "Nuketown Remastered 1.2 (nuketown.ff): complete native map/mod/lobby build and installation. The remaster relink also reported zero missing assets. Evidence: saved zm_nuketown_waw build/package records and relink_bridge.log; 82 native scripts passed the October 12 regression check. Full gameplay fidelity is unverified."
+        }
+      ]
+    },
+    "1771": {
+      "compile": "passed",
+      "play": "unknown",
+      "evidence": [
+        {
+          "date": "2026-10-09",
+          "converter_version": "0.2.14",
+          "tester": "maintainer",
+          "notes": "Bank Job (zm_bankjob_waw): full conversion, native map/mod linking and both material audits passed. Evidence: work/soundprune_20261009/build_final.log and work/bankjob_20261008 build/install records. Startup, weapons, HUD and solo revive received limited runtime checks; full gameplay remains unverified."
+        }
+      ]
+    },
+    "59479": {
+      "compile": "passed",
+      "play": "unknown",
+      "evidence": [
+        {
+          "date": "2026-10-08",
+          "converter_version": "0.2.13",
+          "tester": "maintainer",
+          "notes": "Empty Walls (zm_wall_waw): complete map/mod build, installation and native material audits passed. Evidence: work/bankjob_20261008/empty_walls_trace.log and empty_install_receipt.json. Startup, zombie spawning, solo revive and game-over received limited runtime checks; full gameplay remains unverified. 94 scripts also passed the October 12 regression check."
+        }
+      ]
+    },
+    "1083": {
+      "compile": "passed",
+      "play": "unknown",
+      "evidence": [
+        {
+          "date": "2026-10-12",
+          "converter_version": "0.2.14",
+          "tester": "maintainer",
+          "notes": "McDonalds (nazi_zombie_mcdonalds.ff): complete native build, both material audits and 5,598 authored hitbox checks passed. Latest tested converter branch: codex/mcdonalds-spawns-speed, e5df233; 91 compiled scripts matched after extraction, and owned actor movement rawfiles matched after extraction from mod.ff. Evidence: work/mcdonalds_spawns_speed/movement_build.log and verification.json. Player testing still reports gameplay issues; this is a compile success, not a playable certification."
+        }
+      ]
+    },
+    "6588": {
+      "compile": "passed",
+      "play": "unknown",
+      "evidence": [
+        {
+          "date": "2026-10-12",
+          "converter_version": "0.2.14",
+          "tester": "maintainer",
+          "notes": "Dead Sand Elite (dead_sand_elite.ff): complete native map/mod/lobby build and installation passed on codex/dead-sand-elite, a74c56b, after general renamed-framework startup detection. 87 compiled scripts round-trip exactly; material and 3,509 authored hitbox checks pass. Evidence: work/dead_sand_elite/fixed_build.log and verification.json. Gameplay is unverified."
+        }
+      ]
+    },
+    "221": {
+      "compile": "unknown",
+      "play": "unknown",
+      "evidence": [
+        {
+          "date": "2026-10-12",
+          "converter_version": "0.2.14",
+          "tester": "maintainer",
+          "notes": "Abandoned School: native GSC/CSC regression compilation passed for 73 scripts with zero script errors. Evidence: work/dlc3_20261012/complete_regressions.json and native_compile.log. This was a script-only check; a complete asset/map build and gameplay have not been verified."
+        }
+      ]
+    },
+    "232": {
+      "compile": "unknown",
+      "play": "unknown",
+      "evidence": [
+        {
+          "date": "2026-10-12",
+          "converter_version": "0.2.14",
+          "tester": "maintainer",
+          "notes": "Asylum V2: native GSC/CSC regression compilation passed for 97 scripts with zero script errors. Evidence: work/dlc3_20261012/complete_regressions.json and native_compile.log. This was a script-only check; a complete asset/map build and gameplay have not been verified."
+        }
+      ]
+    },
+    "223": {
+      "compile": "unknown",
+      "play": "unknown",
+      "evidence": [
+        {
+          "date": "2026-10-12",
+          "converter_version": "0.2.14",
+          "tester": "maintainer",
+          "notes": "Alcatraz by WhippyTrout: native GSC/CSC regression compilation passed for 110 scripts with zero script errors. Evidence: work/dlc3_20261012/complete_regressions.json and native_compile.log. This was a script-only check; a complete asset/map build and gameplay have not been verified."
         }
       ]
     }
