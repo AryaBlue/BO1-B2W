@@ -614,9 +614,14 @@ def _stage_image(roots: list[Path], project: Path, name: str, output: str, wavel
     from . import iwi, techsets
 
     relative = techsets.oat_image_path(name, ".dds")
+    stem = relative.relative_to('images').with_suffix('').as_posix()
     source = next((r / relative for r in roots if (r / relative).is_file()), None)
-    if source is None and wavelets is not None:
-        source = wavelets.recover(relative.stem)
+    if wavelets is not None:
+        try:
+            source = wavelets.resolve(stem, source)
+        except (iwi.IwiError, OSError) as exc:
+            report.errors.append(f"weapon image {name}: {exc}")
+            return f"weapon image {name}: {exc}"
     if source is None:
         error = f"weapon image {name}: original pixels absent from supplied zone dumps and IWDs"
         report.errors.append(error)
@@ -626,7 +631,9 @@ def _stage_image(roots: list[Path], project: Path, name: str, output: str, wavel
     except (iwi.IwiError, OSError) as exc:
         report.errors.append(f"weapon image {name}: {exc}")
         return f"weapon image {name}: {exc}"
-    report.images.append({"name": output, "source": str(source), **header})
+    report.images.append({"name": output, "source": str(source), **header,
+        **({'iwd_recovery': wavelets.recovered[stem]}
+           if wavelets is not None and stem in wavelets.recovered else {})})
     return None
 
 

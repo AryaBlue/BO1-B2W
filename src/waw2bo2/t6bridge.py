@@ -477,9 +477,9 @@ def stage_images(report: StageReport, image_roots: list[Path], project_root: Pat
             written.append(asset)
             continue
         src = next((r / f"{stem}.dds" for r in image_roots if (r / f"{stem}.dds").exists()), None)
-        if src is None and wavelets is not None:
+        if wavelets is not None:
             try:
-                src = wavelets.recover(stem)
+                src = wavelets.resolve(stem, src)
             except (iwi.IwiError, OSError) as exc:
                 report.errors.append(f"image {asset}: {exc}")
                 continue
@@ -1345,7 +1345,11 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
         stock_waw = wawassets.StockWawAssets(waw_root, t4_unlinker, waw_stock_dumps or stage / "waw_stock_dumps")
         stock_waw.load()
     image_iwds = [*(iwd_dirs or []), *([waw_root / "main"] if waw_root else [])]
-    wavelets = wavelet.IwdRecovery(image_iwds, wavelet_binary, project_root / "wavelet_src")
+    stock_iwd_directory = (waw_root / "main").resolve() if waw_root else None
+    wavelets = wavelet.IwdRecovery(image_iwds, wavelet_binary, project_root / "wavelet_src",
+        source_image_roots=[project_root / SKY_SRC_DIR, *[r / "images" for r in roots
+            if waw_stock_scripts is None or r.resolve() != waw_stock_scripts.resolve()]],
+        override_directories=[d for d in image_iwds if d.resolve() != stock_iwd_directory])
     # Only files recovered this run are visible; old DDS files are not a cache.
     # Do not add the recovery root to general lookup paths until dependencies
     # have been decoded; stage_images calls recover independently below.

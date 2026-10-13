@@ -190,17 +190,36 @@ class IwdRecovery:
     No disk cache is trusted: each run decodes from the current source IWD.
     The small in-memory index avoids repeatedly walking every archive.
     """
-    def __init__(self, directories: list[Path], binary: Path | None, root: Path):
+    def __init__(self, directories: list[Path], binary: Path | None, root: Path, *,
+                 source_image_roots: list[Path] = (), override_directories: list[Path] = ()):
         import zipfile
         self.binary, self.root = binary, root
         self.entries: dict[str, tuple[Path, str]] = {}
         self.recovered: dict[str, dict] = {}
+        self.source_image_roots = [p.resolve() for p in source_image_roots]
+        self.override_directories = {p.resolve() for p in override_directories}
         for directory in directories:
             for archive in sorted(directory.glob("*.iwd")):
                 with zipfile.ZipFile(archive) as z:
                     for name in z.namelist():
                         if name.lower().startswith("images/") and name.lower().endswith(".iwi"):
                             self.entries.setdefault(name.lower(), (archive, name))
+
+    def resolve(self, stem: str, source: Path | None) -> Path | None:
+        """Map-zone pixels, map IWD pixels, stock-zone pixels, stock IWD pixels.
+
+        A stock recovery dump must not hide a skin packaged with the map.
+        Keep supplied map-zone pixels authoritative when both are present.
+        """
+        if source is not None and any(source.resolve().is_relative_to(p) for p in self.source_image_roots):
+            return source
+        hit = self.entries.get(f"images/{stem.lower()}.iwi")
+        if hit is not None and hit[0].parent.resolve() in self.override_directories:
+            recovered = self.recover(stem)
+            if recovered is None:
+                raise IwiError(f"map IWD image {stem}: unsupported IWI format in {hit[0]}:{hit[1]}")
+            return recovered
+        return source if source is not None else self.recover(stem)
 
     def recover(self, stem: str) -> Path | None:
         import zipfile
