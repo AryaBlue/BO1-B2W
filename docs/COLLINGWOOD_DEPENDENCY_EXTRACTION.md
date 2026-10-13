@@ -44,3 +44,21 @@ unsupported IWI format 9; this is not established as the cause of that crash.
 A full Collingwood build remains unverified because its source is unavailable.
 The next check is a rebuild on the source machine with this converter change;
 if it still fails, retain the new log's requested asset-type list and native log.
+
+## Project X corroborating report
+
+The later `zm_projectx_waw-failure-1791927340921385100.zip` also reports v0.2.14
+stopping during script/animation staging at the same `pby_fly.ff` dependency,
+with the same `0xC0000409` exit after two retries. This is separate from the
+earlier Project X localization conflict: this build never reaches that stage.
+
+Its native log contains failed opens for numerous unrelated merchant-ship and
+character model exports, then `images/glass_c.dds`, before the abort. The output
+folder is already the shallow cache staging folder, so the evidence does not
+justify asserting that deep cache paths caused these particular failures. The
+OS reason for the failed opens is not included in the native log.
+
+Both reports exercise the old bulk dependency export, not the new typed
+resolver in commit `0ee164c`. They should be retested with a build containing
+that change. The additional report supports sharing the mitigation across maps;
+it does not establish successful full builds or the native abort's internal cause.

@@ -12,6 +12,11 @@
   All 520 tests pass. Details: `docs/COLLINGWOOD_DEPENDENCY_EXTRACTION.md`.
 - User confirmed Collingwood source is unavailable here. Full map build needs
   validation on its source machine. No new desktop release or map install made.
+- A second Project X bundle (`...1791927340921385100.zip`, also v0.2.14)
+  reaches the same bulk `pby_fly.ff` abort during script/animation staging.
+  Its log records model/image file-open failures before the abort, even with
+  shallow staging. This is not the previous localization conflict and does not
+  test commit `0ee164c`; OS failure reason and full-map results remain unknown.
 
 ## Empty Walls runtime and ray fixes, 2026-10-13
 
