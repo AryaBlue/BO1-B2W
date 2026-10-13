@@ -20,9 +20,19 @@
     "extract_exceptions: function-name suffixes still extracted from no_extract scripts: gameplay callbacks such as",
     "  DLC3 extraction is unrestricted except for unsupported animation functions; its legacy suffix entries",
     "  below remain valid if a caller deliberately disables full template extraction.",
+    "zombie_runtime: source speed selector contract and native spawn callback/location adaptation; preserve source bodies, not map-name speed presets.",
     "library_functions: functions of third-party WaW map libraries -> compat waw_<value>, where BO2 has the native",
     "  feature the library worked around (e.g. treminaor's trem_hintstrings drew hints through a WaW menu)."
   ],
+  "zombie_runtime": {
+    "source_speed": {"script": "maps\\_zombiemode_spawner", "function": "set_run_speed", "arguments": 0, "receiver": "zombie", "result_field": "zombie_move_speed"},
+    "native_spawner": "maps\\mp\\zombies\\_zm_spawner",
+    "owned_spawner": "maps\\mp\\waw\\_waw2bo2_spawner",
+    "native_spawn_init": "zombie_spawn_init",
+    "native_speed_init": "init_zombie_run_cycle",
+    "native_location_function": "do_zombie_spawn",
+    "plain_spawn_location": "spawn_location"
+  },
   "core_scripts": {
     "common_scripts\\utility": "common_scripts\\utility",
     "maps\\_utility": "maps\\mp\\_utility",

@@ -36,7 +36,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import gsc, oneway, stockperks, zombieappearance
+from . import gsc, oneway, stockperks, zombieappearance, zombiebehavior
 from .t6api import T6Api
 
 COMPAT_DIR = Path(__file__).parent / "compat"
@@ -1636,6 +1636,8 @@ def discover_animation_dependencies(sources: Sources, api: T6Api, map_name: str,
     tr.extract_custom_intermission()
     tr.extract_end_game()
     tr.extract_entry(ZOMBIEMODE, "init_strings")
+    speed_definition = API['zombie_runtime']['source_speed']
+    tr.extract_entry(speed_definition['script'], speed_definition['function'])
     for name in sorted(actor_types):
         tr.want('aitype\\' + name)
     if has_waw_appearance(sources):
@@ -1728,6 +1730,18 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     for name in sorted(actor_types):
         tr.want('aitype\\' + name)
     hint_registry = tr.extract_entry(r"maps\_zombiemode", "init_strings")
+    speed_definition = API['zombie_runtime']['source_speed']
+    speed_script = sources.get(speed_definition['script'])
+    speed_entry = speed_script.functions.get(speed_definition['function']) if speed_script else None
+    speed_function = None
+    if speed_entry is not None:
+        if len(speed_entry.params) != speed_definition['arguments']:
+            report.errors.append(f"{speed_definition['script']}::{speed_definition['function']}: "
+                                 "source speed selector must accept zero arguments")
+        else:
+            speed_function = tr.extract_entry(speed_definition['script'], speed_definition['function'])
+            report.rewrites['source WaW zombie speed selector -> native spawn callback'] += 1
+    tr.post_calls.insert(0, zombiebehavior.RUNTIME + '::init();')
     registration = {role: [tr.extract_entry(core, fn) for core, fn in entries if sources.get(core) is not None
                            and fn in sources.get(core).functions]
                     for role, entries in WEAPON_REGISTRATION.items()}
@@ -1797,6 +1811,9 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     if appearance:
         (out_dir / "_waw2bo2_characters.gsc").write_text(characters_source(), encoding="utf-8")
     (out_dir / "_waw2bo2_weapons.gsc").write_text(weapons_source(registration), encoding="utf-8")
+    (out_dir / '_waw2bo2_zombie_behavior.gsc').write_text(
+        zombiebehavior.runtime_source(API['zombie_runtime'], f'{CORE}::{speed_function}' if speed_function else None),
+        encoding='utf-8')
     report.weapon_registration = {role: [f for f in fns if f] for role, fns in registration.items()}
     report.characters = appearance
     report.fx = sorted(set(report.fx))
@@ -2336,11 +2353,11 @@ def ensure_owned_client_bootstrap(out_root: Path, bo2_root: Path) -> Path:
 
 
 PERK_OVERRIDE_HEADER = "// waw2bo2: WaW owns perk gameplay; BO2 runtime support only.\n"
-# WaW has no difficulty: its zombies speed up by round * 8 and sprint from
-# about round 10. BO2's Easy (zmDifficulty 0, also what a lobby without the
-# setting reads) uses round * 2 and never sprints. Keep WaW's pace.
+# Keep the native runtime on Original: its Easy branch changes the shared
+# round speed state. Source WaW set_run_speed owns each zombie's speed choice,
+# including map overrides such as sprinting from round one.
 WAW_DIFFICULTY = ('level.gamedifficulty = getgametypesetting( "zmDifficulty" );',
-                  'level.gamedifficulty = 1; // waw2bo2: WaW zombie speed (no Easy mode in WaW)')
+                  'level.gamedifficulty = 1; // waw2bo2: Original runtime, source WaW speed selection')
 BO2_PERK_OVERRIDES = (
     "maps/mp/zombies/_zm_perks.gsc",
     "clientscripts/mp/zombies/_zm_perks.csc",

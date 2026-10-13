@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Translate the source WaW zombie `set_run_speed()` function into a shared runtime adapter and invoke it before native zombie thinking starts. McDonald's authored round-one sprinters now keep that speed choice on BO2's Original runtime. Plain active spawners also retain their own spawn location and target metadata instead of being relocated independently to a random zone location; risers retain their zone placement. The contracts live in the shared API definitions, with no map-specific presets.
 - Recognize renamed WaW zombie startup frameworks by their function and initialization contract, then apply the existing framework override translation. Preserve threaded startup hooks and terminate the generated startup comment for inline map scripts. This removes Dead Sand Elite's missing `_zombiemode::main()` build error without map-specific mappings.
 - Resolve map-packaged IWD skins before recovered stock-zone textures for world, actor and weapon materials, while keeping the map's own compiled pixels authoritative. This restores Cheese Cube Unlimited's cheese Pack-a-Punch and zombie body skins without naming the map or its images in conversion logic. Report the source archive used.
 - Preserve authored zombie bone hitboxes through T4 export and T6 import, matching bone names and translating hit-location names. This fixes the conversion loss behind McDonald's headless bodies having zero head/helmet bounds while their attached heads disable collision. Automatically audit animated-model hitboxes after native linking.

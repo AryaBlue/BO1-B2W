@@ -31,7 +31,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from .resources import resource_root
-from . import progress
+from . import progress, zombiebehavior
 
 from . import assetresolve, audio, entities, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, oneway, paths, projectilecollision, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones
 from .fbx import collision_material_slots, write_collision_fbx, write_world_fbx
@@ -1563,6 +1563,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
             if bo2_root is None:
                 raise ValueError("BO2 runtime sources required to stage WaW perk ownership")
             gscport.stage_bo2_perk_support(project_root, bo2_root, bo2_stock_perks=bo2_stock_perks)
+            zombiebehavior.stage_native_support(project_root, bo2_root, gscport.API['zombie_runtime'])
             if bo2_stock_perks:
                 report.warnings.append('BO2_STOCK_PERKS: native BO2 perk machines, purchases, HUD and last stand; '
                                        'the WaW Pack-a-Punch stays')
