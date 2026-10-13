@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Bind zombies to the round controller's selected active location before deferred native spawn callbacks, and redirect its cached stock round provider to the owned controller. Preserve custom providers and authored spawn delays.
+- Retain stock-style texture format/mip headers for streaming world and character images, and precache mapped effects before source scripts yield.
+- Translate additive world light-ray techniques in both unlit and emissive passes, including their normal stream and original view-angle falloff. This addresses Empty Walls' one-sided opaque black rays. See [validation and limits](docs/EMPTY_WALLS_RUNTIME_AND_RAYS.md).
+
 - Make the WaW source zombie speed authoritative over BO2 movement requests. Keep source actor/round speed fields separate, translate the selector's initialization and round inputs, and restore source speed through the native movement callback. Discover renamed movement-table initializers and reference authored clips in both actor scripts so T6 retains their animation-tree nodes.
 - Restrict BO2 template weapon assets, automatic stats-table registrations and client weapon lists to the map's dependencies and native runtime equipment. Keep converted WaW weapons and stats row indices intact. This prevents Dead Sand Elite's load-time weapon registry overflow.
 - Isolate converted WaW shared ammo cap groups from BO2 and distinguish groups with different authored limits. Weapons with matching source groups and limits still share their cap. This resolves Dead Sand Elite's bouncing-betty launch conflict and the equivalent mortar conflict without changing weapon capacities.

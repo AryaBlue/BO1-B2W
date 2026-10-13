@@ -1972,6 +1972,10 @@ def assets_source(fx_table: dict[str, str], waw_map: str | None = None,
         lines.append(f'    level.waw_script = "{waw_map}";')
     for waw, bo2 in sorted(fx_table.items()):
         lines.append(f'    level.waw2bo2_fx["{waw}"] = "{bo2}";')
+    # WaW libraries can request effects after their first wait. T6 requires
+    # each valid effect to be precached during the initial level frame.
+    for bo2 in sorted(set(fx_table.values())):
+        lines.append(f'    loadfx( "{bo2}" );')
     reverse_names = set()
     for waw, bo2 in sorted((weapons or {}).items()):
         lines.append(f'    level.waw2bo2_weapons["{waw}"] = "{bo2}";')

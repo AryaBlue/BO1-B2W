@@ -1,5 +1,17 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Empty Walls runtime and ray fixes, 2026-10-13
+
+- Active branch `codex/empty-walls-terrain-limit` contains the rebuilt moving
+  terrain fix and shared spawn/image/FX/ray corrections. See
+  `docs/EMPTY_WALLS_RUNTIME_AND_RAYS.md` for root causes, live evidence and limits.
+- Empty Walls candidate is rebuilt under `work/zombie_runtime_20261013/candidate`.
+  Baseline package and backups are retained under `work/empty_walls_20261013`.
+- User will retest same-zombie outfit switching later. Stable server models and
+  corrected image metadata do not establish that client visual defect is solved.
+- Separate source `monitor_ground_bomb` undefined arithmetic was observed in an
+  earlier longer probe; it is not fixed here. Preserve the user's own game process.
+
 ## v0.2.0 release preparation, 2026-10-07
 
 - User explicitly requested pushing and releasing the desktop GUI. Preparing
@@ -2293,3 +2305,27 @@ Open:
 - User confirmed the source map is unavailable locally. ZIP includes no map
   assets or .str files. Actual conflicting text/source file, full Project X
   build and gameplay are unverified. No map installation changed.
+
+## 2026-10-13: Empty Walls rebuild and large moving-terrain roots
+
+- Rebuilt local `Empty Walls/zm_wall.ff` as `zm_wall_waw` with current main,
+  source perks/materials and no remaster. Native linking exposed a regression
+  from the moving-terrain repair: model 17 roots followed 80,559 world AABBs,
+  beyond uint16 leaf root indices. Branch `codex/empty-walls-terrain-limit`.
+- Native layout now puts model roots before world parents/children and adjusts
+  world leaf/child references. Root indices/counts retain explicit limit checks;
+  child nodes retain their int addressing. Source geometry is preserved.
+- Native Linker rebuilt. Empty Walls links with 80,577 AABBs. All 82,831 exported
+  triangles match source positions, winding and flags, with 36 triangles owned
+  by 18 moving models and no world/model overlap. Cheese Cube regression link
+  preserves all 2,125 triangles, including model 242's 32 water triangles.
+- New reusable `tools/audit_terrain_ownership.py` verifies reachable partitions,
+  distinct ownership, flags and geometry to four decimals. Existing winding
+  audit also passes for both maps. 515 unit tests pass. Material audits check
+  81,075 Empty Walls map / 46,459 mod / 31,150 Cheese Cube arguments with zero
+  violations; 4,656 bone hitboxes preserved across 120 Empty Walls models.
+- Evidence/staging/backup: `work/empty_walls_20261013`. Installer checks compiled
+  scripts byte-for-byte, backs up prior package files and verifies installed
+  SHA-256 hashes; `verification.json` records completion. Live gameplay has not
+  been tested on the new build. Existing light-grid/shadow and sound-curve
+  approximation warnings remain in `build.log`.

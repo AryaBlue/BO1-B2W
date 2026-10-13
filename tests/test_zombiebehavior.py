@@ -171,15 +171,33 @@ class ZombieBehaviorTests(unittest.TestCase):
             out.mkdir(parents=True)
             (out / '_waw2bo2_zombie_behavior.gsc').write_text('init(){}')
             (out / '_waw2bo2_zm.gsc').write_text('round_spawning(){ '
-                'spawner=random(level.zombie_spawners); other=random(other_array); }\n'
+                'spawner=random(level.zombie_spawners); other=random(other_array); '
+                'ai=spawn_zombie(spawner,spawner.targetname,spawn_point); }\n'
                 'init(){ maps\\mp\\zombies\\_zm_spawner::init(); }\n'
                 'zombie_speed_up(){ self set_zombie_run_cycle("walk"); }')
             zombiebehavior.stage_native_support(root / 'out', root / 'bo2', gscport.API['zombie_runtime'])
             text = (out / '_waw2bo2_zm.gsc').read_text()
-            self.assertIn('::choose_spawner(level.zombie_spawners)', text)
+            self.assertIn('::choose_spawner(level.zombie_spawners, spawn_point )', text)
+            self.assertIn('::spawn_zombie(spawner,spawner.targetname,spawn_point)', text)
             self.assertIn('other=random(other_array)', text)
             self.assertIn('maps\\mp\\waw\\_waw2bo2_spawner::init()', text)
             self.assertIn('::refresh_speed("walk")', text)
+
+    def test_chosen_active_spawn_location_is_bound_before_deferred_native_callbacks(self):
+        runtime = zombiebehavior.runtime_source(gscport.API['zombie_runtime'], None)
+        parsed = gsc.parse(runtime, 'runtime')
+        spawn = parsed.functions['spawn_zombie']
+        body = gsc.emit(parsed.tokens[spawn.body_open:spawn.body_close])
+        self.assertLess(body.index('_zm_utility::spawn_zombie'), body.index('ai.spawn_point_override = spawn_point'))
+        self.assertLess(body.index('ai.spawn_point_override = spawn_point'), body.index('return ai'))
+        self.assertIn('ai forceteleport( spawn_point.origin )', body)
+        bind = parsed.functions['bind_spawn_location']
+        text = gsc.emit(parsed.tokens[bind.body_open:bind.body_close])
+        self.assertLess(text.index('isdefined( self.spawn_point_override )'), text.index('spots ='))
+        self.assertIn('matching[matching.size] = candidate', runtime)
+        self.assertIn('if ( matching.size )', runtime)
+        self.assertIn('level.round_spawn_func == maps\\mp\\zombies\\_zm::round_spawning', runtime)
+        self.assertIn('level.round_spawn_func = maps\\mp\\waw\\_waw2bo2_zm::round_spawning', runtime)
 
     def test_source_speed_body_and_dependencies_are_translated(self):
         with tempfile.TemporaryDirectory() as temp:

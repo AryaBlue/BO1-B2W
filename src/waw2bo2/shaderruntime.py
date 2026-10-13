@@ -657,6 +657,12 @@ def vertex_contract(source_assembly, source_pass, native_pass, native_root, pair
     if paired and source_material and source_material.get('techniqueSet', '').startswith('mc_sky'):
         incoming.setdefault('COLOR0', (4, 'float'))
         incoming.setdefault('TEXCOORD0', (2, 'float'))
+    falloff_normal = (paired and source_material and
+                      techsets.parse(source_material.get('techniqueSet', '')).unlit_kind == 'unlit_falloff_add')
+    if falloff_normal:
+        # This source unlit program computes view-angle falloff from the
+        # stored world normal, a stream its native unlit donor omits.
+        incoming.setdefault('NORMAL0', (3, 'float'))
     fields = buffers(native_vs)
     names = registers(source_assembly)
     contract = {'inputs': {}, 'outputs': {}, 'constants': {}, 'samplers': {}}
@@ -933,7 +939,7 @@ SLOTS = {0: 0, 1: 1, 2: 4, 3: 5, 4: 8, 5: 10, 6: 12, 7: 14, 8: 16, 13: 18, 14: 2
 
 
 # Self-illuminated WaW techniques T6 draws through UNLIT/EMISSIVE.
-SELF_LIT_KINDS = ('unlit', 'unlit_blend', 'unlit_add', 'unlit_distfalloff', 'objective')
+SELF_LIT_KINDS = ('unlit', 'unlit_blend', 'unlit_add', 'unlit_distfalloff', 'unlit_falloff_add', 'objective')
 
 
 def source_slot(present, source_name, slot):
@@ -1241,6 +1247,14 @@ def bind_material(source_material, output_material, roots, project_root, native_
                     target_pass['vertexDecl'] = {'streamCount': len(routing), 'hasOptionalSource': False,
                         'isLoaded': False, 'routing': routing + [{'source': 0, 'dest': 0}] * (16-len(routing))}
                     prune_missing_material_constants(target_pass, output_material, (vertex_binding, contract))
+                if techsets.parse(source_name).unlit_kind == 'unlit_falloff_add':
+                    # T6 STREAM_SRC_NORMAL=3 -> STREAM_DST_NORMAL=1, alongside
+                    # the ordinary world position/color/UV streams.
+                    streams = {'POSITION0': (0, 0), 'COLOR0': (1, 2), 'TEXCOORD0': (2, 5), 'NORMAL0': (3, 1)}
+                    routing = [dict(zip(('source', 'dest'), streams[e['semantic'].upper()]))
+                               for e in vertex_binding['inputs'].values()]
+                    target_pass['vertexDecl'] = {'streamCount': len(routing), 'hasOptionalSource': False,
+                        'isLoaded': False, 'routing': routing + [{'source': 0, 'dest': 0}] * (16-len(routing))}
                 prune_missing_material_constants(target_pass, output_material, (vertex_binding, contract), unread=True)
                 shader_name = _write_program(project_root, 'ps', dxbc, binary, contract, info)
                 vertex_name = _write_program(project_root, 'vs', vertex_code, vertex_binary, vertex_binding, vertex_info)

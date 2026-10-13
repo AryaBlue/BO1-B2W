@@ -650,6 +650,7 @@ namespace BSP
         // Entity terrain uses the same partitions and clip flags as world terrain.
         // Keep each model's roots contiguous in local space. These leaf AABBs
         // do not need BSP nodes: transformed model traces start at its cLeaf.
+        const auto worldAabbCount = AABBTreeVec.size();
         for (size_t modelIdx = 0; modelIdx < subModelSources.size(); modelIdx++)
         {
             auto& model = subModelSources[modelIdx];
@@ -677,11 +678,44 @@ namespace BSP
                 model.terrainContents |= materialContents[material];
             }
             model.terrainCount = AABBTreeVec.size() - model.firstTerrain;
-            if (model.terrainCount && (model.firstTerrain > 65535 || model.terrainCount > 65535))
+            if (model.terrainCount > std::numeric_limits<uint16_t>::max())
             {
                 con::error("ERROR: model {} terrain exceeds T6 leaf index limits", modelIdx + 1);
                 return false;
             }
+        }
+
+        // World partition children can exceed 65535 entries: their addresses
+        // are ints. Entity roots must share the low uint16 range with world
+        // roots, rather than follow those children at the end of the array.
+        const auto modelAabbCount = AABBTreeVec.size() - worldAabbCount;
+        if (modelAabbCount)
+        {
+            std::rotate(AABBTreeVec.begin(), AABBTreeVec.begin() + worldAabbCount, AABBTreeVec.end());
+            for (auto& model : subModelSources)
+            {
+                model.firstTerrain -= worldAabbCount;
+                if (model.terrainCount && model.firstTerrain > std::numeric_limits<uint16_t>::max())
+                {
+                    con::error("ERROR: model terrain roots exceed T6 leaf index limits");
+                    return false;
+                }
+            }
+            for (auto& leaf : leafVec)
+            {
+                if (!leaf.collAabbCount)
+                    continue;
+                const auto index = leaf.firstCollAabbIndex + modelAabbCount;
+                if (index > std::numeric_limits<uint16_t>::max())
+                {
+                    con::error("ERROR: world and model terrain roots exceed T6 leaf index limits");
+                    return false;
+                }
+                leaf.firstCollAabbIndex = static_cast<uint16_t>(index);
+            }
+            for (size_t i = modelAabbCount; i < AABBTreeVec.size(); i++)
+                if (AABBTreeVec[i].childCount)
+                    AABBTreeVec[i].u.firstChildIndex += static_cast<int>(modelAabbCount);
         }
 
         // brush side planes follow the node planes (node planes share the node's index)

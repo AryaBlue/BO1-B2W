@@ -39,6 +39,7 @@ UNLIT_MAP = {
     "unlit_blend": ("unlit_blend", []),
     "unlit": ("unlit_replace", []),
     "unlit_distfalloff": ("unlit_blend", ["distance falloff dropped"]),
+    "unlit_falloff_add": ("unlit_blend", []),
     # WaW tool surfaces that reach the render world are shadow casters
     # (e.g. wc/caulk_shadow); T6 has a dedicated technique for that.
     "tools": ("shadowcaster", ["tools technique mapped to shadowcaster"]),
@@ -376,7 +377,7 @@ def build_material(t4: dict, donor: dict, notes: list[str]) -> dict:
         consts.append(c)
     out["constants"] = consts
     source = parse(t4.get('techniqueSet', ''))
-    if source.family == 'world' and source.unlit_kind in ('unlit', 'unlit_blend', 'unlit_distfalloff'):
+    if source.family == 'world' and source.unlit_kind in ('unlit', 'unlit_blend', 'unlit_distfalloff', 'unlit_falloff_add'):
         entries = t4.get('stateBitsEntry', [])
         index = entries[4] if len(entries) > 4 else -1
         states = t4.get('stateBits', [])

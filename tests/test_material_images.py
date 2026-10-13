@@ -85,7 +85,7 @@ class MaterialImageTests(unittest.TestCase):
         unlit = {'name': 'source_unlit'}
         original = {'techniques': [None] * 6}
         original['techniques'][4] = unlit
-        for name in ('wc_unlit', 'mc_unlit', 'wc_unlit_blend', 'wc_unlit_distfalloff'):
+        for name in ('wc_unlit', 'mc_unlit', 'wc_unlit_blend', 'wc_unlit_distfalloff', 'wc_unlit_falloff_add'):
             self.assertIs(shaderruntime.source_technique(original, name, 3), unlit)
         self.assertIsNone(shaderruntime.source_technique(original, 'wc_l_sm_r0c0', 3))
         emissive = {'name': 'source_emissive'}
@@ -103,6 +103,19 @@ class MaterialImageTests(unittest.TestCase):
         self.assertEqual(out['stateBits'][0], state)
         self.assertEqual(out['sortKey'], 43)
         self.assertEqual(out['cameraRegion'], 'emissiveTrans')
+
+    def test_additive_angle_falloff_keeps_source_blending_in_both_scene_passes(self):
+        state = {'blendOpRgb': 'add', 'srcBlendRgb': 'invdestcolor', 'dstBlendRgb': 'one',
+                 'depthWrite': False, 'colorWriteRgb': True, 'cullFace': 'back'}
+        source = {'techniqueSet': 'wc_unlit_falloff_add', 'stateBits': [state],
+                  'stateBitsEntry': [-1]*4+[0], 'sortKey': 48}
+        donor = {'stateBits': [dict(state, srcBlendRgb='srcalpha', dstBlendRgb='invsrcalpha')],
+                 'cameraRegion': 'emissiveTrans', 'sortKey': 40}
+        out = techsets.build_material(source, donor, [])
+        self.assertEqual(out['stateBits'][0], state)
+        self.assertEqual(out['sortKey'], 48)
+        for slot in (2, 3):
+            self.assertEqual(shaderruntime.source_slot(lambda i: i == 4, source['techniqueSet'], slot), 4)
 
     def test_weapon_visuals_resolve_original_pixels_before_namespacing(self):
         with tempfile.TemporaryDirectory() as directory:
