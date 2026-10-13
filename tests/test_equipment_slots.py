@@ -38,6 +38,34 @@ class EquipmentSlotTranslationTests(unittest.TestCase):
             translator = gscport.Translator(gscport.Sources([root], [], None), api, gscport.PortReport())
             self.assertNotIn('waw_destroy_hud_elem', translator.translate(r'maps\local'))
 
+    def test_zombies_hud_cleanup_guards_missing_and_repeated_hud_receivers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'maps').mkdir()
+            (root / 'maps/test.gsc').write_text(
+                '#include maps\\_zombiemode_utility;\n'
+                'main(){ self.hint_hud destroy_hud(); self.hint_hud destroy_hud(); '
+                'self.used_suit = undefined; self notify("lost"); }')
+            (root / 'maps/_zombiemode_utility.gsc').write_text('destroy_hud() { self destroy(); }')
+            api = T6Api({}, {r'maps\mp\zombies\_zm_utility': {'destroy_hud': 0}})
+            translator = gscport.Translator(gscport.Sources([root], [], None), api, gscport.PortReport())
+            text = translator.translate(r'maps\test')
+            self.assertEqual(text.count('waw_destroy_hud( self.hint_hud )'), 2)
+            self.assertIn('self.used_suit = undefined;', text)
+            self.assertIn('self notify("lost");', text)
+            self.assertEqual(translator.report.unsupported, {})
+
+    def test_map_owned_hud_destructors_retain_their_source_behavior(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'maps').mkdir()
+            (root / 'maps/test.gsc').write_text(
+                '#include maps\\_zombiemode_utility;\nmain(){ hud destroy_hud(); } '
+                'destroy_hud(){ custom_cleanup(); } custom_cleanup(){}')
+            api = T6Api({}, {r'maps\mp\zombies\_zm_utility': {'destroy_hud': 0}})
+            translator = gscport.Translator(gscport.Sources([root], [], None), api, gscport.PortReport())
+            self.assertNotIn('waw_destroy_hud(', translator.translate(r'maps\test'))
+
     def test_weapon_slot_calls_translate_even_when_bo2_accepts_the_builtin(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

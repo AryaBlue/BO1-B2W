@@ -821,6 +821,14 @@ waw_destroy_hud_elem( element )
         element maps\mp\gametypes_zm\_hud_util::destroyelem();
 }
 
+// The Zombies helper owns its HUD count and uses raw Destroy, rather than
+// the HUD utility's parent/child cleanup. Retain that helper on valid HUDs.
+waw_destroy_hud( element )
+{
+    if ( isdefined( element ) )
+        element maps\mp\zombies\_zm_utility::destroy_hud();
+}
+
 waw_givemaxammo( name )
 {
     weapon = waw_weapon( name );

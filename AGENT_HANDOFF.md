@@ -2219,3 +2219,26 @@ Open:
   `work/lethal_water/verification.json`; native logs and source/roundtrip
   dumps are alongside it. Live gameplay, including solo/co-op outcomes,
   still needs testing after restarting the map.
+
+## 2026-10-13: Iron Man suit HUD investigation
+
+- User supplied third-party screenshots of stuck/doubled helmets after battery
+  depletion; no suit or reproduction sequence is known. Investigation:
+  `docs/IRON_MAN_SUIT_HUD.md`.
+- Likely source gameplay defect: Mk1/3/4/5/6/16 depletion clears used_suit
+  while leaving its active suit flag 1. A different suit can then deploy while
+  the prior helmet thread waits indefinitely for the old flag to become 0.
+  War Machine does not unlock used_suit on depletion. Converted scripts retain
+  these source conditions; no map-specific suit lifecycle patch has been made.
+- Shared compatibility cleanup fix: API definitions now map resolved native
+  destroyElem/destroy_hud helpers to guarded wrappers. Simple/dotted HUD
+  receivers become arguments. waw_destroy_hud checks isdefined before invoking
+  _zm_utility::destroy_hud, retaining native bookkeeping on valid HUDs.
+  Custom local source destructors remain unchanged. This prevents missing or
+  repeated cleanup from interrupting caller continuation; it does not fix the
+  overlapping-mask source state or later use-after-destroy accesses.
+- 506 tests pass; 99 staged scripts compile and match the candidate linked
+  fastfile byte-for-byte. Water collision remains model 242, contents 0x20,
+  32 triangles / 16 roots. Candidate and evidence: work/suit_hud_check/.
+  Candidate is NOT installed: user is testing the previously installed water
+  fix. Live suit behavior remains unverified.

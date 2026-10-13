@@ -12,6 +12,7 @@
     "function_renames: WaW function (any script or builtin) -> BO2 qualified function or builtin.",
     "compat_wrappers: WaW builtins routed through maps\\mp\\waw\\_waw2bo2_compat even though T6 has a builtin",
     "  of that name, because the semantics or the asset namespace differ.",
+    "hud_cleanup_wrappers: resolved native HUD destructors -> guarded compatibility helpers; simple/dotted receivers become arguments so missing HUDs cannot prevent caller cleanup. Map-owned destructors remain source code.",
     "no_extract: core scripts whose functions are never extracted (framework setup/round logic BO2 owns).",
     "maps\\_loadout is deliberately NOT core: it is WaW's player appearance/loadout contract (viewmodel arms,",
     "  character bodies, start weapons). gscport ports it whole and _waw2bo2_characters drives it from BO2's",
@@ -100,6 +101,10 @@
     "include_weapon": "maps\\mp\\waw\\_waw2bo2_compat::waw_include_weapon",
     "add_zombie_weapon": "maps\\mp\\waw\\_waw2bo2_compat::waw_add_zombie_weapon",
     "manage_zones": "maps\\mp\\waw\\_waw2bo2_compat::waw_manage_zones"
+  },
+  "hud_cleanup_wrappers": {
+    "maps\\mp\\gametypes_zm\\_hud_util::destroyelem": "waw_destroy_hud_elem",
+    "maps\\mp\\zombies\\_zm_utility::destroy_hud": "waw_destroy_hud"
   },
   "compat_wrappers": [
     "setvisibletoplayer",
