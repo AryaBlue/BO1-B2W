@@ -222,7 +222,12 @@ def convert(name: str, source: dict[str, str], t4_schema: dict[str, str], t6_sch
     # the player's melee weapon (knife) unless the held one is useAsMelee, as
     # BO2's riotshield_zm is. Held items with their own melee (a rake or axe
     # trap, a shield) keep their own animation and damage.
-    if source.get("inventoryType") == "item" and source.get("meleeAnim") and \
+    # Scripted animation items can fill meleeAnim with their idle animation
+    # and retain the default meleeDamage. That is not a held melee attack
+    # (perk bottles and assembly animations use this pattern).
+    own_melee = source.get("meleeAnim") and source["meleeAnim"] not in {
+        source.get("idleAnim"), source.get("emptyIdleAnim")}
+    if source.get("inventoryType") == "item" and own_melee and \
             float(source.get("meleeDamage") or 0) > 0 and "useAsMelee" not in source:
         out.fields["useAsMelee"] = "1"
         out.translations["useAsMelee"] = {"source": "inventoryType item + meleeAnim", "target": "1",

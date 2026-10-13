@@ -7,6 +7,19 @@ from waw2bo2.t6api import T6Api
 
 
 class EquipmentSlotTranslationTests(unittest.TestCase):
+    def test_owner_visibility_uses_waw_mask_replacement_even_with_native_builtin(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'maps').mkdir()
+            (root / 'maps/test.gsc').write_text(
+                'main(){ trigger SetVisibleToPlayer(owner); trigger setvisibletoall(); }')
+            api = T6Api({}, {}, methods={'setvisibletoplayer': (1, 1), 'setvisibletoall': (0, 0)})
+            translator = gscport.Translator(gscport.Sources([root], [], None), api, gscport.PortReport())
+            source = translator.translate(r'maps\test')
+            self.assertIn('trigger ' + gscport.COMPAT + '::waw_setvisibletoplayer(owner)', source)
+            self.assertIn('trigger setvisibletoall()', source)
+            self.assertEqual(translator.report.unsupported, {})
+
     def test_repeated_native_hud_cleanup_is_safe_without_changing_local_helpers(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -155,6 +155,14 @@ waw_enable_trigger()
         self show();
 }
 
+// WaW replaces the client visibility mask with this one player. T6 only
+// clears that player's hidden bit, retaining every previous visible player.
+waw_setvisibletoplayer( player )
+{
+    self setinvisibletoall();
+    self setvisibletoplayer( player );
+}
+
 // WaW's zombiemode framework turns the power on with flag "electricity_on";
 // BO2's with flag "power_on" (+ "electric_door" / client "power_on" notifies
 // and unpausing the perk machines). Keep both frameworks in step.

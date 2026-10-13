@@ -88,6 +88,7 @@
     "manage_zones": "maps\\mp\\waw\\_waw2bo2_compat::waw_manage_zones"
   },
   "compat_wrappers": [
+    "setvisibletoplayer",
     "setvelocity",
     "startragdoll",
     "launchragdoll",

@@ -7,8 +7,7 @@ from waw2bo2.t6api import T6Api
 
 
 class BuiltinArgumentCountTest(unittest.TestCase):
-    """WaW raises a runtime error, ending the thread, when a builtin gets too few
-    arguments; T6 refuses to link the call (Cheese Cube: ``ent MoveTo(ent2)``)."""
+    """WaW recovers from builtin argument errors; T6 refuses to link the call."""
 
     def translate(self, body: str) -> gscport.Translator:
         with tempfile.TemporaryDirectory() as temp:
@@ -21,13 +20,15 @@ class BuiltinArgumentCountTest(unittest.TestCase):
             self.source = translator.translate(r"maps\test")
             return translator
 
-    def test_too_few_arguments_stub_stops_the_thread(self):
-        translator = self.translate("\tcheese MoveTo(start);\n\tcheese MoveZ( 4600, 2000 );")
-        self.assertIn("::stub_moveto_1args_T6_takes_2_4_WaW_runtime_error_ends_the_thread(start);", self.source)
-        self.assertIn("cheese MoveZ( 4600, 2000 );", self.source)
+    def test_too_few_arguments_recovers_and_preserves_following_movement(self):
+        translator = self.translate("\tmover MoveTo(start);\n\tmover MoveZ( 4600, 2000 );")
+        self.assertIn("::stub_moveto_1args_T6_takes_2_4(start);", self.source)
+        self.assertIn("mover MoveZ( 4600, 2000 );", self.source)
         stubs = translator.stub_source()
         body = stubs[stubs.index("stub_moveto_1args"):]
-        self.assertIn('level waittill( "waw2bo2_never" );', body.split("}")[0])
+        self.assertIn('::report(', body.split("}")[0])
+        self.assertNotIn('waittill', body.split("}")[0])
+        self.assertNotIn('return ', body.split("}")[0])  # implicit undefined result
 
     def test_too_many_arguments_are_dropped_not_halted(self):
         translator = self.translate("\tcheese MoveZ( 1, 2, 0, 0, 5 );")

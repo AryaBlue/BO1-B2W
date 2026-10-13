@@ -182,6 +182,22 @@ class HeldItemMeleeTests(unittest.TestCase):
                                       "meleeDamage": "150"}, self.T4, self.T4)
         self.assertNotIn("useAsMelee", gun.fields)
 
+    def test_scripted_item_idle_placeholder_is_not_a_melee_attack(self):
+        for idle_field in ("idleAnim", "emptyIdleAnim"):
+            with self.subTest(idle_field=idle_field):
+                item = weapons.convert("assembly_animation", {
+                    "inventoryType": "item", "weaponType": "grenade",
+                    idle_field: "hands_idle", "meleeAnim": "hands_idle",
+                    "meleeDamage": "40"}, self.T4, self.T4)
+                self.assertNotIn("useAsMelee", item.fields)
+
+    def test_explicit_melee_setting_is_preserved(self):
+        schema = {**self.T4, "useAsMelee": "CSPFT_BOOL"}
+        item = weapons.convert("item", {"inventoryType": "item",
+            "idleAnim": "idle", "meleeAnim": "attack", "meleeDamage": "40",
+            "useAsMelee": "0"}, schema, schema)
+        self.assertEqual(item.fields["useAsMelee"], "0")
+
 
 class EngineMaterialTests(unittest.TestCase):
     def test_special_unlit_set_uses_the_same_named_t6_set(self):
