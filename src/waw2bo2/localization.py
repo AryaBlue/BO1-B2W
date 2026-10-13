@@ -25,17 +25,26 @@ def quote(text: str) -> str:
     return '"' + text.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t') + '"'
 
 
-def parse(text: str, language: str = "english") -> dict[str, str]:
-    tokens = [m[0] for m in WORD.finditer(text) if not m[0].startswith(('//', '/*'))]
-    result, reference = {}, None
+def parse(text: str, language: str = "english", *, conflicts: list[dict] | None = None) -> dict[str, str]:
+    """Read one StringEd file, retaining its final definition of each key.
+
+    Native asset pools replace a repeated name with the later loaded entry.
+    Across files, stage() still applies the explicit source priority order.
+    """
+    matches = [m for m in WORD.finditer(text) if not m[0].startswith(('//', '/*'))]
+    tokens = [m[0] for m in matches]
+    result, positions, reference = {}, {}, None
     for i, token in enumerate(tokens[:-1]):
         if token == "REFERENCE":
             reference = unquote(tokens[i + 1])
         elif token == "LANG_" + language.upper() and reference is not None:
             value = unquote(tokens[i + 1])
-            if reference in result and result[reference] != value:
-                raise ValueError(f"conflicting localization reference {reference}")
+            if reference in result and result[reference] != value and conflicts is not None:
+                conflicts.append({'key': reference, 'previous_value': result[reference], 'value': value,
+                                  'previous_line': text.count('\n', 0, positions[reference]) + 1,
+                                  'line': text.count('\n', 0, matches[i].start()) + 1})
             result[reference] = value
+            positions[reference] = matches[i].start()
     return result
 
 
@@ -100,6 +109,7 @@ def stage(project: Path, roots: list[Path], iwd_dirs: list[Path], stock=None,
     def original(text: str) -> str:
         return reverse.get(text, text.removeprefix(PREFIX))
     sources: dict[str, tuple[str, str]] = {}
+    conflicts, seen_conflicts = [], set()
     requested, strings, scripts, weapon_files = set(), set(), {}, {}
     for folder, extension in [('maps/mp/waw', '*.gsc'), ('clientscripts/mp/waw', '*.csc')]:
         for path in sorted((project / folder).rglob(extension)):
@@ -122,8 +132,18 @@ def stage(project: Path, roots: list[Path], iwd_dirs: list[Path], stock=None,
             requested.update(original(v) for k, v in fields.items()
                              if k in ('displayName', 'AIOverlayDescription', 'modeName') and v)
 
+    def read_strings(text: str, origin: str):
+        duplicates = []
+        values = parse(text, language, conflicts=duplicates)
+        for entry in duplicates:
+            identity = (origin, entry['key'], entry['previous_line'], entry['line'])
+            if identity not in seen_conflicts:
+                seen_conflicts.add(identity)
+                conflicts.append({**entry, 'source': origin})
+        return values
+
     def add(text: str, origin: str, stem: str):
-        for key, value in parse(text, language).items():
+        for key, value in read_strings(text, origin).items():
             sources.setdefault(key, (value, origin))
             # WaW raw StringEd files may use a file namespace and short refs.
             sources.setdefault(stem.upper() + '_' + key, (value, origin))
@@ -176,7 +196,7 @@ def stage(project: Path, roots: list[Path], iwd_dirs: list[Path], stock=None,
     if bo2_root is not None:
         if t6_stock_dump is not None:
             for path in source_files(t6_stock_dump, language):
-                for key, value in parse(path.read_text(encoding='utf-8-sig', errors='replace'), language).items():
+                for key, value in read_strings(path.read_text(encoding='utf-8-sig', errors='replace'), str(path)).items():
                     fallback.setdefault(key, (value, str(path)))
         elif t6_unlinker is not None:
             for zone in ('patch_zm', 'common_zm', 'code_post_gfx_zm'):
@@ -184,10 +204,10 @@ def stage(project: Path, roots: list[Path], iwd_dirs: list[Path], stock=None,
                 if ff.is_file():
                     root = dump_zone(ff, t6_unlinker, work, [bo2_root / 'sound', ff.parent])
                     for path in source_files(root, language):
-                        for key, value in parse(path.read_text(encoding='utf-8-sig', errors='replace'), language).items():
+                        for key, value in read_strings(path.read_text(encoding='utf-8-sig', errors='replace'), str(path)).items():
                             fallback.setdefault(key, (value, str(path)))
         for path in source_files(bo2_root / 'raw', language):
-            for key, value in parse(path.read_text(encoding='utf-8-sig', errors='replace'), language).items():
+            for key, value in read_strings(path.read_text(encoding='utf-8-sig', errors='replace'), str(path)).items():
                 fallback.setdefault(key, (value, str(path)))
     entries, mapping, resolved, missing = {}, {}, [], []
     compatibility = json.loads((Path(__file__).parent / 'compat/bo2_equivalents.json').read_text())
@@ -248,9 +268,12 @@ def stage(project: Path, roots: list[Path], iwd_dirs: list[Path], stock=None,
                            ''.join(f'\nREFERENCE {name}\nLANG_{language.upper()} {quote(value)}\n'
                                    for name, value in sorted(entries.items())) + '\nENDMARKER\n', encoding='utf-8')
     report = {'asset': asset, 'language': language, 'entries': resolved, 'rewritten_scripts': rewritten,
-              'missing': missing, 'errors': [],
+              'missing': missing, 'errors': [], 'conflicts': conflicts,
               'warnings': [f'LOCALIZATION_MISSING {key}: no source text in the map, its IWDs or stock WaW; '
-                           f'shown as the key, as WaW does' for key in missing]}
+                           f'shown as the key, as WaW does' for key in missing] +
+                          [f'LOCALIZATION_CONFLICT {e["key"]}: {e["source"]} lines '
+                           f'{e["previous_line"]}/{e["line"]}; later definition retained within that file'
+                           for e in conflicts]}
     output = project / 'content_source/localization.stage.json'
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')

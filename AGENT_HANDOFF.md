@@ -2275,3 +2275,21 @@ Open:
   the water fix. Source unupgraded Cheese Gun image/model/material chain was
   already correct in the installed mod; further runtime trouble there remains
   unconfirmed. Live gameplay and visual results still require testing.
+
+## 2026-10-13: Project X localization staging blocker
+
+- Branch `codex/project-x-build-fix`, based on main after the Cheese Cube merge.
+  Supplied failure ZIP (converter 0.2.14) stops at localization staging with
+  `ValueError: conflicting localization reference MUT_11_DESC`.
+- `localization.parse` now retains the final definition within a StringEd file,
+  consistent with native asset-name replacement. Cross-file source priority
+  remains unchanged. Stage diagnostics record source, line numbers and both
+  values; conflicts warn instead of aborting. Equal duplicates remain quiet,
+  and duplicate reads do not repeat the diagnostics.
+- 515 tests pass. Synthetic duplicate-key reproduction stages, links with the
+  native T6 linker and unlinks to the exact selected text/placeholder. Evidence
+  under `work/project_x_build_fix`; details in
+  `docs/PROJECT_X_LOCALIZATION_FAILURE.md`.
+- User confirmed the source map is unavailable locally. ZIP includes no map
+  assets or .str files. Actual conflicting text/source file, full Project X
+  build and gameplay are unverified. No map installation changed.
