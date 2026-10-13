@@ -1,5 +1,17 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Empty Walls runtime and ray fixes, 2026-10-13
+
+- Active branch `codex/empty-walls-terrain-limit` contains the rebuilt moving
+  terrain fix and shared spawn/image/FX/ray corrections. See
+  `docs/EMPTY_WALLS_RUNTIME_AND_RAYS.md` for root causes, live evidence and limits.
+- Empty Walls candidate is rebuilt under `work/zombie_runtime_20261013/candidate`.
+  Baseline package and backups are retained under `work/empty_walls_20261013`.
+- User will retest same-zombie outfit switching later. Stable server models and
+  corrected image metadata do not establish that client visual defect is solved.
+- Separate source `monitor_ground_bomb` undefined arithmetic was observed in an
+  earlier longer probe; it is not fixed here. Preserve the user's own game process.
+
 ## v0.2.0 release preparation, 2026-10-07
 
 - User explicitly requested pushing and releasing the desktop GUI. Preparing

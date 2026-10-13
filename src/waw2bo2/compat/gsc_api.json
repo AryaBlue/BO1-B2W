@@ -32,6 +32,8 @@
     "source_round_state": {"script": "maps\\_zombiemode", "start_function": "round_spawning", "end_function": "round_think"},
     "native_spawner": "maps\\mp\\zombies\\_zm_spawner",
     "owned_spawner": "maps\\mp\\waw\\_waw2bo2_spawner",
+    "native_round_runtime": "maps\\mp\\zombies\\_zm",
+    "owned_round_runtime": "maps\\mp\\waw\\_waw2bo2_zm",
     "native_spawn_init": "zombie_spawn_init",
     "native_speed_init": "init_zombie_run_cycle",
     "native_movement": {"script": "maps\\mp\\animscripts\\zm_run", "function": "setanimstatefromspeed", "callback": "setanimstatefromspeed"},

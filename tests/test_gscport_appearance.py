@@ -65,6 +65,12 @@ class AppearanceTests(unittest.TestCase):
         self.assertIn('level.waw_script = "nuketown";', gscport.assets_source({}, "nuketown", {"gun": "gun"}))
         self.assertIn('level.waw2bo2_weapons["gun"] = "gun";', gscport.assets_source({}, None, {"gun": "gun"}))
 
+    def test_converted_effects_precache_once_before_late_source_requests(self):
+        text = gscport.assets_source({'effect_a': 'waw/effect', 'effect_b': 'waw/effect'})
+        self.assertEqual(text.count('loadfx( "waw/effect" );'), 1)
+        self.assertIn('level.waw2bo2_fx["effect_a"]', text)
+        self.assertIn('level.waw2bo2_fx["effect_b"]', text)
+
     def test_bo2_character_hooks_point_at_the_waw_appearance(self):
         with tempfile.TemporaryDirectory() as temp:
             main = Path(temp) / "map.gsc"

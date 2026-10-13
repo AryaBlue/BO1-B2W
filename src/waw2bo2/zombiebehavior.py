@@ -253,6 +253,8 @@ def runtime_source(definition: dict, speed_function: str | None, selection_funct
                    speed_state_function: str | None = None) -> str:
     native = definition['native_spawner']
     owned = definition['owned_spawner']
+    native_round = definition['native_round_runtime']
+    owned_round = definition['owned_round_runtime']
     entry = definition['native_spawn_init']
     result_field = definition['source_speed']['owned_result_field']
     callback_field = definition['native_movement']['callback']
@@ -273,6 +275,10 @@ def runtime_source(definition: dict, speed_function: str | None, selection_funct
 init()
 {{
     {state_init}
+    // Native initialization can register a cached stock round-spawn pointer.
+    // Keep authored custom providers; route the native default to our copy.
+    if ( !isdefined( level.round_spawn_func ) || level.round_spawn_func == {native_round}::round_spawning )
+        level.round_spawn_func = {owned_round}::round_spawning;
     bound = 0;
     spawners = getentarray( "zombie_spawner", "script_noteworthy" );
     foreach ( spawner in spawners )
@@ -294,6 +300,8 @@ init()
 
 bind_spawn_location()
 {{
+    if ( isdefined( self.spawn_point_override ) )
+        return;
     // Plain WaW spawners use their own origin. Risers keep BO2's zone selection.
     if ( isdefined( self.script_string ) && self.script_string == "riser" )
         return;
@@ -309,6 +317,19 @@ bind_spawn_location()
             return;
         }}
     }}
+}}
+
+spawn_zombie( spawner, target_name, spawn_point, round_number )
+{{
+    // T6's helper accepts spawn_point but does not use it. Its callbacks run
+    // after a frame boundary, so bind the chosen active location first.
+    ai = maps\\mp\\zombies\\_zm_utility::spawn_zombie( spawner, target_name, spawn_point, round_number );
+    if ( isdefined( ai ) && isdefined( spawn_point ) )
+    {{
+        ai.spawn_point_override = spawn_point;
+        ai forceteleport( spawn_point.origin );
+    }}
+    return ai;
 }}
 
 select_speed()
@@ -345,8 +366,19 @@ source_animstate( animstate, substate )
         self [[ self.waw_previous_speed_callback ]]( animstate, substate );
 }}
 
-choose_spawner( candidates )
+choose_spawner( candidates, spawn_point )
 {{
+    // Synthesized locations retain each WaW actor's origin. Choose its source
+    // actor when available instead of an actor in a closed or distant zone.
+    if ( isdefined( spawn_point ) )
+    {{
+        matching = [];
+        foreach ( candidate in candidates )
+            if ( distancesquared( candidate.origin, spawn_point.origin ) < 1.0 )
+                matching[matching.size] = candidate;
+        if ( matching.size )
+            candidates = matching;
+    }}
     if ( !isdefined( level.waw_selection_round ) || level.waw_selection_round != level.round_number )
     {{
         level.waw_previous_spawner = undefined;
@@ -427,7 +459,14 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
         fn = zm.functions.get('round_spawning')
         if fn:
             for ref in gsc.references(zm.tokens, fn.body_open, fn.body_close):
+                if ref.name.lower() == 'spawn_zombie' and not ref.pointer and ref.qualifier in (None, r'maps\mp\zombies\_zm_utility'):
+                    zm.tokens[ref.index].text = RUNTIME + '::spawn_zombie'
+                    if ref.qual_index is not None:
+                        zm.tokens[ref.qual_index].text = ''
+                        zm.tokens[ref.index - 1].text = ''
                 if ref.name.lower() == 'random' and not ref.pointer and [t.low for t in zm.tokens[ref.index + 2:ref.index + 5]] in (
                     ['level', '.', 'zombie_spawners'], ['level', '.', 'zombie_spawn']):
                     zm.tokens[ref.index].text = RUNTIME + '::choose_spawner'
+                    close = gsc._match(zm.tokens, ref.index + 1, '(', ')')
+                    zm.tokens[close].text = ', spawn_point )'
             bootstrap.write_text(gsc.emit(zm.tokens), encoding='utf-8')

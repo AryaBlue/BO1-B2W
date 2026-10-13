@@ -147,11 +147,12 @@ namespace
                 return AssetCreationResult::Success(context.AddAsset<AssetImage>(assetName, image));
             }
 
-            image->streaming = 1;
-            if (StreamingMode(assetName) == 2)
+            image->streaming = StreamingMode(assetName) == 2 ? 2 : 1;
             {
-                // stock streaming-2 header: no pixels inline (resourceSize 0),
-                // levelCount 0, or 1 with NOMIPMAPS for unmipped images
+                // Both stock world/model (1) and effect/HUD (2) images retain
+                // this header. Pixel data stays in the ipak, but resource
+                // creation still needs its format and texture flags.
+                // levelCount 0, or 1 with NOMIPMAPS for unmipped images.
                 auto* loadDef = m_memory.Alloc<GfxImageLoadDef>();
                 loadDef->levelCount = texture->HasMipMaps() ? 0 : 1;
                 loadDef->flags = 0;
@@ -164,7 +165,6 @@ namespace
                 loadDef->format = static_cast<int>(texture->GetFormat()->GetDxgiFormat());
                 loadDef->resourceSize = 0;
                 image->texture.loadDef = loadDef;
-                image->streaming = 2;
             }
             image->streamedParts[0].levelCount = static_cast<uint32_t>(std::min(texture->GetMipMapCount(), 15));
             image->streamedParts[0].levelSize = static_cast<uint32_t>(fileSize);
