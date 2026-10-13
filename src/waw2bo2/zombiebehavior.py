@@ -7,6 +7,111 @@ from . import gsc
 RUNTIME = r'maps\mp\waw\_waw2bo2_zombie_behavior'
 ACTOR_TREE = 'waw2bo2_zombie_actor'
 SELECTION = r'maps\_waw2bo2_source_spawns'
+SPEED_STATE = r'maps\_waw2bo2_source_speed_state'
+
+
+def source_speed_state(sources, definition: dict) -> str | None:
+    """Keep initialization and round inputs read by the actual source selector.
+
+    Round-spawn helpers may initialize speed bounds as a side effect of choosing
+    the round population. Preserve those calls before choosing a zombie's speed,
+    without starting a second WaW spawning loop on the native AI runtime.
+    """
+    from .gscport import top_level_statements
+    contract = definition['source_speed']
+    round_contract = definition['source_round_state']
+    def owner(script, ref):
+        if ref.qualifier:
+            return sources.get(ref.qualifier)
+        if ref.name.lower() in script.functions:
+            return script
+        return next((dep for path in script.includes if (dep := sources.get(path)) and
+                     ref.name.lower() in dep.functions), None)
+    def fields(script, name, seen=None):
+        seen = set() if seen is None else seen
+        key = (script.path, name)
+        if key in seen or name not in script.functions:
+            return set(), set()
+        seen.add(key)
+        fn = script.functions[name]
+        tokens = script.tokens
+        reads, writes = set(), set()
+        for i in range(fn.body_open + 1, fn.body_close - 3):
+            if [t.low for t in tokens[i:i + 2]] == ['level', '.']:
+                field = tokens[i + 2].low
+                if tokens[i + 3].text in ('=', '+=', '-=', '++', '--'):
+                    writes.add(field)
+                if tokens[i + 3].text != '=':
+                    reads.add(field)
+        for ref in gsc.references(tokens, fn.body_open + 1, fn.body_close):
+            dep = owner(script, ref)
+            if dep:
+                r, w = fields(dep, ref.name.lower(), seen)
+                reads |= r
+                writes |= w
+        return reads, writes
+    speed = sources.get(contract['script'])
+    if not speed or contract['function'] not in speed.functions:
+        return None
+    reads, _ = fields(speed, contract['function'])
+    reads -= {'round_number', 'zombie_vars'}
+    initial, start, end = [], [], []
+    initializer = speed.functions.get('init')
+    if initializer:
+        for a, b in top_level_statements(speed.tokens, initializer.body_open, initializer.body_close):
+            stmt = speed.tokens[a:b]
+            if len(stmt) > 3 and [t.low for t in stmt[:2]] == ['level', '.'] and stmt[2].low in reads:
+                initial.append(gsc.emit(stmt))
+    framework = sources.get(round_contract['script'])
+    begin = framework.functions.get(round_contract['start_function']) if framework else None
+    if begin:
+        for a, b in top_level_statements(framework.tokens, begin.body_open, begin.body_close):
+            stmt = framework.tokens[a:b]
+            if stmt[0].low == 'while':
+                break
+            if stmt[0].low in ('for', 'foreach'):
+                continue
+            direct = len(stmt) > 3 and [t.low for t in stmt[:2]] == ['level', '.'] and stmt[2].low in reads
+            writers = [ref for ref in gsc.references(stmt) if (dep := owner(framework, ref)) and
+                       fields(dep, ref.name.lower())[1] & reads]
+            if direct or writers:
+                start.append(gsc.emit(stmt))
+    finish = framework.functions.get(round_contract['end_function']) if framework else None
+    if finish:
+        tokens = framework.tokens
+        # End-of-round scalar updates belong to the previous source round.
+        # A conditional update requires a control-flow slice, not a guessed rate.
+        depth = 0
+        for i in range(finish.body_open + 1, finish.body_close - 3):
+            depth += tokens[i].text == '{'
+            depth -= tokens[i].text == '}'
+            if [t.low for t in tokens[i:i + 2]] != ['level', '.'] or tokens[i + 2].low not in reads:
+                continue
+            if tokens[i + 3].text not in ('=', '+=', '-=', '++', '--'):
+                continue
+            boundary = max((j for j in range(finish.body_open, i) if tokens[j].text in (';', '{', '}')),
+                           default=finish.body_open)
+            prefix = [t.low for t in tokens[boundary + 1:i]]
+            if depth > 1 or any(word in ('if', 'else', 'for', 'switch', 'case') for word in prefix):
+                raise ValueError(f'{framework.path}::{finish.name}: conditional source speed state needs a control-flow slice')
+            j = next(j for j in range(i, finish.body_close) if tokens[j].text == ';')
+            stmt = copy.deepcopy(tokens[i:j + 1])
+            if depth == 0:
+                initial.append(gsc.emit(stmt))
+                continue
+            for k in range(len(stmt) - 2):
+                if [t.low for t in stmt[k:k + 3]] == ['level', '.', 'round_number']:
+                    stmt[k].text, stmt[k + 1].text, stmt[k + 2].text = 'source_round', '', ''
+            end.append(gsc.emit(stmt))
+    if not initial and not start and not end:
+        return None
+    includes = {contract['script'], round_contract['script']}
+    if framework:
+        includes.update(framework.includes)
+    return ('\n'.join('#include ' + path + ';' for path in sorted(includes)) +
+            '\ninit()\n{\n' + '\n'.join(initial) + '\n}\n' +
+            '\nprepare_round()\n{\n' + ('if (level.round_number > 1) {\nsource_round = level.round_number - 1;\n' +
+             '\n'.join(end) + '\n}\n' if end else '') + '\n'.join(start) + '\n}\n')
 
 
 def source_selection(sources, definition: dict) -> str | None:
@@ -44,6 +149,24 @@ def movement_sets(sources, definition: dict) -> tuple[str | None, dict[str, list
     contract = definition['source_movement']
     script = sources.get(contract['script'])
     fn = script.functions.get(contract['function']) if script else None
+    if script and fn is None:
+        # Older/renamed frameworks declare the same movement table in another
+        # initializer. Identify the role from its authored table assignments.
+        candidates = []
+        for candidate in script.functions.values():
+            if candidate.params:
+                continue
+            tokens = script.tokens
+            for i in range(candidate.body_open + 1, candidate.body_close - 12):
+                words = [t.low for t in tokens[i:i + 13]]
+                if words[:5] == ['level', '.', contract['field'], '[', '"' + contract['row'] + '"'] and \
+                        words[5:7] == [']', '['] and words[8:11] == [']', '=', '%'] and \
+                        re.fullmatch(r'"(?:walk|run|sprint)\d+"', words[7]):
+                    candidates.append(candidate)
+                    break
+        if len(candidates) > 1:
+            raise ValueError(f'{script.path}: ambiguous movement table initializers')
+        fn = candidates[0] if candidates else None
     if fn is None:
         return None, {}
     found = {}
@@ -94,23 +217,41 @@ def stage_actor_movement(sources, out_root: Path, bo2_root: Path, definition: di
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding='utf-8')
     for actor in (out_root / 'aitype').rglob('waw_*.?sc'):
-        actor.write_text(actor.read_text(encoding='utf-8').replace('zm_nuked_basic', ACTOR_TREE), encoding='utf-8')
+        text = actor.read_text(encoding='utf-8').replace('zm_nuked_basic', ACTOR_TREE)
+        text = re.sub(r'\n// BEGIN SOURCE MOVEMENT REFS.*?// END SOURCE MOVEMENT REFS\n', '', text, flags=re.S)
+        # T6 keeps only animation-tree nodes referenced by compiled scripts.
+        # ASD substate names are strings and do not pin those nodes themselves.
+        text += ('\n// BEGIN SOURCE MOVEMENT REFS\nwaw_reference_movement_anims()\n{\n' +
+                 ''.join(f'    dummy_anim_ref = %{clip};\n' for clip in sorted(set(clips))) +
+                 '}\n// END SOURCE MOVEMENT REFS\n')
+        actor.write_text(text, encoding='utf-8')
     return {'states': sets, 'tree': ACTOR_TREE, 'clips': sorted(set(clips))}
 
 
-def runtime_source(definition: dict, speed_function: str | None, selection_function: str | None = None) -> str:
+def runtime_source(definition: dict, speed_function: str | None, selection_function: str | None = None,
+                   speed_state_function: str | None = None) -> str:
     native = definition['native_spawner']
     owned = definition['owned_spawner']
     entry = definition['native_spawn_init']
-    result_field = definition['source_speed']['result_field']
+    result_field = definition['source_speed']['owned_result_field']
+    callback_field = definition['native_movement']['callback']
     speed = (f'self {speed_function}();\n'
-             f'    self maps\\mp\\zombies\\_zm_utility::set_zombie_run_cycle( self.{result_field} );'
+             f'    self refresh_speed();\n'
+             '    if ( !isdefined( self.waw_speed_callback_bound ) )\n'
+             '    {\n'
+             '        self.waw_speed_callback_bound = 1;\n'
+             f'        self.waw_previous_speed_callback = self.{callback_field};\n'
+             f'        self.{callback_field} = ::source_animstate;\n'
+             '    }'
              if speed_function else 'self maps\\mp\\zombies\\_zm_utility::init_zombie_run_cycle();')
+    state_init = f'{speed_state_function}::init();' if speed_state_function else ''
+    state_round = f'{speed_state_function}::prepare_round();' if speed_state_function else ''
     selection = (f'{selection_function}( candidates, level.waw_previous_spawner )'
                  if selection_function else 'common_scripts\\utility::random( candidates )')
     return f'''// waw2bo2: source WaW speed rules and plain spawner origin ownership.
 init()
 {{
+    {state_init}
     bound = 0;
     spawners = getentarray( "zombie_spawner", "script_noteworthy" );
     foreach ( spawner in spawners )
@@ -119,7 +260,8 @@ init()
             continue;
         for ( i = 0; i < spawner.spawn_funcs.size; i++ )
         {{
-            if ( spawner.spawn_funcs[i]["function"] == {native}::{entry} )
+            if ( spawner.spawn_funcs[i]["function"] == {native}::{entry} ||
+                 spawner.spawn_funcs[i]["function"] == {owned}::{entry} )
             {{
                 spawner.spawn_funcs[i]["function"] = {owned}::{entry};
                 bound++;
@@ -150,7 +292,36 @@ bind_spawn_location()
 
 select_speed()
 {{
+    if ( !isdefined( level.waw_speed_round ) || level.waw_speed_round != level.round_number )
+    {{
+        {state_round}
+        level.waw_speed_round = level.round_number;
+    }}
     {speed}
+}}
+
+refresh_speed( native_request )
+{{
+    if ( isdefined( self.{result_field} ) )
+        native_request = self.{result_field};
+    self maps\\mp\\zombies\\_zm_utility::set_zombie_run_cycle( native_request );
+}}
+
+source_animstate( animstate, substate )
+{{
+    // Cached native scripts can still request another speed. Restore the source
+    // field and its animation state when native movement consumes that request.
+    if ( isdefined( self.{result_field} ) && self.zombie_move_speed != self.{result_field} )
+    {{
+        self refresh_speed();
+        animstate = self maps\\mp\\animscripts\\zm_utility::append_missing_legs_suffix( "zm_move_" + self.{result_field} );
+        if ( isdefined( self.a.gib_ref ) && self.a.gib_ref == "no_legs" )
+            animstate = "zm_move_stumpy";
+        substate = undefined;
+        self setanimstatefromasd( animstate );
+    }}
+    if ( isdefined( self.waw_previous_speed_callback ) )
+        self [[ self.waw_previous_speed_callback ]]( animstate, substate );
 }}
 
 choose_spawner( candidates )
@@ -188,6 +359,14 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
         raise ValueError(f'{native}: speed initialization must precede zombie_think')
     if ref.qualifier is not None or script.tokens[ref.index - 1].low != 'self':
         raise ValueError(f'{native}: expected synchronous zombie method speed initialization')
+    movement = definition['native_movement']
+    movement_source = bo2_root / 'raw' / (movement['script'].replace('\\', '/') + '.gsc')
+    moving = gsc.parse(movement_source.read_text(encoding='utf-8'), movement['script'])
+    move_fn = moving.functions.get(movement['function'])
+    callback = ['self', '[[', 'self', '.', movement['callback'], ']]', '(']
+    words = [t.low for t in moving.tokens[move_fn.body_open:move_fn.body_close]] if move_fn else []
+    if not any(words[i:i + len(callback)] == callback for i in range(len(words))):
+        raise ValueError(f'{movement["script"]}: native movement does not invoke the source speed callback')
     script.tokens[ref.index].text = RUNTIME + '::select_speed'
     script.tokens[fn.body_open].text += '\n    self ' + RUNTIME + '::bind_spawn_location();'
     selections = [r for r in gsc.references(script.tokens, location.body_open, location.body_close)
@@ -215,6 +394,15 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
     bootstrap = out_root / 'maps/mp/waw/_waw2bo2_zm.gsc'
     if bootstrap.is_file():
         zm = gsc.parse(bootstrap.read_text(encoding='utf-8'), 'owned zombie bootstrap')
+        for ref in gsc.references(zm.tokens):
+            if ref.qualifier == native:
+                zm.tokens[ref.qual_index].text = owned
+            if ref.name.lower() == 'set_zombie_run_cycle':
+                if ref.qualifier is None or ref.qualifier == r'maps\mp\zombies\_zm_utility':
+                    zm.tokens[ref.index].text = RUNTIME + '::refresh_speed'
+                    if ref.qual_index is not None:
+                        zm.tokens[ref.qual_index].text = ''
+                        zm.tokens[ref.index - 1].text = ''
         fn = zm.functions.get('round_spawning')
         if fn:
             for ref in gsc.references(zm.tokens, fn.body_open, fn.body_close):

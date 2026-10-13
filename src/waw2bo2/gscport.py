@@ -375,6 +375,7 @@ def fix_syntax(tokens: list[gsc.Token]) -> int:
 # level.chests / chest_index: WaW's box triggers vs BO2 _zm_magicbox structs
 # (BO2 powerups such as fire sale iterate level.chests as BO2 structs).
 WAW_LEVEL_FIELDS = {"script": "waw_script", "chests": "waw_chests", "chest_index": "waw_chest_index", "_effect": "waw_effect"}
+WAW_LEVEL_FIELDS["zombie_move_speed"] = API['zombie_runtime']['source_speed']['owned_result_field']
 WAW_BOX_FLAGS = {'moving_chest_enabled', 'moving_chest_now', 'chest_has_been_used'}
 
 
@@ -390,6 +391,10 @@ def rename_level_fields(tokens: list[gsc.Token]) -> int:
         if t.kind == gsc.IDENT and t.low in WAW_LEVEL_FIELDS and tokens[i - 1].text == "." and \
                 tokens[i - 2].low == "level" and (i + 1 >= len(tokens) or tokens[i + 1].text != "("):
             t.text = WAW_LEVEL_FIELDS[t.low]
+            renamed += 1
+        elif t.kind == gsc.IDENT and t.low == "zombie_move_speed" and tokens[i - 1].text == ".":
+            # Source actor speed is separate from the field native AI can write.
+            t.text = API['zombie_runtime']['source_speed']['owned_result_field']
             renamed += 1
     return renamed
 
@@ -1742,6 +1747,17 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
             speed_function = tr.extract_entry(speed_definition['script'], speed_definition['function'])
             report.rewrites['source WaW zombie speed selector -> native spawn callback'] += 1
     tr.post_calls.insert(0, zombiebehavior.RUNTIME + '::init();')
+    speed_state_function = None
+    speed_state_source = zombiebehavior.source_speed_state(sources, API['zombie_runtime'])
+    if speed_state_source:
+        sources.text = dict(sources.text)
+        sources._parsed = dict(sources._parsed)
+        sources.text[zombiebehavior.SPEED_STATE + '.gsc'] = speed_state_source
+        sources.origin[zombiebehavior.SPEED_STATE + '.gsc'] = 'source speed initialization and round inputs'
+        sources._parsed.pop(zombiebehavior.SPEED_STATE + '.gsc', None)
+        tr.want(zombiebehavior.SPEED_STATE)
+        speed_state_function = ported_path(zombiebehavior.SPEED_STATE)
+        report.rewrites['source WaW speed round inputs -> shared runtime'] += 1
     selection_source = zombiebehavior.source_selection(sources, API['zombie_runtime'])
     selection_function = None
     if selection_source:
@@ -1828,7 +1844,7 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     (out_dir / "_waw2bo2_weapons.gsc").write_text(weapons_source(registration), encoding="utf-8")
     (out_dir / '_waw2bo2_zombie_behavior.gsc').write_text(
         zombiebehavior.runtime_source(API['zombie_runtime'], f'{CORE}::{speed_function}' if speed_function else None,
-                                      selection_function),
+                                      selection_function, speed_state_function),
         encoding='utf-8')
     report.weapon_registration = {role: [f for f in fns if f] for role, fns in registration.items()}
     report.characters = appearance

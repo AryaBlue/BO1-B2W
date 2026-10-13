@@ -7,6 +7,83 @@ from waw2bo2.t6api import T6Api
 
 
 class ZombieBehaviorTests(unittest.TestCase):
+    def make_movement_callback(self, root):
+        path = root / 'bo2/raw/maps/mp/animscripts/zm_run.gsc'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('setanimstatefromspeed(){ self [[ self.setanimstatefromspeed ]]("move", undefined); }')
+
+    def test_round_speed_inputs_follow_source_helpers_before_each_round(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            files = {
+                'maps/_zombiemode.gsc': '#include maps\\rules;\n'
+                    'round_spawning(){ players=get_players(); for(i=0;i<players.size;i++){ '
+                    'players[i].timer=0; } count=prepare(level.round_number); '
+                    'while(1){ spawn_zombie(); } }',
+                'maps/rules.gsc': 'prepare(round){ switch(round){ case 1: level.low=80; '
+                    'level.high=100; break; default: level.low=30; level.high=60; } return round*10; }\n'
+                    'choose(){ return randomintrange(level.low,level.high); }',
+                'maps/_zombiemode_spawner.gsc': '#include maps\\rules;\n'
+                    'set_run_speed(){ value=choose(); if(value>70) self.zombie_move_speed="sprint"; '
+                    'else self.zombie_move_speed="run"; }',
+            }
+            for name, text in files.items():
+                path = root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text(text)
+            sources = gscport.Sources([root], [], None)
+            state = zombiebehavior.source_speed_state(sources, gscport.API['zombie_runtime'])
+            self.assertIn('count=prepare(level.round_number)', state)
+            self.assertNotIn('spawn_zombie', state)
+            self.assertNotIn('players[i].timer', state)
+            gsc.parse(state, 'state')
+            runtime = zombiebehavior.runtime_source(gscport.API['zombie_runtime'], 'source::choose',
+                                                    speed_state_function='source_state')
+            self.assertLess(runtime.index('source_state::prepare_round'), runtime.index('self source::choose'))
+            self.assertIn('level.waw_speed_round != level.round_number', runtime)
+
+    def test_stock_round_speed_uses_source_initial_and_previous_round_values(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, text in {
+                'maps/_zombiemode.gsc': 'round_think(){ while(1){ '
+                    'level.zombie_move_speed=level.round_number*8; level.round_number++; } }',
+                'maps/_zombiemode_spawner.gsc': 'init(){level.zombie_move_speed=1;} '
+                    'set_run_speed(){self.zombie_move_speed=randomintrange(level.zombie_move_speed,35);}',
+            }.items():
+                p=root/name; p.parent.mkdir(parents=True,exist_ok=True); p.write_text(text)
+            state = zombiebehavior.source_speed_state(gscport.Sources([root], [], None), gscport.API['zombie_runtime'])
+            tokens = gsc.tokenize(state)
+            gscport.rename_level_fields(tokens)
+            text = gsc.emit(tokens)
+            self.assertIn('level.waw_zombie_move_speed=1', text)
+            self.assertIn('level.waw_zombie_move_speed=source_round*8', text)
+            self.assertIn('source_round = level.round_number - 1', text)
+            self.assertIn('if (level.round_number > 1)', text)
+            self.assertNotIn('level.round_number++', text)
+
+    def test_conditional_round_speed_writer_is_not_applied_unconditionally(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, text in {
+                'maps/_zombiemode.gsc': 'round_think(){while(1){ '
+                    'if(level.round_number>4) level.zombie_move_speed=100; level.round_number++;}}',
+                'maps/_zombiemode_spawner.gsc': 'set_run_speed(){self.zombie_move_speed=level.zombie_move_speed;}',
+            }.items():
+                p=root/name; p.parent.mkdir(parents=True,exist_ok=True); p.write_text(text)
+            with self.assertRaisesRegex(ValueError, 'conditional source speed state'):
+                zombiebehavior.source_speed_state(gscport.Sources([root], [], None), gscport.API['zombie_runtime'])
+
+    def test_source_actor_speed_writes_cannot_be_clobbered_by_native_field(self):
+        tokens = gsc.tokenize('f(){self.zombie_move_speed="sprint"; '
+                              'zombies[i].zombie_move_speed="run"; level.zombie_move_speed=100;}')
+        gscport.rename_level_fields(tokens)
+        self.assertIn('self.waw_zombie_move_speed="sprint"', gsc.emit(tokens))
+        self.assertIn('zombies[i].waw_zombie_move_speed="run"', gsc.emit(tokens))
+        runtime = zombiebehavior.runtime_source(gscport.API['zombie_runtime'], 'source::choose')
+        self.assertIn('self.zombie_move_speed != self.waw_zombie_move_speed', runtime)
+        self.assertIn('self.setanimstatefromspeed = ::source_animstate', runtime)
+        self.assertIn('self.waw_previous_speed_callback', runtime)
+        self.assertIn('native_request = self.waw_zombie_move_speed', runtime)
+
     def make_sources(self, root, text):
         path = root / 'maps/_zombiemode.gsc'
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -22,6 +99,15 @@ class ZombieBehaviorTests(unittest.TestCase):
             tree, sets = zombiebehavior.movement_sets(sources, gscport.API['zombie_runtime'])
             self.assertEqual(tree, 'human')
             self.assertEqual(sets, {'sprint': ['fast', 'fast'], 'run': ['jog']})
+
+    def test_movement_initializer_role_is_detected_from_table_assignments(self):
+        with tempfile.TemporaryDirectory() as temp:
+            sources = self.make_sources(Path(temp), '#using_animtree("human");\n'
+                'custom_moves(){level.scr_anim["zombie"]["sprint1"]=%source_sprint; '
+                'level.scr_anim["zombie"]["run1"]=%source_run;}')
+            tree, sets = zombiebehavior.movement_sets(sources, gscport.API['zombie_runtime'])
+            self.assertEqual(tree, 'human')
+            self.assertEqual(sets, {'sprint': ['source_sprint'], 'run': ['source_run']})
 
     def test_conditional_movement_table_is_not_guessed(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -56,6 +142,7 @@ class ZombieBehaviorTests(unittest.TestCase):
             self.assertIn('waw_anim_fast', (out / ('animtrees/' + zombiebehavior.ACTOR_TREE + '.atr')).read_text())
             for p in (out / 'aitype').rglob('*.?sc'):
                 self.assertIn(zombiebehavior.ACTOR_TREE, p.read_text())
+                self.assertIn('dummy_anim_ref = %waw_anim_fast;', p.read_text())
             self.assertNotIn('waw_anim_fast', (raw / 'animstatedefs/zm_nuked_basic.asd').read_text())
 
     def test_spawner_sampler_preserves_source_reroll_body(self):
@@ -75,6 +162,7 @@ class ZombieBehaviorTests(unittest.TestCase):
     def test_native_spawner_picks_use_source_sampler(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            self.make_movement_callback(root)
             native = root / 'bo2/raw/maps/mp/zombies/_zm_spawner.gsc'
             native.parent.mkdir(parents=True)
             native.write_text('zombie_spawn_init(){ self init_zombie_run_cycle(); self thread zombie_think(); } '
@@ -83,11 +171,15 @@ class ZombieBehaviorTests(unittest.TestCase):
             out.mkdir(parents=True)
             (out / '_waw2bo2_zombie_behavior.gsc').write_text('init(){}')
             (out / '_waw2bo2_zm.gsc').write_text('round_spawning(){ '
-                'spawner=random(level.zombie_spawners); other=random(other_array); }')
+                'spawner=random(level.zombie_spawners); other=random(other_array); }\n'
+                'init(){ maps\\mp\\zombies\\_zm_spawner::init(); }\n'
+                'zombie_speed_up(){ self set_zombie_run_cycle("walk"); }')
             zombiebehavior.stage_native_support(root / 'out', root / 'bo2', gscport.API['zombie_runtime'])
             text = (out / '_waw2bo2_zm.gsc').read_text()
             self.assertIn('::choose_spawner(level.zombie_spawners)', text)
             self.assertIn('other=random(other_array)', text)
+            self.assertIn('maps\\mp\\waw\\_waw2bo2_spawner::init()', text)
+            self.assertIn('::refresh_speed("walk")', text)
 
     def test_source_speed_body_and_dependencies_are_translated(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -111,7 +203,8 @@ class ZombieBehaviorTests(unittest.TestCase):
             self.assertIn('maps\\_zombiemode_spawner::choose', report.extracted)
             runtime = (root / 'out/maps/mp/waw/_waw2bo2_zombie_behavior.gsc').read_text()
             self.assertIn('::zombiemode_spawner__set_run_speed()', runtime)
-            self.assertIn('set_zombie_run_cycle( self.zombie_move_speed )', runtime)
+            self.assertIn('native_request = self.waw_zombie_move_speed', runtime)
+            self.assertIn('self.waw_zombie_move_speed = zombiemode_spawner__choose()', core)
             main = (root / 'out/maps/mp/waw/test.gsc').read_text()
             self.assertLess(main.index('_waw2bo2_zombie_behavior::init()'), main.index('initial_players_connected'))
             self.assertFalse(report.errors)
@@ -119,6 +212,7 @@ class ZombieBehaviorTests(unittest.TestCase):
     def test_owned_callback_adapts_location_and_speed_before_think(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
+            self.make_movement_callback(root)
             native = root / 'bo2/raw/maps/mp/zombies/_zm_spawner.gsc'
             native.parent.mkdir(parents=True)
             native.write_text('#include maps\\mp\\zombies\\_zm_spawner;\n'

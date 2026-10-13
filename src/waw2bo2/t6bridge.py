@@ -2301,6 +2301,9 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
         return set()
     api = t6api.build(bo2_root, stage / "t6api_cache.json", t6_unlinker)
     sources = gscport.Sources(script_roots, iwds, stock, stock_variant_roots)
+    # Movement declarations must come from the same recognized startup
+    # framework as the selector and its round state, including renamed copies.
+    sources.bind_zombie_framework(f'maps/{map_name}')
     actor_types = gscport.zombieappearance.source_actor_types(project_root)
     actor_template = None
     if actor_types:

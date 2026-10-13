@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Make the WaW source zombie speed authoritative over BO2 movement requests. Keep source actor/round speed fields separate, translate the selector's initialization and round inputs, and restore source speed through the native movement callback. Discover renamed movement-table initializers and reference authored clips in both actor scripts so T6 retains their animation-tree nodes.
 - Restrict BO2 template weapon assets, automatic stats-table registrations and client weapon lists to the map's dependencies and native runtime equipment. Keep converted WaW weapons and stats row indices intact. This prevents Dead Sand Elite's load-time weapon registry overflow.
 - Isolate converted WaW shared ammo cap groups from BO2 and distinguish groups with different authored limits. Weapons with matching source groups and limits still share their cap. This resolves Dead Sand Elite's bouncing-betty launch conflict and the equivalent mortar conflict without changing weapon capacities.
 - Remove stale server and client animtree initializer hooks when rebuilding a map that no longer needs script-model tree registration. Validate generated map initializer targets before compilation, catching missing exports that otherwise surface only at launch. This fixes Dead Sand Elite's unresolved `init` external.
