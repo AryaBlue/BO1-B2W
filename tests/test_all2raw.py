@@ -220,6 +220,41 @@ class All2RawTests(unittest.TestCase):
         retry.dump('en_common_zm')
         self.assertEqual(self.commands, [])
 
+    def test_dependency_lookup_extracts_requested_types_and_expands_without_losing_them(self):
+        all2raw.prepare(self.game, self.tool, self.cache, engine='T4')
+        resolver = wawassets.StockWawAssets(self.game, self.tool, self.cache)
+        resolver.load()
+        self.commands.clear()
+        resolver.dump('en_common_zm', 'xanim')
+        exports = [c for c in self.commands if '--include-assets' in c]
+        self.assertEqual(exports[0][exports[0].index('--include-assets') + 1], 'rawfile,xanim')
+        self.commands.clear()
+        resolver.dump('en_common_zm', 'material')
+        exports = [c for c in self.commands if '--include-assets' in c]
+        self.assertEqual(exports[0][exports[0].index('--include-assets') + 1], 'material,rawfile,xanim')
+        self.commands.clear()
+        resolver.dump('en_common_zm', 'xanim')
+        resolver.dump('en_common_zm', 'material')
+        self.assertEqual(self.commands, [])
+        resolver.dump('en_common_zm', 'image')
+        exports = [c for c in self.commands if '--include-assets' in c]
+        self.assertEqual(exports[0][exports[0].index('--include-assets') + 1], 'image,material,rawfile,xanim')
+        self.assertEqual(set(resolver.prepared_sources['en_common_zm']['assets'].split(',')),
+                         {'image', 'material', 'rawfile', 'xanim'})
+
+    def test_failed_dependency_expansion_keeps_the_previous_published_cache(self):
+        all2raw.prepare(self.game, self.tool, self.cache, engine='T4')
+        resolver = wawassets.StockWawAssets(self.game, self.tool, self.cache)
+        resolver.load()
+        before = resolver.prepared['en_common_zm']
+        inputs = dict(resolver.prepared_sources['en_common_zm'])
+        with patch.object(all2raw, 'run', side_effect=RuntimeError('native extraction failed')):
+            with self.assertRaisesRegex(RuntimeError, 'native extraction failed'):
+                resolver.dump('en_common_zm', 'xanim')
+        self.assertEqual(resolver.prepared['en_common_zm'], before)
+        self.assertEqual(resolver.prepared_sources['en_common_zm'], inputs)
+        self.assertTrue((before / 'extraction.json').is_file())
+
     def test_compact_policy_excludes_heavy_game_assets(self):
         self.assertEqual(all2raw.stock_assets('T4', Path('campaign.ff')), 'rawfile')
         self.assertEqual(all2raw.stock_assets('T4', Path('common.ff')), 'rawfile')

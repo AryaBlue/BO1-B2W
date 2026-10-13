@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recover only the requested WaW stock dependency asset types, retaining and expanding previously extracted types. Animation lookups no longer trigger unrelated campaign model/image/audio exports, and a material-only cache no longer claims missing asset kinds. See [Collingwood validation and limits](docs/COLLINGWOOD_DEPENDENCY_EXTRACTION.md).
+
 - Bind zombies to the round controller's selected active location before deferred native spawn callbacks, and redirect its cached stock round provider to the owned controller. Preserve custom providers and authored spawn delays.
 - Retain stock-style texture format/mip headers for streaming world and character images, and precache mapped effects before source scripts yield.
 - Translate additive world light-ray techniques in both unlit and emissive passes, including their normal stream and original view-angle falloff. This addresses Empty Walls' one-sided opaque black rays. See [validation and limits](docs/EMPTY_WALLS_RUNTIME_AND_RAYS.md).

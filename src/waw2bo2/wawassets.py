@@ -79,21 +79,26 @@ class StockWawAssets:
         if zone in self.prepared:
             inputs = self.prepared_sources.get(zone, {})
             available = set((inputs.get('assets') or '').split(','))
-            if inputs.get('assets') is None or kind in available or (
-                    inputs.get('assets') != 'rawfile' and 'material' in available):
+            requested = set((kind or DUMP_ASSETS).split(','))
+            if inputs.get('assets') is None or requested <= available:
                 return self.prepared[zone]
             from . import all2raw
+            # Recover only the requested asset types, retaining previously
+            # recovered types. An animation lookup must not export an entire
+            # campaign's unrelated images/models/sounds. Later dependency
+            # lookups expand this closure explicitly instead of assuming a
+            # material dump contains every other kind.
+            assets = ','.join(sorted((available | requested) - {''}))
             ff = Path(inputs['file'])
             root = self.work / 'dependencies' / all2raw.key(str(ff))
             with all2raw.cache_lock(root):
-                print(f'Extracting referenced WaW stock zone once: {ff.name}', flush=True)
-                output, _ = all2raw.extract_zone(ff, self.unlinker, root,
+                print(f'Extracting referenced WaW stock zone: {ff.name} ({assets})', flush=True)
+                output, data = all2raw.extract_zone(ff, self.unlinker, root,
                     all2raw.search_paths((ff.parent, self.waw_root / 'main', self.waw_root)),
-                    assets=all2raw.WAW_ASSETS.replace('clipmap,gfxworld,gameworldsp,', ''),
+                    assets=assets,
                     image_format='DDS', dependencies=inputs.get('dependencies'))
             self.prepared[zone] = output
-            # Future lookups in this build use the complete dependency dump.
-            self.prepared_sources[zone] = {**inputs, 'assets': all2raw.WAW_ASSETS}
+            self.prepared_sources[zone] = data['inputs']
             return output
         out = self.work / zone
         if not (out / DUMP_MARKER).exists():

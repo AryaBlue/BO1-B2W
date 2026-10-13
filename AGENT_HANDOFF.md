@@ -1,5 +1,18 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Collingwood dependency extraction, 2026-10-13
+
+- Branch `codex/collingwood-build-regression`: typed prepared stock-cache
+  lookups now expand only required kinds and preserve actual extraction receipts.
+- Failure bundle v0.2.14 aborts bulk `pby_fly.ff` dependency export with
+  `0xC0000409` and empty native log. This exact crash did not reproduce locally;
+  do not claim its internal cause established or full map rebuilt.
+- Native validation using the v0.2.14 packaged extractor recovers 301 animations
+  through the revised path, with cache reuse and no unrelated render/audio export.
+  All 520 tests pass. Details: `docs/COLLINGWOOD_DEPENDENCY_EXTRACTION.md`.
+- User confirmed Collingwood source is unavailable here. Full map build needs
+  validation on its source machine. No new desktop release or map install made.
+
 ## Empty Walls runtime and ray fixes, 2026-10-13
 
 - Active branch `codex/empty-walls-terrain-limit` contains the rebuilt moving
