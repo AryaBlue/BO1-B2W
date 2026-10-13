@@ -169,6 +169,65 @@ class Sources:
                 texts.append(f.read_text(encoding="utf-8", errors="replace"))
         return texts
 
+    def bind_zombie_framework(self, main_path: str) -> dict[str, str]:
+        """Recognize renamed WaW zombie startup through its framework contract."""
+        script = self.get(main_path)
+        main = script.functions.get('main') if script else None
+        if main is None:
+            return {}
+        candidates = set()
+        for ref in gsc.references(script.tokens, main.body_open, main.body_close):
+            if ref.qualifier is None or ref.pointer or ref.name.lower() != 'main':
+                continue
+            target = norm(ref.qualifier)
+            if target == ZOMBIEMODE:
+                candidates.add(target)
+                continue
+            dependency = self.get(target)
+            markers = {'init_levelvars', 'round_start', 'round_think',
+                       'onplayerconnect', 'player_damage_override'}
+            if dependency is None or not markers <= dependency.functions.keys():
+                continue
+            entry = dependency.functions.get('main')
+            if entry is None or entry.params:
+                continue
+            refs = gsc.references(dependency.tokens, entry.body_open, entry.body_close)
+            loads_map = any(r.qualifier and norm(r.qualifier) == r'maps\_load' and
+                            r.name.lower() == 'main' and not r.pointer for r in refs)
+            waits_players = any(r.name.lower() == 'flag_wait' and not r.pointer and
+                dependency.tokens[r.index + 2].kind == gsc.STRING and
+                dependency.tokens[r.index + 2].text.strip('"').lower() == 'all_players_connected'
+                for r in refs)
+            if loads_map and waits_players:
+                candidates.add(target)
+        if len(candidates) > 1:
+            raise ValueError(f'{main_path}: multiple zombie startup frameworks: {sorted(candidates)}')
+        if not candidates or candidates == {ZOMBIEMODE}:
+            return {}
+        alias = candidates.pop()
+        key = alias + '.gsc'
+        source = self.text.get(key, self.stock.get(key))
+        self.text = dict(self.text)
+        self.origin = dict(self.origin)
+        self.text[ZOMBIEMODE + '.gsc'] = source
+        self.origin[ZOMBIEMODE + '.gsc'] = self.origin.get(key, alias)
+        for path, text in list(self.text.items()):
+            tokens = gsc.tokenize(text)
+            changed = False
+            for ref in gsc.references(tokens):
+                if ref.qualifier and norm(ref.qualifier) == alias:
+                    tokens[ref.qual_index].text = ZOMBIEMODE
+                    changed = True
+            for token in tokens:
+                match = gsc.INCLUDE_RE.match(token.text) if token.kind == gsc.DIRECTIVE else None
+                if match and norm(match[1]) == alias:
+                    token.text = f'#include {ZOMBIEMODE};'
+                    changed = True
+            if changed:
+                self.text[path] = gsc.emit(tokens)
+        self._parsed = {}
+        return {alias: ZOMBIEMODE}
+
     def is_stock(self, path: str, ext: str = ".gsc") -> bool:
         key = norm(path) + ext
         if key not in self.stock:
@@ -1486,7 +1545,14 @@ class Translator:
                 continue
             dep = self.sources.get(target)
             hook = dep.functions.get(ref.name.lower()) if dep is not None else None
-            call = f"{ported_path(target)}::{ref.name}();"
+            prefix = ''
+            previous = ref.qual_index - 1
+            if zm.tokens[previous].low == 'thread':
+                prefix = 'thread '
+                previous -= 1
+            if zm.tokens[previous].low in ('level', 'self'):
+                prefix = zm.tokens[previous].text + ' ' + prefix
+            call = f"{prefix}{ported_path(target)}::{ref.name}();"
             if hook is None or call in calls:
                 continue
             if hook.params or _argc(zm.tokens, ref.index):
@@ -1532,7 +1598,7 @@ class Translator:
         # over getPlayers() there). BO2's counterpart flag is set by _zm.
         tokens[i].text = ("}\n\nwaw_main_post()\n{" + hooks +
                           "\n\tcommon_scripts\\utility::flag_wait( \"initial_players_connected\" );"
-                          "\t// WaW _zombiemode::main waits for all players")
+                          "\t// WaW _zombiemode::main waits for all players\n")
         for k in range(i + 1, end + 1):
             tokens[k].text = ""
             tokens[k].kind = gsc.PUNCT
@@ -1557,6 +1623,7 @@ def discover_animation_dependencies(sources: Sources, api: T6Api, map_name: str,
     No files are emitted, and no source function name needs a special list.
     """
     sources = copy.deepcopy(sources)
+    sources.bind_zombie_framework(f'maps/{map_name}')
     for name in sorted(actor_types):
         path = 'aitype\\' + name
         original = sources.text.get(path + '.gsc', sources.stock.get(path + '.gsc'))
@@ -1603,6 +1670,8 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     ``animtrees``: animtree names BO2 can load (stock + converted).
     ``core_animtrees``: WaW framework-override animtrees staged for BO2 -> their
     animations with WaW xanims (t6bridge.stage_core_animtrees)."""
+    sources = copy.copy(sources)
+    framework_aliases = sources.bind_zombie_framework(f'maps/{map_name}')
     if actor_types:
         sources = copy.copy(sources)
         sources.text = dict(sources.text)
@@ -1629,6 +1698,8 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
             if kept is not None:
                 sources.text[key], waw_perk_parts[norm(key)] = kept
     report = PortReport(map_main=f"maps\\{map_name}")
+    for alias, canonical in framework_aliases.items():
+        report.rewrites[f'framework startup {alias} -> {canonical}'] += 1
     tr = Translator(sources, api, report)
     tr.bo2_stock_perks = bo2_stock_perks
     tr.waw_perk_parts = waw_perk_parts
@@ -2139,21 +2210,29 @@ def animtrees_source(trees: list[str]) -> str:
 def hook_bo2_animtrees(main_gsc: Path, main_csc: Path, out_root: Path, trees: list[str]) -> bool:
     """Write the animtree registration (server and client script) and call it
     right after _zm::init in the BO2 map's server and client main (idempotent)."""
-    if not trees:
-        return False
     changed = False
     for (side, anchor, ext), main in zip(ANIMTREE_HOOKS, (main_gsc, main_csc)):
         base = "maps" if side == "maps" else "clientscripts"
         path = out_root / base / "mp" / "waw" / f"_waw2bo2_animtrees.{ext}"
+        call = f"    {base}\\mp\\waw\\_waw2bo2_animtrees::init();\n"
+        source = main.read_text(encoding="utf-8", errors="replace")
+        if not trees:
+            # Re-porting clears the generated server scripts, while the map
+            # main and client scripts can retain hooks from the previous run.
+            # Remove both sides when the new conversion needs no registration.
+            updated = source.replace(call, "")
+            if updated != source:
+                main.write_text(updated, encoding="utf-8")
+                changed = True
+            path.unlink(missing_ok=True)
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(animtrees_source(trees), encoding="utf-8")
-        source = main.read_text(encoding="utf-8", errors="replace")
         if anchor + '\n' not in source:
             # Perk ownership redirects _zm::init to the converter's owned
             # bootstrap. It still performs the same base animtree registration.
             anchor = anchor.replace(base + '\\mp\\zombies\\_zm',
                                     base + '\\mp\\waw\\_waw2bo2_zm')
-        call = f"    {base}\\mp\\waw\\_waw2bo2_animtrees::init();\n"
         if anchor + "\n" + call in source:
             continue
         if anchor + "\n" not in source:

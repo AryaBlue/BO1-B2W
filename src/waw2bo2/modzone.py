@@ -28,6 +28,112 @@ BSP_TYPES = {"clipmap", "clipmap_pvs", "comworld", "gameworldsp", "gameworldmp",
 # referenced by the template but not produced by All2Raw from any shipped zone
 KNOWN_ABSENT = {("xmodel", "viewmodel_base_viewhands")}
 
+# Native runtime equipment remains available when the map owns the gun lists.
+# These are used by BO2's player, buildable and melee controllers rather than
+# the template's mystery box. Converted WaW weapons arrive as protected extras.
+RUNTIME_WEAPONS = {"defaultweapon_mp", "death_self_zm", "death_throe_zm",
+                   "zombie_fists_zm", "zombie_melee", "zombie_builder_zm",
+                   "buildable_piece_zm", "syrette_zm", "zombie_bowie_flourish",
+                   "zombie_tazer_flourish", "knife_zm", "frag_grenade_zm",
+                   "m1911_zm", "m1911_upgraded_zm", "cymbal_monkey_zm",
+                   "claymore_zm", "bowie_knife_zm", "tazer_knuckles_zm",
+                   "knife_ballistic_zm", "knife_ballistic_upgraded_zm",
+                   "knife_ballistic_bowie_zm", "knife_ballistic_bowie_upgraded_zm",
+                   "knife_ballistic_no_melee_zm", "knife_ballistic_no_melee_upgraded_zm"}
+
+
+def prune_template_weapons(zone: str, project: Path, bo2: Path, dropped: list[str]) -> str:
+    """Keep native runtime weapons and map references, not the unused BO2 box.
+
+    T6 uses 8-bit runtime weapon indices. Loading the entire template arsenal
+    alongside a WaW arsenal can overflow its registry before players spawn.
+    Only template entries are removed; converted weapons remain protected.
+    """
+    from . import gsc, weapons
+    if not (project / 'content_source/weapons.runtime.json').is_file():
+        return zone
+    needed = set(RUNTIME_WEAPONS)
+    for side, ext in (("maps", "gsc"), ("clientscripts", "csc")):
+        for source in (project / side).rglob(f'*.{ext}'):
+            script = gsc.parse(source.read_text(encoding='utf-8'), str(source))
+            refs = gsc.references(script.tokens)
+            definitions = {fn.start for fn in script.functions.values()}
+            local_refs = {ref.name.lower() for ref in refs if ref.qualifier is None and ref.index not in definitions}
+            ignored = set()
+            # hook_bo2_weapons replaces these template entry points. Their
+            # unused bodies still name every BO2 gun and are not dependencies.
+            if source.parent == project / side / 'mp':
+                for name in ('include_weapons', 'custom_add_weapons'):
+                    if name in script.functions and (name not in local_refs or side == 'clientscripts' and name == 'include_weapons'):
+                        fn = script.functions[name]
+                        ignored.update(range(fn.start, fn.body_close + 1))
+            needed.update(t.text.lstrip('&#').strip('"') for i, t in enumerate(script.tokens)
+                          if t.kind == gsc.STRING and i not in ignored)
+    # A retained stock weapon can bring an alternate or a left-hand weapon.
+    queue, seen = list(needed), set()
+    while queue:
+        name = queue.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        source = next((root / 'weapons' / prefix / name for root in
+                       (project / 'content_source', bo2 / 'raw') for prefix in ('', 'mp', 'sp')
+                       if (root / 'weapons' / prefix / name).is_file()), None)
+        if source is None:
+            continue
+        fields = weapons.read_info_file(source)
+        for key in ('altWeapon', 'DualWieldWeapon', 'grenadeWeapon', 'parentWeaponName'):
+            dependency = fields.get(key)
+            if dependency:
+                needed.add(dependency)
+                queue.append(dependency)
+    output, removed = [], []
+    for line in zone.splitlines():
+        if line.strip().startswith('weapon,') and line.split(',')[-1].strip().split('/')[-1] not in needed:
+            dropped.append(line.strip())
+            removed.append(line.strip())
+        else:
+            output.append(line)
+    (project / 'content_source/template_weapons.json').write_text(json.dumps(
+        {'removed': removed, 'required': sorted(needed)}, indent=2), encoding='utf-8')
+    # Client template registration previously retained its entire BO2 arsenal
+    # even after the server hooks switched to WaW. Use the same retained native
+    # set and converted weapon names on both sides.
+    runtime = json.loads((project / 'content_source/weapons.runtime.json').read_text())
+    carried = {runtime.get('table', {}).get(name, name) for name in runtime.get('weapons', [])}
+    native = {line.split(',')[-1].strip().split('/')[-1] for line in output if line.strip().startswith('weapon,')}
+    # The engine also automatically registers weapons from this stats table,
+    # including guns available through BO2's parent zones/raw lookup. Pruning
+    # zone entries alone cannot remove those registrations. Keep row indices
+    # and names stable, but leave unused weapon rows inactive like stock gaps.
+    stats_source = bo2 / 'raw/zm/zm_statstable.csv'
+    if stats_source.is_file():
+        with stats_source.open(newline='', encoding='utf-8') as stream:
+            rows = list(csv.reader(stream))
+        inactive = []
+        for row in rows[1:]:
+            if len(row) > 4 and row[2].startswith('weapon_') and row[4] + '_zm' not in native | carried:
+                inactive.append(row[0])
+                row[2] = ''
+        destination = project / 'zm/zm_statstable.csv'
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open('w', newline='', encoding='utf-8') as stream:
+            csv.writer(stream).writerows(rows)
+        (project / 'content_source/weapon_stats.json').write_text(json.dumps(
+            {'inactive_weapon_rows': inactive, 'rows': len(rows)}, indent=2), encoding='utf-8')
+        output.append('stringtable,zm/zm_statstable.csv')
+    for source in (project / 'clientscripts/mp').glob('*.csc'):
+        script = gsc.parse(source.read_text(encoding='utf-8'), str(source))
+        fn = script.functions.get('include_weapons')
+        if fn is None:
+            continue
+        script.tokens[fn.body_open].text = '{\n' + ''.join(
+            f'    include_weapon( "{name}", 0 );\n' for name in sorted(native | carried) if name) + '}'
+        for token in script.tokens[fn.body_open + 1:fn.body_close + 1]:
+            token.pre = token.text = ''
+        source.write_text(gsc.emit(script.tokens), encoding='utf-8')
+    return '\n'.join(output) + '\n'
+
 
 def staged_materials(project: Path) -> list[tuple[Path, dict]]:
     """(root, report entry) for every material THIS build staged. The stage
@@ -127,7 +233,7 @@ def activate_mod_shaders(ff: Path, project: Path, work: Path, linker: Path, unli
     # Stringtables must also override loaded/stock assets. The linker's
     # independent search paths are sorted, so adding a project path beside
     # BO2's raw path is insufficient to guarantee source priority.
-    for name in ('mapstable.csv', 'gametypestable.csv'):
+    for name in ('mapstable.csv', 'gametypestable.csv', 'zm_statstable.csv'):
         source = project / 'zm' / name
         if source.is_file():
             target = overlay / 'zm' / name
@@ -594,6 +700,8 @@ def link_mod(bo2: Path, work: Path, unlinker: Path, extra_lines: list[str] = (),
     zone_file = work / "zone_source" / "mod.zone"
     zone_file.parent.mkdir(parents=True, exist_ok=True)
     zone_text = build_mod_zone(template, dropped)
+    if asset_root is not None:
+        zone_text = prune_template_weapons(zone_text, asset_root, bo2, dropped)
     closure = script_closure(zone_text, bo2 / "raw", stock_scripts(bo2, unlinker, stock_dump))
     if closure:
         zone_text += "// waw2bo2: scripts the template's scripts depend on\n" + \
@@ -613,7 +721,7 @@ def link_mod(bo2: Path, work: Path, unlinker: Path, extra_lines: list[str] = (),
     protected = {line.strip() for line in extra_lines if line.strip() and not line.lstrip().startswith("//")}
     table_override = work / 'lobby_input'
     if asset_root is not None:
-        for name in ('mapstable.csv', 'gametypestable.csv'):
+        for name in ('mapstable.csv', 'gametypestable.csv', 'zm_statstable.csv'):
             source = asset_root / 'zm' / name
             if source.is_file():
                 target = table_override / 'zm' / name

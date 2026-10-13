@@ -10,6 +10,52 @@ from waw2bo2 import modzone
 
 
 class ModZoneTests(unittest.TestCase):
+    def test_template_arsenal_pruning_keeps_map_runtime_and_alternate_dependencies(self):
+        from waw2bo2 import gsc
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project, bo2 = root / 'project', root / 'bo2'
+            (project / 'content_source').mkdir(parents=True)
+            (project / 'content_source/weapons.runtime.json').write_text(json.dumps(
+                {'weapons': ['source_gun'], 'table': {'source_gun': 'waw_source_gun'}}))
+            server, client = project / 'maps/mp/map.gsc', project / 'clientscripts/mp/map.csc'
+            server.parent.mkdir(parents=True)
+            client.parent.mkdir(parents=True)
+            server.write_text('main(){ maps\\mp\\waw\\weapons::include_weapons(); '
+                              'precacheitem("custom_native"); }\n'
+                              'include_weapons(){ precacheitem("unused_gun"); }\n'
+                              'custom_add_weapons(){ precacheitem("unused_gun"); }')
+            client.write_text('main(){ include_weapons(); }\n'
+                              'include_weapons(){ include_weapon("unused_gun"); }')
+            weapon = bo2 / 'raw/weapons/mp/custom_native'
+            weapon.parent.mkdir(parents=True)
+            weapon.write_text('WEAPONFILE\\altWeapon\\custom_alt')
+            stats = bo2 / 'raw/zm/zm_statstable.csv'
+            stats.parent.mkdir(parents=True)
+            stats.write_text('a0,b1,c2,d3,e4\n'
+                             '7,,weapon_pistol,m1911,m1911\n'
+                             '22,,weapon_smg,unused_gun,unused_gun\n')
+            zone = ('>game,T6\nweapon,mp/unused_gun\nweapon,mp/custom_native\n'
+                    'weapon,mp/custom_alt\nweapon,mp/m1911_zm\nmaterial,keep\n')
+            dropped = []
+            result = modzone.prune_template_weapons(zone, project, bo2, dropped)
+            self.assertEqual(dropped, ['weapon,mp/unused_gun'])
+            self.assertIn('weapon,mp/custom_native', result)
+            self.assertIn('weapon,mp/custom_alt', result)
+            self.assertIn('material,keep', result)
+            self.assertIn('waw_source_gun', client.read_text())
+            self.assertNotIn('unused_gun', client.read_text())
+            self.assertIn('custom_alt', client.read_text())
+            with (project / 'zm/zm_statstable.csv').open(newline='') as stream:
+                rows = list(csv.reader(stream))
+            self.assertEqual(rows[1], ['7', '', 'weapon_pistol', 'm1911', 'm1911'])
+            self.assertEqual(rows[2], ['22', '', '', 'unused_gun', 'unused_gun'])
+            self.assertIn('stringtable,zm/zm_statstable.csv', result)
+            gsc.parse(client.read_text(), 'client')
+            self.assertEqual(modzone.prune_template_weapons(zone, project, bo2, []), result)
+            (project / 'content_source/weapons.runtime.json').unlink()
+            self.assertEqual(modzone.prune_template_weapons(zone, project, bo2, []), zone)
+
     def test_authored_branding_survives_stock_table_rebuilds(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

@@ -7,6 +7,23 @@ from waw2bo2 import weapons
 
 
 class WeaponTests(unittest.TestCase):
+    def test_shared_ammo_groups_preserve_limits_without_engine_collisions(self):
+        schema = {"sharedAmmoCapName": "CSPFT_STRING", "sharedAmmoCap": "CSPFT_INT",
+                  "ammoName": "CSPFT_STRING", "clipName": "CSPFT_STRING"}
+        def convert(name, capacity, group="WEAPON_GROUP"):
+            return weapons.convert(name, {"sharedAmmoCapName": group, "sharedAmmoCap": capacity,
+                                          "ammoName": "ammo", "clipName": "clip"}, schema, schema)
+        custom, stock, peer = convert("custom", "4"), convert("stock", "2"), convert("peer", "4")
+        self.assertNotEqual(custom.fields["sharedAmmoCapName"], "WEAPON_GROUP")
+        self.assertNotEqual(custom.fields["sharedAmmoCapName"], stock.fields["sharedAmmoCapName"])
+        self.assertEqual(custom.fields["sharedAmmoCapName"], peer.fields["sharedAmmoCapName"])
+        self.assertEqual(custom.fields["sharedAmmoCap"], "4")
+        self.assertEqual(stock.fields["sharedAmmoCap"], "2")
+        self.assertEqual(custom.fields["ammoName"], "waw_ammo")
+        self.assertEqual(custom.fields["clipName"], "waw_clip")
+        self.assertEqual(convert("empty", "0", "").fields["sharedAmmoCapName"], "")
+        self.assertIn("sharedAmmoCapName", custom.translations)
+
     def test_waw_offhand_class_gets_t6_inventory_slot(self):
         schema = {"offhandClass": "WFT_OFFHAND_CLASS"}
         for cls, slot in (("Frag Grenade", "Lethal grenade"),

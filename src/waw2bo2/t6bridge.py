@@ -2423,6 +2423,26 @@ def compiled_scripts_root(stage: Path, project: str) -> Path:
     return stage / "script_build" / "compiled"
 
 
+def validate_owned_init_calls(project_root: Path, project: str) -> None:
+    """Catch stale generated bootstrap hooks before the native script linker.
+
+    The linker can compile a qualified call whose target script is absent;
+    the game only reports the unresolved external when loading the map.
+    """
+    from . import gsc
+    for side, ext in (("maps", "gsc"), ("clientscripts", "csc")):
+        main = project_root / side / "mp" / f"{project}.{ext}"
+        if not main.is_file():
+            continue
+        script = gsc.parse(main.read_text(encoding="utf-8"), str(main))
+        for ref in gsc.references(script.tokens):
+            if ref.name.lower() != "init" or not ref.qualifier or not ref.qualifier.startswith(side + "\\mp\\waw\\"):
+                continue
+            target = project_root / (ref.qualifier.replace("\\", "/") + "." + ext)
+            if not target.is_file() or "init" not in gsc.parse(target.read_text(encoding="utf-8"), str(target)).functions:
+                raise StageError(f"{main}: generated initializer {ref.qualifier}::init is missing")
+
+
 def compile_scripts(stage: Path, project: str, bo2_root: Path, oat_unlinker: Path) -> tuple[list[str], str]:
     """Compile the map GSC/CSC with the BO2 mod tools linker, then extract the
     bytecode with the OAT unlinker so the bridge embeds compiled scripts.
@@ -2434,6 +2454,7 @@ def compile_scripts(stage: Path, project: str, bo2_root: Path, oat_unlinker: Pat
 
     project_root = stage / "zone_raw" / project
     gscport.ensure_owned_client_bootstrap(project_root, bo2_root)
+    validate_owned_init_calls(project_root, project)
     scripts = map_scripts(project_root, project)
     work = stage / "script_build"
     if work.exists():
