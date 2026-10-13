@@ -1,5 +1,35 @@
 # McDonald's zombie spawn and speed translation
 
+## Follow-up after the first playtest
+
+The player confirmed faster zombies, but reported a remaining pace difference
+and few arrivals at the window. The first change preserved the speed label;
+native actor states still selected BO2's sprint v1/v2 animations. The source
+movement table assigns every sprint variant to WaW's `ai_zombie_sprint_v4`.
+
+The converter now reads the authored movement table and binds its converted
+clips through an owned actor animation tree and state definition on both
+server and client. Other native states, including window traversals, remain
+in that state definition. Conditional table assignments are reported explicitly
+rather than evaluated by guessing. This changes the movement animation itself;
+no speed multiplier is invented.
+
+Spawner selection is now extracted from the source round loop and translated
+as a regular script. McDonald's rerolls once when the chosen spawner matches
+the previous one; it can still choose that spawner again. History resets each
+round. The native round manager calls that source sampler when selecting actor
+spawners. Authored positions remain spread around the map; no near-window bias
+is added. Arrival rate and physical movement need another playtest.
+
+Follow-up validation: 491 tests passed; native linking and both material/hitbox
+audits passed; 91 compiled scripts matched after extraction. The owned actor
+tree and state definition matched their staged bytes after extraction from
+`mod.ff`, and the linked asset list contains `waw_anim_ai_zombie_sprint_v4`.
+The extracted sprint state references only that source clip. This Unlinker
+does not export T6 xanim payloads, so a payload round trip was not performed.
+The updated build is installed as `zm_mcdonalds_waw`; restart the game so its
+mod fastfile and animation assets reload.
+
 Branch: `codex/mcdonalds-spawns-speed`. Local conversion and native validation
 completed on 2026-10-12 with converter 0.2.14 plus branch changes.
 
