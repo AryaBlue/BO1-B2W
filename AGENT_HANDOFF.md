@@ -2188,3 +2188,90 @@ Open:
   limit cases warn with the model name. Linker rebuilt (MSBuild Tools\Linker Release Win32, LAA kept).
   Nuketown remaster relinked + INSTALLED 23:09-23:10. Pre-existing for all converted maps; coop likely exposes
   it by tracing the other player's held weapon world model. Not yet re-tested in coop.
+
+## 2026-10-13: Cheese Cube lethal water / moving terrain ownership
+
+- Branch: `codex/cheese-cube-lethal-water`. The source water hazard is
+  `damage_test`: a 0.05-second `IsTouching(cheese_bottom)` loop followed by
+  `DoDamage(self.health + 666, self.origin)`. Its calls were preserved.
+- Root cause: cmodel `*242` has no brushes, but its terrain AABB root
+  `(30443, 1, 32)` owns 32 local-space water triangles. Collision export
+  treated all terrain as static world geometry; the native linker cleared
+  every moving cmodel's terrain leaf. Consequently the moving water could
+  not satisfy the source contact check.
+- Clip interchange v9 exports cmodel terrain roots. Python resolves ownership
+  through source trees/partitions; FBX material slots and clipmaterials carry
+  model indices. T6 excludes owned partitions from the world tree and fills
+  each cmodel's local-space terrain roots/contents. No map-specific damage
+  rewrite or replacement collision box. Legacy moving-terrain dumps fail
+  with a re-extraction instruction. T6 collision dumps now expose model and
+  world leaf roots for round-trip audits.
+- Validation: 504 unit tests pass; both native tools build; the upstream T4
+  patch reverse-checks against its patched source. A fresh Cheese Cube dump
+  confirms the root. Native link/unlink verifies exact geometry for all 2,125
+  exported terrain triangles: world 1,935; models 121/123/129/146/164/225/226/
+  227/242 own 128/4/4/6/4/4/4/4/32. Model 242 has 16 partition AABBs and
+  water contents 0x20, with no world-tree overlap. All 99 rebuilt scripts
+  equal the previously installed scripts byte-for-byte.
+- Installed verified FF/IPAK to the existing `zm_ccube_u_waw` mod; saved
+  previous map files and T4 Unlinker in `work/lethal_water/backup`. Updated
+  the local T4 extractor for future conversions. Evidence and hashes:
+  `work/lethal_water/verification.json`; native logs and source/roundtrip
+  dumps are alongside it. Live gameplay, including solo/co-op outcomes,
+  still needs testing after restarting the map.
+
+## 2026-10-13: Iron Man suit HUD investigation
+
+- User supplied third-party screenshots of stuck/doubled helmets after battery
+  depletion; no suit or reproduction sequence is known. Investigation:
+  `docs/IRON_MAN_SUIT_HUD.md`.
+- Likely source gameplay defect: Mk1/3/4/5/6/16 depletion clears used_suit
+  while leaving its active suit flag 1. A different suit can then deploy while
+  the prior helmet thread waits indefinitely for the old flag to become 0.
+  War Machine does not unlock used_suit on depletion. Converted scripts retain
+  these source conditions; no map-specific suit lifecycle patch has been made.
+- Shared compatibility cleanup fix: API definitions now map resolved native
+  destroyElem/destroy_hud helpers to guarded wrappers. Simple/dotted HUD
+  receivers become arguments. waw_destroy_hud checks isdefined before invoking
+  _zm_utility::destroy_hud, retaining native bookkeeping on valid HUDs.
+  Custom local source destructors remain unchanged. This prevents missing or
+  repeated cleanup from interrupting caller continuation; it does not fix the
+  overlapping-mask source state or later use-after-destroy accesses.
+- 506 tests pass; 99 staged scripts compile and match the candidate linked
+  fastfile byte-for-byte. Water collision remains model 242, contents 0x20,
+  32 triangles / 16 roots. Candidate and evidence: work/suit_hud_check/.
+  Candidate is NOT installed: user is testing the previously installed water
+  fix. Live suit behavior remains unverified.
+
+## 2026-10-13: Cheese Cube perks, default prompts and cheese materials
+
+- Investigation: `docs/CHEESE_CUBE_TEXTURES_AND_PERKS.md`. User confirmed the
+  Cheese-o-matic source texture and wants cheese on both the machine and
+  upgraded weapons. The reported Cheese Gun's upgrade state is unknown.
+- Double Dew's source `specialty_shades` doubles kill points. Native scoring
+  replaced its framework and dropped that arithmetic. `scorebehavior.py`
+  extracts pure direct-event perk rules and applies them before native scoring's
+  final multiplier, routing owned spawn/death callbacks to owned native scoring.
+  Nested source conditions, side effects and unknown locals are not guessed.
+- Empty source trigger_use hints now receive WaW's original localized default
+  before source initialization. Authored hints remain authoritative. The arm
+  pickup shown in the report had no explicit hint, exposing T6's missing-text
+  sentinel rather than WaW's default.
+- Converted materials colliding with stock names receive isolated identities;
+  25 in this map, including Pack-a-Punch and four perk HUD materials. GLTF,
+  world FBX, FX, zone dependencies and HUD script references are updated.
+- Source cheese camo's reveal/scroll texture entries have opaque hashes, without
+  readable parameter names. Shader adaptation now resolves and preserves those
+  entries. The material has 16 active shader slots instead of only 0 and 2.
+- A full rebuild also required preserving a braced source ending guard in the
+  zombie speed-state slice; unsupported control flow still fails explicitly.
+- 512 tests pass. Full native build: no missing assets; material audits check
+  31,150 map / 45,822 mod arguments, zero violations; 5,210 authored bone hitboxes
+  preserved. Recompiled after the HUD rename update. 107 compiled scripts
+  round-trip byte-exact. Source MP40, camo and machine image pixels match;
+  terrain geometry and model 242 water roots/contents match the installed fix.
+- Candidate/evidence: `work/cheese_visuals_perks/build`, `verification.json`,
+  `build.log`, `relink.log`, and `roundtrip/`. NOT installed while the user tests
+  the water fix. Source unupgraded Cheese Gun image/model/material chain was
+  already correct in the installed mod; further runtime trouble there remains
+  unconfirmed. Live gameplay and visual results still require testing.

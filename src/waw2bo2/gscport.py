@@ -514,10 +514,10 @@ def bridge_font_scales(tokens: list[gsc.Token]) -> int:
     return changed
 
 
-def bridge_hud_cleanup(tokens: list[gsc.Token], index: int) -> bool:
+def bridge_hud_cleanup(tokens: list[gsc.Token], index: int, wrapper: str = "waw_destroy_hud_elem") -> bool:
     """Call the idempotent native HUD cleanup by argument, not receiver.
 
-    Called only after resolving destroyElem to BO2's HUD utility. A source
+    Called only after resolving a cleanup to BO2's HUD utility. A source
     implementation with the same name retains its own behavior.
     """
     if index < 1 or tokens[index - 1].kind != gsc.IDENT:
@@ -530,7 +530,7 @@ def bridge_hud_cleanup(tokens: list[gsc.Token], index: int) -> bool:
     if start and tokens[start - 1].text in (".", "]", ")", "thread"):
         return False
     receiver = gsc.emit(tokens[start:index]).strip()
-    tokens[start].text = f"{COMPAT}::waw_destroy_hud_elem( {receiver} )"
+    tokens[start].text = f"{COMPAT}::{wrapper}( {receiver} )"
     tokens[start].kind = gsc.PUNCT
     for token in tokens[start + 1:index + 3]:
         token.text = token.pre = ""
@@ -1104,10 +1104,12 @@ class Translator:
                     self.report.rewrites[f"builtin {name}: {argc - rng[1]} WaW-only argument(s) dropped"] += 1
                     argc = rng[1]
                 repl = self.resolve_builtin(name, argc, where, script, included_bo2, method)
-            if (name == "destroyelem" and ref.method and argc == 0 and
-                    ((owner is not None and API["core_scripts"].get(owner) == r"maps\mp\gametypes_zm\_hud_util") or
-                     repl == r"maps\mp\gametypes_zm\_hud_util::destroyelem")):
-                if bridge_hud_cleanup(tokens, ref.index):
+            native_cleanup = repl
+            if repl is None and owner is not None and API["core_scripts"].get(owner):
+                native_cleanup = API["core_scripts"][owner] + "::" + name
+            wrapper = API["hud_cleanup_wrappers"].get(native_cleanup)
+            if wrapper and ref.method and argc == 0:
+                if bridge_hud_cleanup(tokens, ref.index, wrapper):
                     self.report.rewrites["idempotent native HUD cleanup"] += 1
                     continue
             if repl is not None:
@@ -1828,6 +1830,8 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
                       "framework_level_state()\n{\n" + "".join(f"\t{fn}();\n" for fn in framework_state) + "}\n")
     (out_dir / "_waw2bo2_compat.gsc").write_text((COMPAT_DIR / "_waw2bo2_compat.gsc").read_text(encoding="utf-8"),
                                                  encoding="utf-8")
+    from . import hintdefaults
+    (out_dir / '_waw2bo2_hint_defaults.gsc').write_text(hintdefaults.source(out_root), encoding='utf-8')
     core_head = ["// waw2bo2: WaW framework functions BO2 has no counterpart for, extracted from the map's",
                  "// framework scripts (its overrides, else stock WaW) and translated.",
                  *[f"#include {inc};" for inc in CORE_INCLUDES], ""]

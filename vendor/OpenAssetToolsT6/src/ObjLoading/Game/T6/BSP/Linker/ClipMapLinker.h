@@ -38,6 +38,9 @@ namespace BSP
             T6::vec3_t maxs;
             size_t firstBrush;
             size_t brushCount;
+            size_t firstTerrain = 0;
+            size_t terrainCount = 0;
+            int terrainContents = 0;
         };
 
     private:
@@ -78,6 +81,7 @@ namespace BSP
         size_t highestLeafObjectCount = 0;
         std::map<std::string, uint16_t> materialByFbx; // collision FBX material -> clip material
         std::vector<int> materialContents;              // clip material contents
+        std::vector<unsigned int> materialModels;       // authored cmodel owner
         std::vector<uint16_t> partitionMaterials;       // clip material of each partition
     };
 } // namespace BSP

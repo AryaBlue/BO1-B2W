@@ -37,6 +37,7 @@ init()
     if ( !isdefined( level.waw2bo2_runtime_weapons ) )
         level.waw2bo2_runtime_weapons = [];
     maps\mp\waw\_waw2bo2_assets::init();
+    maps\mp\waw\_waw2bo2_hint_defaults::init();
     maps\mp\waw\_waw2bo2_visions::init();
     maps\mp\_utility::registerclientsys( "waw_sun" );
     maps\mp\_utility::registerclientsys( "waw_vision_global" );
@@ -819,6 +820,14 @@ waw_destroy_hud_elem( element )
 {
     if ( isdefined( element ) )
         element maps\mp\gametypes_zm\_hud_util::destroyelem();
+}
+
+// The Zombies helper owns its HUD count and uses raw Destroy, rather than
+// the HUD utility's parent/child cleanup. Retain that helper on valid HUDs.
+waw_destroy_hud( element )
+{
+    if ( isdefined( element ) )
+        element maps\mp\zombies\_zm_utility::destroy_hud();
 }
 
 waw_givemaxammo( name )

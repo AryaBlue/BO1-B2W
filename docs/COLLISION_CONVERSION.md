@@ -121,6 +121,32 @@ full contents; leaf-brush kd culling (child[0] = above dist - range) reaches
 every brush at its own points; triangle contents equal the leaf aabb material
 (no ancestor mask differs). The blocking brushes at other spots are WaW walls.
 
+## Moving terrain and scripted contact hazards
+
+Clip dump v9 records each cmodel's terrain AABB roots in addition to its
+brush ownership. Terrain can belong to a moving `script_brushmodel` even
+when that model has no collision brushes. Treating all terrain as world
+geometry leaves its moving collision leaf empty and breaks `IsTouching`.
+
+The exporter resolves triangle ownership through the authored AABB trees
+and partitions. FBX material slots distinguish both material and cmodel;
+`BSP/clipmaterials.json` carries the model index to the native linker.
+The linker excludes these partitions from the world BSP tree and places
+their local-space AABB roots and contents in the original cmodel leaf.
+Native entity movement and contact checks then use the original geometry.
+No bounds-based replacement, solid water brush, or damage watcher is added.
+Legacy dumps containing submodels and terrain require re-extraction with
+the updated WaW extractor; they cannot safely supply this ownership.
+
+Cheese Cube Unlimited exposed this defect: `cheese_bottom` (`*242`) has
+zero brushes but 32 water triangles, with contents `0x20`. Its source
+polls contact every 0.05 seconds and applies `self.health + 666` damage.
+The rebuilt fastfile preserves all 32 triangles exactly in model 242,
+none in the static world tree, and retains all 99 installed scripts
+byte-for-byte. The source damage, movement, solo ending, and co-op rules
+remain responsible for gameplay. Automated verification does not establish
+in-game timing or multiplayer behavior.
+
 ## How to verify (do this after any collision change)
 
 ### Physical prop projectile repair (2026-10-06)

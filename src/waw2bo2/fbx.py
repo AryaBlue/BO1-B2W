@@ -187,6 +187,56 @@ def write_world_fbx(world: GfxWorld, path: Path, blend_data_materials: frozenset
     return {surface.index: i for i, (_material, group, _lightmap) in enumerate(meshes) for surface in group}
 
 
+def collision_triangle_models(collision: CollisionWorld) -> list[int]:
+    """Resolve terrain ownership from authored cmodel trees, never bounds."""
+    owners = [0] * (len(collision.indices) // 3)
+    roots = getattr(collision, "model_roots", None)
+    if roots is None:
+        if getattr(collision, "partitions", None) and len(getattr(collision, "submodels", [])) > 1:
+            raise ValueError("Collision dump lacks moving terrain ownership; re-extract with the updated WaW extractor")
+        return owners
+    claimed = {}
+    for model, model_root in enumerate(roots):
+        if not model:
+            continue
+        model_roots = [model_root]
+        pending = [(index, frozenset()) for first, count, contents in model_roots if contents
+                   for index in range(first, first + count)]
+        visited = set()
+        while pending:
+            index, ancestors = pending.pop()
+            if index in ancestors or not 0 <= index < len(collision.aabb_trees):
+                raise ValueError("Invalid or cyclic moving terrain AABB tree")
+            if index in visited:
+                continue
+            visited.add(index)
+            material, children, child = collision.aabb_trees[index]
+            if children:
+                next_ancestors = ancestors | {index}
+                pending.extend((child_index, next_ancestors) for child_index in range(child, child + children))
+                continue
+            if not 0 <= child < len(collision.partitions):
+                raise ValueError("Moving terrain references an invalid partition")
+            start, size = collision.partitions[child]
+            if start + size > len(owners):
+                raise ValueError("Moving terrain partition exceeds the triangle array")
+            for triangle in range(start, start + size):
+                if triangle in claimed and claimed[triangle] != model:
+                    raise ValueError("Terrain triangle belongs to multiple moving models")
+                claimed[triangle] = model
+                owners[triangle] = model
+    return owners
+
+
+def collision_slot_models(collision: CollisionWorld) -> list[int]:
+    per_triangle, materials = collision_material_slots(collision)
+    models = [0] * len(materials)
+    for slot, model in zip(per_triangle, collision_triangle_models(collision)):
+        if slot is not None:
+            models[slot] = model
+    return models
+
+
 def collision_material_slots(collision: CollisionWorld) -> tuple[list[int | None], list[int]]:
     """Per-triangle FBX material slot and the WaW clip material of each slot.
 
@@ -199,22 +249,23 @@ def collision_material_slots(collision: CollisionWorld) -> tuple[list[int | None
     Dumps without the table keep one solid slot (material -1)."""
     if not collision.triangle_materials:
         return [0] * (len(collision.indices) // 3), [-1]
-    slots: dict[int, int] = {}
+    slots: dict[tuple[int, int], int] = {}
+    models = collision_triangle_models(collision)
     per_triangle: list[int | None] = []
     removed = {s["triangle"] for s in oneway.one_way_sheets(collision)} if getattr(collision, "vertices", None) else set()
     for triangle, material in enumerate(collision.triangle_materials):
         if triangle in removed or material == 0xFFFF or not collision.materials[material].content_flags:
             per_triangle.append(None)
             continue
-        per_triangle.append(slots.setdefault(material, len(slots)))
-    return per_triangle, list(slots)
+        per_triangle.append(slots.setdefault((material, models[triangle]), len(slots)))
+    return per_triangle, [material for material, model in slots]
 
 
 def write_collision_fbx(collision: CollisionWorld, path: Path) -> list[int]:
-    """Write the original T4 collision triangles as one T6 BSP source mesh.
+    """Write original T4 collision triangles with their cmodel ownership.
 
-    One FBX material per WaW clip material (``clip_<index>``) so the bridge
-    linker gives every partition its original content/surface flags. Returns
+    One FBX material per WaW clip material and owner (``clip_<index>_bm<N>``
+    for moving terrain) keeps partitions separate and preserves flags. Returns
     the WaW clip material index of each FBX material slot."""
     path.parent.mkdir(parents=True, exist_ok=True)
     per_triangle, slot_materials = collision_material_slots(collision)
@@ -257,7 +308,8 @@ def write_collision_fbx(collision: CollisionWorld, path: Path) -> list[int]:
         out.write(f"   Materials: *{len(polygon_slots)} {{ a: {_numbers(polygon_slots)} }}\n  }}\n")
         out.write("  Layer: 0 {\n   Version: 100\n   LayerElement: {\n    Type: \"LayerElementMaterial\"\n    TypedIndex: 0\n   }\n   LayerElement: {\n    Type: \"LayerElementUV\"\n    TypedIndex: 0\n   }\n  }\n }\n")
         out.write(" Model: 10001, \"Model::waw_collision\", \"Mesh\" {\n  Version: 232\n  Properties70: {\n   P: \"Lcl Scaling\", \"Lcl Scaling\", \"\", \"A\",100,100,100\n  }\n  Shading: T\n  Culling: \"CullingOff\"\n }\n")
-        names = [f"clip_{m}" if m >= 0 else "waw_collision" for m in slot_materials]
+        names = [f"clip_{m}" + (f"_bm{model}" if model else "") if m >= 0 else "waw_collision"
+                 for m, model in zip(slot_materials, collision_slot_models(collision))]
         for i, name in enumerate(names):
             out.write(f" Material: {20000 + i}, {_quoted('Material::' + name)}, \"\" {{\n  Version: 102\n  ShadingModel: \"phong\"\n  MultiLayer: 0\n }}\n")
         out.write("}\nConnections: {\n C: \"OO\",10000,10001\n C: \"OO\",10001,0\n")

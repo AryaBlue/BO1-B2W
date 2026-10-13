@@ -251,5 +251,22 @@ class ZombieBehaviorTests(unittest.TestCase):
         self.assertEqual(struct['target'], 'window_route')
 
 
+class GuardedSpeedStateTests(unittest.TestCase):
+    def test_braced_source_round_guard_survives_the_speed_slice(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, text in {
+                'maps/_zombiemode.gsc': 'round_think(){for(;;){if(level.ending_active==false){'
+                    'unrelated_side_effect();level.zombie_move_speed=level.round_number*8;level.round_number++;}}}',
+                'maps/_zombiemode_spawner.gsc': 'set_run_speed(){self.zombie_move_speed=level.zombie_move_speed;}',
+            }.items():
+                path = root/name; path.parent.mkdir(parents=True,exist_ok=True); path.write_text(text)
+            text = zombiebehavior.source_speed_state(gscport.Sources([root], [], None),gscport.API['zombie_runtime'])
+            self.assertIn('if(level.ending_active==false)',text)
+            self.assertIn('level.zombie_move_speed=source_round*8',text)
+            self.assertNotIn('unrelated_side_effect',text)
+            gsc.parse(text, 'guarded_slice')
+
+
 if __name__ == '__main__':
     unittest.main()

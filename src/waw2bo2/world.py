@@ -344,12 +344,14 @@ class CollisionWorld:
     # v8: per brush, the contents WaW traces can reach through the leaf and
     # leaf-brush-node masks (None = not recorded: assume brush.contents)
     brush_reach: list[int] | None = None
+    # v9: each cmodel's own terrain roots; model 0 uses the BSP world leafs.
+    model_roots: list[tuple[int, int, int]] | None = None
 
 
 def read_collision(path: Path) -> CollisionWorld:
     with path.open("rb") as stream:
         r = Reader(stream)
-        if r.exact(8) != MAGIC or (version := r.unpack("I")) not in (2, 3, 4, 5, 6, 7, 8):
+        if r.exact(8) != MAGIC or (version := r.unpack("I")) not in (2, 3, 4, 5, 6, 7, 8, 9):
             raise FormatError(f"{path} is not a W2BSP001 clip-world file")
         name = r.string()
         material_count = r.unpack("I")
@@ -427,11 +429,17 @@ def read_collision(path: Path) -> CollisionWorld:
             if count != len(brushes):
                 raise FormatError("brush reach table does not match the brush count")
             brush_reach = [v & 0xFFFFFFFF for v in struct.unpack(f"<{count}i", r.exact(4 * count))]
+        model_roots = None
+        if version >= 9:
+            count = r.unpack("I")
+            if count != len(submodels):
+                raise FormatError("terrain model roots do not match the submodel count")
+            model_roots = [r.unpack("2Ii") for _ in range(count)]
         if stream.read(1):
             raise FormatError("clip-world file has trailing data (schema mismatch)")
     summary = CollisionSummary(name, material_count, vertex_count, triangle_count, brush_count)
     return CollisionWorld(summary, vertices, indices, materials, brushes, submodels, static_models, triangle_materials,
-                          version >= 5, edge_walkable, aabb_trees, leaf_roots, partitions, brush_reach)
+                          version >= 5, edge_walkable, aabb_trees, leaf_roots, partitions, brush_reach, model_roots)
 
 
 def inspect_collision(path: Path) -> CollisionSummary:

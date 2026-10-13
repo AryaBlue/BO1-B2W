@@ -325,3 +325,16 @@ class DisplayScaleTests(unittest.TestCase):
                                      'outputs': {'oC0': {'semantic': 'SV_Target0', 'width': 4}},
                                      'output_rgb_scale': 0.5})
         self.assertIn('output.oC0 = float4(oC0.xyz * 0.5, oC0.w);', hlsl)
+
+class HashedMaterialTextureTests(unittest.TestCase):
+    def test_source_texture_without_name_keeps_hash_and_native_binding(self):
+        texture = {'nameHash': 2070099533, 'nameStart': 's', 'nameEnd': 'e',
+                   'image': 'layer_pixels', 'semantic': '2D', 'samplerState': {}}
+        source = {'textures': [texture]}
+        output = {'textures': []}
+        native = {'args': [], 'perPrimArgCount': 0, 'perObjArgCount': 0, 'stableArgCount': 0}
+        argument = runtime.add_material_texture(native, output, source, 2070099533, '')
+        self.assertEqual(argument['u']['value'], 2070099533)
+        self.assertEqual(output['textures'], [texture])
+        self.assertEqual(native['stableArgCount'], 1)
+        self.assertIsNone(runtime.add_material_texture(native, output, source, 123, ''))

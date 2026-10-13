@@ -417,6 +417,7 @@ namespace BSP
             clipMap.info.materials[i].surfaceFlags = entry.at("surfaceFlags").get<int>();
             materialByFbx[entry.at("fbx").get<std::string>()] = static_cast<uint16_t>(i);
             materialContents.emplace_back(clipMap.info.materials[i].contentFlags);
+            materialModels.emplace_back(entry.value("model", 0u));
         }
         con::info("Loaded {} terrain clip materials", entries.size());
         return true;
@@ -561,6 +562,15 @@ namespace BSP
                 }
                 UpdateAABBWithPoint(vert, partitionMins, partitionMaxs);
             }
+            const auto material = partitionMaterials[partitionIdx];
+            const auto owner = material < materialModels.size() ? materialModels[material] : 0u;
+            if (owner > subModelSources.size())
+            {
+                con::error("ERROR: terrain partition references missing model {}", owner);
+                return false;
+            }
+            if (owner)
+                continue; // local-space terrain follows its entity, never the world tree
             objects.emplace_back(
                 std::make_shared<BSPObject>(partitionMins.x, partitionMins.y, partitionMins.z, partitionMaxs.x, partitionMaxs.y, partitionMaxs.z, partitionIdx));
         }
@@ -635,6 +645,43 @@ namespace BSP
             con::error("ERROR: collision tree exceeds T6 index limits: {} nodes (max 32767), {} leafs (max 32768), {} aabb trees (max 65535)",
                        nodeVec.size(), leafVec.size(), AABBTreeVec.size());
             return false;
+        }
+
+        // Entity terrain uses the same partitions and clip flags as world terrain.
+        // Keep each model's roots contiguous in local space. These leaf AABBs
+        // do not need BSP nodes: transformed model traces start at its cLeaf.
+        for (size_t modelIdx = 0; modelIdx < subModelSources.size(); modelIdx++)
+        {
+            auto& model = subModelSources[modelIdx];
+            model.firstTerrain = AABBTreeVec.size();
+            for (int partitionIdx = 0; partitionIdx < clipMap.partitionCount; partitionIdx++)
+            {
+                const auto material = partitionMaterials[partitionIdx];
+                if (material >= materialModels.size() || materialModels[material] != modelIdx + 1)
+                    continue;
+                const auto& partition = clipMap.partitions[partitionIdx];
+                vec3_t mins{}, maxs{};
+                for (int v = 0; v < partition.nuinds; v++)
+                {
+                    const auto point = clipMap.verts[clipMap.info.uinds[partition.fuind + v]];
+                    if (!v)
+                        mins = maxs = point;
+                    UpdateAABBWithPoint(point, mins, maxs);
+                }
+                CollisionAabbTree tree{};
+                tree.materialIndex = material;
+                tree.origin = CalcMiddleOfAABB(mins, maxs);
+                tree.halfSize = CalcHalfSizeOfAABB(mins, maxs);
+                tree.u.partitionIndex = partitionIdx;
+                AABBTreeVec.emplace_back(tree);
+                model.terrainContents |= materialContents[material];
+            }
+            model.terrainCount = AABBTreeVec.size() - model.firstTerrain;
+            if (model.terrainCount && (model.firstTerrain > 65535 || model.terrainCount > 65535))
+            {
+                con::error("ERROR: model {} terrain exceeds T6 leaf index limits", modelIdx + 1);
+                return false;
+            }
         }
 
         // brush side planes follow the node planes (node planes share the node's index)
@@ -1277,9 +1324,9 @@ namespace BSP
             model.maxs = sub.maxs;
             model.radius = DistBetweenPoints(sub.mins, sub.maxs) / 2;
             model.info = nullptr;
-            model.leaf.firstCollAabbIndex = 0;
-            model.leaf.collAabbCount = 0;
-            model.leaf.terrainContents = 0;
+            model.leaf.firstCollAabbIndex = sub.terrainCount ? static_cast<uint16_t>(sub.firstTerrain) : 0;
+            model.leaf.collAabbCount = static_cast<uint16_t>(sub.terrainCount);
+            model.leaf.terrainContents = sub.terrainContents;
             model.leaf.cluster = 0;
             model.leaf.mins = sub.mins;
             model.leaf.maxs = sub.maxs;

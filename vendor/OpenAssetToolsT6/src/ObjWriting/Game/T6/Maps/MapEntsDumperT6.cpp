@@ -43,6 +43,16 @@ namespace
         data["materials"] = json::array();
         data["partitions"] = json::array();
         data["aabbs"] = json::array();
+        data["models"] = json::array();
+        data["leafs"] = json::array();
+        const auto terrainLeaf = [](const cLeaf_s& leaf)
+        {
+            return json::array({leaf.firstCollAabbIndex, leaf.collAabbCount, leaf.terrainContents});
+        };
+        for (unsigned int i = 0; i < cm.numSubModels; i++)
+            data["models"].push_back(terrainLeaf(cm.cmodels[i].leaf));
+        for (unsigned int i = 0; i < cm.numLeafs; i++)
+            data["leafs"].push_back(terrainLeaf(cm.leafs[i]));
         for (unsigned i = 0; i < cm.vertCount; ++i)
             data["vertices"].push_back(vec(cm.verts[i]));
         for (int i = 0; i < cm.triCount; ++i)
