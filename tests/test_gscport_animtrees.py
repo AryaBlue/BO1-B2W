@@ -72,6 +72,33 @@ class SourceAnimationDependenciesTests(unittest.TestCase):
 
 
 class AnimtreeRegistrationTests(unittest.TestCase):
+    def test_rebuild_without_trees_removes_previous_registration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            server, client = root / 'main.gsc', root / 'main.csc'
+            server.write_text('main()\n{\n    maps\\mp\\zombies\\_zm::init();\n}\n')
+            client.write_text('main()\n{\n    clientscripts\\mp\\zombies\\_zm::init();\n}\n')
+            gscport.hook_bo2_animtrees(server, client, root, ['shared_tree'])
+            gscport.hook_bo2_perk_server(server)
+            gscport.hook_bo2_perk_client(client)
+            # port_map clears the server output before the next build.
+            (root / 'maps/mp/waw/_waw2bo2_animtrees.gsc').unlink()
+            (root / 'maps/mp/zm_test.gsc').write_text(server.read_text())
+            (root / 'maps/mp/waw/_waw2bo2_zm.gsc').write_text('init(){}')
+            with self.assertRaisesRegex(t6bridge.StageError, 'generated initializer.*animtrees.*missing'):
+                t6bridge.validate_owned_init_calls(root, 'zm_test')
+            (root / 'maps/mp/waw/_waw2bo2_animtrees.gsc').write_text('main(){}')
+            with self.assertRaisesRegex(t6bridge.StageError, 'generated initializer.*animtrees.*missing'):
+                t6bridge.validate_owned_init_calls(root, 'zm_test')
+            self.assertTrue(gscport.hook_bo2_animtrees(server, client, root, []))
+            for main, side, ext in ((server, 'maps', 'gsc'), (client, 'clientscripts', 'csc')):
+                self.assertNotIn('_waw2bo2_animtrees::init', main.read_text())
+                self.assertIn('_waw2bo2_zm::init', main.read_text())
+                self.assertFalse((root / side / f'mp/waw/_waw2bo2_animtrees.{ext}').exists())
+            (root / 'maps/mp/zm_test.gsc').write_text(server.read_text())
+            t6bridge.validate_owned_init_calls(root, 'zm_test')
+            self.assertFalse(gscport.hook_bo2_animtrees(server, client, root, []))
+
     def test_registration_remains_idempotent_after_perk_client_bootstrap_hook(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -107,7 +134,7 @@ class AnimtreeRegistrationTests(unittest.TestCase):
                 self.assertIn('#using_animtree( "nuketown" );', text)
                 self.assertIn("scriptmodelsuseanimtree( #animtree );", text)
             self.assertFalse(gscport.hook_bo2_animtrees(gsc, csc, root, ["nuketown"]))
-            self.assertFalse(gscport.hook_bo2_animtrees(gsc, csc, root, []))
+            self.assertTrue(gscport.hook_bo2_animtrees(gsc, csc, root, []))
             # a call left after _load::main by an earlier run moves after _zm::init
             gsc.write_text("main()\n{\n    maps\\mp\\zombies\\_load::main();\n    maps\\mp\\waw\\_waw2bo2_animtrees::init();\n"
                            "    maps\\mp\\zombies\\_zm::init();\n}\n", encoding="utf-8")

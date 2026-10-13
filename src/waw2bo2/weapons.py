@@ -190,6 +190,17 @@ def convert(name: str, source: dict[str, str], t4_schema: dict[str, str], t6_sch
         # Internal clip/ammo pools must not collide with another game's gun.
         if value and key in ("ammoName", "clipName"):
             value = "waw_" + value
+        if value and key == "sharedAmmoCapName":
+            # T6 requires every weapon in a shared-cap group to declare the
+            # same limit. Recovered WaW stock and custom definitions can use
+            # the same name with different limits (even within one conversion).
+            # Preserve each authored limit, sharing only compatible groups,
+            # and keep the group independent of BO2's always-loaded weapons.
+            capacity = int(source.get("sharedAmmoCap", "0") or "0")
+            target = f"waw_{value}_cap_{capacity}"
+            out.translations[key] = {"source": value, "target": target,
+                "reason": "isolate WaW shared ammo groups by authored capacity from T6 groups"}
+            value = target
         out.fields[target_key] = value
         if key == "adsZoomFov" and target_key == "adsZoomFov1":
             # T6 keeps one ADS FOV per zoom level and stock weapons repeat the

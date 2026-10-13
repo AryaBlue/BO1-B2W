@@ -2210,21 +2210,29 @@ def animtrees_source(trees: list[str]) -> str:
 def hook_bo2_animtrees(main_gsc: Path, main_csc: Path, out_root: Path, trees: list[str]) -> bool:
     """Write the animtree registration (server and client script) and call it
     right after _zm::init in the BO2 map's server and client main (idempotent)."""
-    if not trees:
-        return False
     changed = False
     for (side, anchor, ext), main in zip(ANIMTREE_HOOKS, (main_gsc, main_csc)):
         base = "maps" if side == "maps" else "clientscripts"
         path = out_root / base / "mp" / "waw" / f"_waw2bo2_animtrees.{ext}"
+        call = f"    {base}\\mp\\waw\\_waw2bo2_animtrees::init();\n"
+        source = main.read_text(encoding="utf-8", errors="replace")
+        if not trees:
+            # Re-porting clears the generated server scripts, while the map
+            # main and client scripts can retain hooks from the previous run.
+            # Remove both sides when the new conversion needs no registration.
+            updated = source.replace(call, "")
+            if updated != source:
+                main.write_text(updated, encoding="utf-8")
+                changed = True
+            path.unlink(missing_ok=True)
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(animtrees_source(trees), encoding="utf-8")
-        source = main.read_text(encoding="utf-8", errors="replace")
         if anchor + '\n' not in source:
             # Perk ownership redirects _zm::init to the converter's owned
             # bootstrap. It still performs the same base animtree registration.
             anchor = anchor.replace(base + '\\mp\\zombies\\_zm',
                                     base + '\\mp\\waw\\_waw2bo2_zm')
-        call = f"    {base}\\mp\\waw\\_waw2bo2_animtrees::init();\n"
         if anchor + "\n" + call in source:
             continue
         if anchor + "\n" not in source:
