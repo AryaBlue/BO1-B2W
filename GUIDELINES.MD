@@ -10,6 +10,13 @@ The converter must act as a **translation layer between WaW and BO2** and should
 
 Every architectural decision, bug fix, parser change, asset conversion rule, script transformation, or compatibility layer must be evaluated against this goal.
 
+**Architecture direction (user request, 2026-10-12):** evolve the existing GSC
+converter into a transpiler backed by explicit engine/API definitions and a
+shared WaW compatibility runtime for BO2. Build toward this incrementally in
+the existing codebase, preserving working conversions. New compatibility work
+should extend reusable semantics and definitions so future maps need less
+manual intervention. Section 14 defines this direction in detail.
+
 The primary question should always be:
 
 > "Will this work for arbitrary WaW maps?"
@@ -503,6 +510,69 @@ BO2 implementation
 This allows many maps to reuse the same compatibility logic.
 
 Prefer centralized compatibility modules over rewriting every map script independently.
+
+## 14a. Target Architecture: Transpiler, Definitions and Compatibility Runtime
+
+The intended pipeline is:
+
+```text
+WaW source scripts + source assets
+    → parsed script representation and resolved symbols/dependencies
+    → semantic translation using WaW/BO2 definitions
+    → generated BO2 GSC + required shared compatibility runtime + converted assets
+    → native compilation, linking and validation
+```
+
+The transpiler handles syntax, scope, includes, call resolution, function
+pointers, dependency discovery and code generation. The compatibility runtime
+implements verified WaW behavior that BO2 cannot express through a direct API
+translation. This is an architectural direction, not a claim that the current
+parser is already a complete semantic compiler. A new standalone interpreter
+or a wholesale rewrite is not required.
+
+Keep engine/API knowledge in centralized, reviewable definitions. Extend the
+existing `src/waw2bo2/compat/gsc_api.json`, `t6api.py` metadata and compatibility
+modules where appropriate; evolve their schema rather than adding competing
+tables. Definitions should describe, as relevant:
+
+- Symbol identity, namespace, engine/version and whether the API is a global function or an entity method.
+- Argument counts, optional/default arguments, receiver requirements, return values and verified type constraints.
+- Source behavior, target mapping or runtime implementation, argument/value conversions and side effects.
+- Threading, waits, notifications, callbacks, initialization order and shared state requirements.
+- Required assets/runtime dependencies, support status and the evidence used to establish the behavior.
+
+Names and signatures alone do not establish equivalence. Derive semantics from
+source and compiled engine behavior; keep unknown details explicit. Ordinary
+map and community-library functions should be discovered and translated from
+their source automatically, rather than individually added to API tables.
+Definitions cover engine differences and reusable framework contracts.
+
+## 14b. Migrate Incrementally and Preserve Existing Conversions
+
+Reuse `gsc.py`, `gscport.py`, the recursive dependency discovery, existing API
+definitions and runtime wrappers. Introduce structured parsing, symbol
+resolution and semantic passes in stages as real conversion cases require
+them. Move fragile text rewrites and scattered API decisions into those passes
+and definitions as their behavior becomes covered and understood.
+
+Preserve source function bodies and map-specific behavior through generic
+translation. Framework ownership and startup adaptation must use explicit
+contracts and source structure, including renamed or edited frameworks.
+Runtime wrappers must preserve WaW execution behavior, including entity
+receivers and threaded calls; they must not silently become substitutes for
+custom gameplay logic.
+
+For each migrated capability, retain the established conversion behavior until
+the replacement is validated. Use focused semantic regressions and representative
+map builds; compare generated behavior and native output where relevant.
+Report unsupported or ambiguous semantics with source locations and actionable
+diagnostics. Do not turn unknown APIs into guessed implementations or report
+full compatibility merely because scripts compile.
+
+When a new map exposes a gap, fix the reusable parser, semantic pass,
+definition, dependency handling or runtime implementation responsible for it.
+The goal is for the same capability to work automatically on the next map,
+without a new list of manually approved functions or map-specific patches.
 
 ---
 
