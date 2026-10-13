@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Recognize renamed WaW zombie startup frameworks by their function and initialization contract, then apply the existing framework override translation. Preserve threaded startup hooks and terminate the generated startup comment for inline map scripts. This removes Dead Sand Elite's missing `_zombiemode::main()` build error without map-specific mappings.
 - Resolve map-packaged IWD skins before recovered stock-zone textures for world, actor and weapon materials, while keeping the map's own compiled pixels authoritative. This restores Cheese Cube Unlimited's cheese Pack-a-Punch and zombie body skins without naming the map or its images in conversion logic. Report the source archive used.
 - Preserve authored zombie bone hitboxes through T4 export and T6 import, matching bone names and translating hit-location names. This fixes the conversion loss behind McDonald's headless bodies having zero head/helmet bounds while their attached heads disable collision. Automatically audit animated-model hitboxes after native linking.
 - Discover original script animation dependencies through the translator's recursive call graph, preserve each function's active animation tree, and stage namespaced WaW clips/trees. DLC3 animation initialization and factory animation functions now compile with their original references; missing clips remain reported.

@@ -2,6 +2,18 @@
   "schema_version": 1,
   "description": "Maintainer-reviewed conversion and in-game compatibility evidence, keyed by CodRepo WordPress post ID.",
   "maps": {
+    "6588": {
+      "compile": "passed",
+      "play": "unknown",
+      "evidence": [
+        {
+          "date": "2026-10-12",
+          "converter_version": "0.2.14",
+          "tester": "maintainer",
+          "notes": "Dead Sand Elite converts and links on codex/dead-sand-elite after general renamed-framework startup detection. 87 compiled scripts round-trip exactly; material and authored hitbox audits pass. Installed for testing; gameplay unverified. See docs/DEAD_SAND_ELITE_BUILD.md."
+        }
+      ]
+    },
     "234": {
       "compile": "passed",
       "play": "unknown",
