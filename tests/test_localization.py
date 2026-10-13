@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 from waw2bo2 import localization, weapons
@@ -29,6 +30,55 @@ class LocalizationTests(unittest.TestCase):
     def test_parser_preserves_quotes_newlines_placeholders_and_button_tokens(self):
         text = 'Hold ^3[{+activate}]^7 for "Power" [Cost: &&1]\nNext line // literal'
         self.assertEqual(localization.parse('/* ignored */ REFERENCE ZOMBIE_HINT\nLANG_FRENCH "autre"\nLANG_ENGLISH ' + localization.quote(text)), {'ZOMBIE_HINT': text})
+
+    def test_repeated_reference_uses_final_language_value_and_reports_only_conflicts(self):
+        text = ('REFERENCE MUT_11_DESC\nLANG_ENGLISH "First &&1"\n'
+                'REFERENCE MUT_11_DESC\nLANG_ENGLISH "First &&1"\n'
+                'REFERENCE MUT_11_DESC\nLANG_FRENCH "Autre"\nLANG_ENGLISH "Final \\"quoted\\" &&1"\n')
+        conflicts = []
+        self.assertEqual(localization.parse(text, conflicts=conflicts), {'MUT_11_DESC': 'Final "quoted" &&1'})
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0]['previous_line'], 4)
+        self.assertEqual(conflicts[0]['line'], 7)
+        self.assertEqual(localization.parse(text, 'french'), {'MUT_11_DESC': 'Autre'})
+
+    def test_iwd_duplicate_keys_do_not_abort_or_override_higher_priority_zone(self):
+        self.script.write_text('a(){x=&"MUT_11_DESC";y=&"ZONE_HINT";}')
+        self.strings(self.root, 'map', {'ZONE_HINT': 'Zone text'})
+        archive = self.base / 'map.iwd'
+        with zipfile.ZipFile(archive, 'w') as output:
+            output.writestr('localizedstrings/custom.str',
+                'REFERENCE MUT_11_DESC\nLANG_ENGLISH "Earlier description"\n'
+                'REFERENCE MUT_11_DESC\nLANG_ENGLISH "Final description &&1"\n'
+                'REFERENCE ZONE_HINT\nLANG_ENGLISH "IWD text"\n'
+                'REFERENCE ZONE_HINT\nLANG_ENGLISH "Final IWD text"\nENDMARKER\n')
+        report = localization.stage(self.project, [self.root, self.root], [archive, archive])
+        entries = {e['key']: e['value'] for e in report['entries']}
+        self.assertEqual(entries, {'MUT_11_DESC': 'Final description &&1', 'ZONE_HINT': 'Zone text'})
+        self.assertEqual(report['errors'], [])
+        self.assertEqual(report['missing'], [])
+        self.assertEqual(len(report['conflicts']), 2)
+        self.assertEqual(len(report['warnings']), 2)
+        self.assertIn('map.iwd:localizedstrings/custom.str', report['warnings'][0])
+        self.assertIn('&"WAW2BO2_MUT_11_DESC"', self.script.read_text())
+        generated = (self.project / 'english/localizedstrings/waw_project.str').read_text()
+        self.assertEqual(generated.count('REFERENCE WAW2BO2_MUT_11_DESC'), 1)
+        self.assertEqual(report['entries'], localization.stage(self.project, [self.root], [archive])['entries'])
+
+    def test_conflicting_unused_fallback_does_not_block_source_text(self):
+        self.script.write_text('a(){x=&"ZOMBIE_HINT";}')
+        self.strings(self.root, 'map', {'ZOMBIE_HINT': 'Authored source text'})
+        bo2 = self.base / 'bo2'
+        self.strings(bo2 / 'raw', 'native', {'ZOMBIE_HINT': 'Native text'})
+        path = bo2 / 'raw/english/localizedstrings/native.str'
+        path.write_text(path.read_text().replace('ENDMARKER',
+            'REFERENCE MUT_11_DESC\nLANG_ENGLISH "Earlier"\n'
+            'REFERENCE MUT_11_DESC\nLANG_ENGLISH "Later"\nENDMARKER'))
+        report = self.stage(bo2_root=bo2)
+        self.assertEqual(report['entries'][0]['value'], 'Authored source text')
+        self.assertEqual(report['entries'][0]['kind'], 'WaW')
+        self.assertEqual(report['errors'], [])
+        self.assertEqual(report['conflicts'][0]['key'], 'MUT_11_DESC')
 
     def test_source_namespaced_in_scripts_and_weapon_fields_without_touching_comments(self):
         self.strings(self.root, 'source', {'ZOMBIE_OFF': 'Turn on the power first', 'WEAPON_GUN': 'Original gun'})
