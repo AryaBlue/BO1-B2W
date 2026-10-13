@@ -204,6 +204,24 @@ Never change grenade physics based on the earlier misidentified field.
 `playerphysicstrace` and `bullettrace` do NOT reproduce player-only walls;
 only real movement (setorigin + setvelocity under pmove) does.
 
+## Large-map moving terrain roots (2026-10-13)
+
+Empty Walls exposed a layout regression after moving terrain ownership was
+added: model 17's terrain roots followed 80,559 world AABBs, exceeding the
+uint16 `cLeaf.firstCollAabbIndex` range. The children use int indices and may
+legally lie beyond that range. The linker now places model roots before the
+world parents/children, preserving each model's contiguous range and adjusting
+world leaf and child references. It still rejects genuinely overflowing root
+indices/counts. No geometry, flags or source ownership are removed.
+
+Native validation preserves all 82,831 Empty Walls terrain triangles, including
+36 triangles across 18 moving models, and all 2,125 Cheese Cube triangles,
+including model 242's 32 water triangles. Winding/flag and owner audits pass.
+`tools/audit_terrain_ownership.py <clip.bin> <collision.json>` compares geometry
+at four decimal places, flags, reachability and distinct world/model ownership.
+It complements `audit_collision_roundtrip.py`'s winding check. Evidence is in
+`work/empty_walls_20261013`.
+
 ## Debug aid
 
 `WAW2BO2_DEBUG_DROP="tris|brushes:x0,y0,z0,x1,y1,z1"` makes the T6 linker drop
