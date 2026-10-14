@@ -117,6 +117,15 @@ class Sources:
         # other stock releases of the framework (the WaW / Mod Tools raw
         # scripts maps are authored from), for telling map edits from stock
         self.variant_roots = list(variant_roots or [])
+        # The merged stock view selects one definition per path. Framework
+        # comparisons must also see later stock-zone versions (e.g. Der Riese
+        # damage handling), rather than treating them as authored map preludes.
+        if stock_root is not None and (stock_root / 'catalog.json').is_file():
+            catalog = json.loads((stock_root / 'catalog.json').read_text(encoding='utf-8'))
+            for entry in catalog.get('zones', {}).values():
+                folder = Path(entry['folder'])
+                if folder.is_dir() and folder not in self.variant_roots:
+                    self.variant_roots.append(folder)
         self.origin: dict[str, str] = {}
         for iwd in iwds:
             with zipfile.ZipFile(iwd) as z:
