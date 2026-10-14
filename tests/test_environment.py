@@ -8,6 +8,28 @@ from waw2bo2 import t6bridge
 
 
 class EnvironmentTests(unittest.TestCase):
+    def test_native_sky_bone_bounds_are_translated_without_losing_metadata(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw, target = root / 'bo2/raw', root / 'target'
+            (raw / 'xmodel').mkdir(parents=True)
+            (raw / 'materials/mc').mkdir(parents=True)
+            bone = {'bone': 'sky', 'mins': {'z': -3, 'x': -1, 'y': -2},
+                    'maxs': {'x': 1, 'y': 2, 'z': 3}, 'offset': {'x': 0, 'y': 0, 'z': 1},
+                    'radiusSquared': 14, 'collmap': 0, 'hitloc': 'none'}
+            model = {'lods': [], 'boneInfo': [bone], 'rootBoneName': 'sky'}
+            (raw / f'xmodel/{t6bridge.SKYBOX_TEMPLATE}.json').write_text(json.dumps(model))
+            (raw / f'materials/{t6bridge.SKYBOX_MATERIAL}.json').write_text(json.dumps({'textures': []}))
+            report = t6bridge.StageReport('test')
+            t6bridge.stage_skybox(report, 'test', target, root / 'bo2', None)
+            self.assertEqual(report.errors, [])
+            out = json.loads((target / 'xmodel/skybox_test.json').read_text())
+            expected = dict(bone, mins=[-1, -2, -3], maxs=[1, 2, 3], offset=[0, 0, 1])
+            self.assertEqual(out['boneInfo'], [expected])
+            t6bridge.bridge_bone_bounds(out)
+            self.assertEqual(out['boneInfo'], [expected])
+            self.assertEqual(out['rootBoneName'], 'sky')
+
     def test_source_sky_preserves_all_layers_geometry_buffers_and_t6_model_fields(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

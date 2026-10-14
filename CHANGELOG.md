@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Normalize BO2 Mod Tools skybox bone-bound vector objects to the bridge's array schema, preserving their values and metadata. This fixes Collingwood's `boneInfo/0/mins` parsing failure during map linking.
+
 - Recover only the requested WaW stock dependency asset types, retaining and expanding previously extracted types. Animation lookups no longer trigger unrelated campaign model/image/audio exports, and a material-only cache no longer claims missing asset kinds. See [Collingwood validation and limits](docs/COLLINGWOOD_DEPENDENCY_EXTRACTION.md).
 
 - Bind zombies to the round controller's selected active location before deferred native spawn callbacks, and redirect its cached stock round provider to the owned controller. Preserve custom providers and authored spawn delays.
