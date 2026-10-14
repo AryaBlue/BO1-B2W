@@ -395,11 +395,49 @@ waw_model_overlay_fx( fx, origin )
     return fx;
 }
 
+waw_set_zombie_var( var, value, div, is_float )
+{
+    // WaW: fourth argument is a float flag, third is a divisor.
+    // BO2's same-named function uses a float flag followed by a table column.
+    // Only source table overrides may replace the authored default.
+    if ( isdefined( level.waw_zombie_var_overrides ) && isdefined( level.waw_zombie_var_overrides[var] ) )
+    {
+        if ( isdefined( is_float ) && is_float )
+            value = float( level.waw_zombie_var_overrides[var] );
+        else
+            value = int( level.waw_zombie_var_overrides[var] );
+    }
+    if ( isdefined( div ) )
+        value = value / div;
+    level.zombie_vars[var] = value;
+}
+
 waw_playfxontag( fx, ent, tag )
 {
     if ( !isdefined( fx ) || !isdefined( ent ) )
         return;
+    if ( isdefined( level.waw2bo2_bolted_loops ) && isdefined( level.waw2bo2_bolted_loops[fx] ) )
+    {
+        // T6's transient PlayFXOnTag event cannot own an indefinitely looping
+        // source effect. A script FX entity gives the bolt an explicit lifetime.
+        carrier = spawnfx( fx, ent gettagorigin( tag ), anglestoforward( ent.angles ), anglestoup( ent.angles ) );
+        triggerfx( carrier );
+        level thread waw_bolted_fx_lifetime( carrier, ent, tag );
+        return carrier;
+    }
     playfxontag( fx, ent, tag );
+}
+
+waw_bolted_fx_lifetime( carrier, parent, tag )
+{
+    while ( isdefined( parent ) && isdefined( carrier ) )
+    {
+        carrier.origin = parent gettagorigin( tag );
+        carrier.angles = parent.angles;
+        wait 0.05;
+    }
+    if ( isdefined( carrier ) )
+        carrier delete();
 }
 
 waw_playloopedfx( fx, delay, origin, cull, forward, up )

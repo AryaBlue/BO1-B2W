@@ -8,6 +8,16 @@ from waw2bo2 import localization, weapons
 
 
 class LocalizationTests(unittest.TestCase):
+    def test_nested_flame_tables_are_not_read_as_weapon_display_names(self):
+        table = self.project / 'content_source/weapons/waw_flametable/flame'
+        table.parent.mkdir(parents=True)
+        table.write_text('FLAMETABLEFILE\\name\\waw_flametable/flame\\flameVar_streamChunkSpeed\\700')
+        self.script.write_text('f(){x=&"ZOMBIE_HINT";}')
+        self.strings(self.root, 'map', {'ZOMBIE_HINT': 'Authored prompt'})
+        report = self.stage()
+        self.assertEqual(report['entries'][0]['value'], 'Authored prompt')
+        self.assertEqual(report['errors'], [])
+
     def test_waw_use_hint_translates_button_but_not_hud_arguments(self):
         self.script.write_text('f(){self SetHintString(&"ZOMBIE_PERK_JUGGERNAUT");x=&"HUD_SCORE";}')
         self.strings(self.root, 'map', {

@@ -2062,17 +2062,25 @@ BO2_TACTICAL_RUNTIME_WEAPONS = {"zombie_cymbal_monkey": "cymbal_monkey_zm"}
 
 
 def assets_source(fx_table: dict[str, str], waw_map: str | None = None,
-                  weapons: dict[str, str] | None = None) -> str:
+                  weapons: dict[str, str] | None = None, bolted_loops: set[str] = frozenset(),
+                  zombie_var_overrides: dict[str, str] | None = None) -> str:
     lines = ["// waw2bo2: WaW asset name -> BO2 asset name for converted assets (generated).", "init()", "{"]
     if waw_map:
         # WaW's level.script is the WaW map name (see gscport.WAW_LEVEL_FIELDS)
         lines.append(f'    level.waw_script = "{waw_map}";')
+    lines.append('    level.waw_zombie_var_overrides = [];')
+    for name, value in sorted((zombie_var_overrides or {}).items()):
+        lines.append(f'    level.waw_zombie_var_overrides[{json.dumps(name)}] = {json.dumps(value)};')
     for waw, bo2 in sorted(fx_table.items()):
         lines.append(f'    level.waw2bo2_fx["{waw}"] = "{bo2}";')
     # WaW libraries can request effects after their first wait. T6 requires
     # each valid effect to be precached during the initial level frame.
     for bo2 in sorted(set(fx_table.values())):
         lines.append(f'    loadfx( "{bo2}" );')
+    if bolted_loops:
+        lines.append('    level.waw2bo2_bolted_loops = [];')
+        for name in sorted(bolted_loops):
+            lines.append(f'    level.waw2bo2_bolted_loops[loadfx( "{name}" )] = true;')
     reverse_names = set()
     for waw, bo2 in sorted((weapons or {}).items()):
         lines.append(f'    level.waw2bo2_weapons["{waw}"] = "{bo2}";')
@@ -2286,6 +2294,13 @@ waw_tesla_damage( mod, hit_location, hit_origin, player, amount )
 {{
     if ( !isdefined( player ) || !isplayer( player ) || !self {entries['damage_predicate']}( mod ) )
         return false;
+    // Reserve synchronously: T6 can dispatch direct and splash callbacks in
+    // the same frame before a newly threaded source chain starts running.
+    if ( isdefined( player.waw_tesla_chain_active ) && player.waw_tesla_chain_active )
+        return true;
+    if ( isdefined( self.zombie_tesla_hit ) && self.zombie_tesla_hit )
+        return true;
+    player.waw_tesla_chain_active = true;
     if ( !isdefined( player.tesla_network_death_choke ) )
         player.tesla_network_death_choke = 0;
     if ( !isdefined( player.waw_tesla_choke_bound ) )
@@ -2293,8 +2308,18 @@ waw_tesla_damage( mod, hit_location, hit_origin, player, amount )
         player.waw_tesla_choke_bound = true;
         player thread waw_tesla_network_choke();
     }}
-    self thread {entries['damage_entry']}( hit_location, hit_origin, player );
+    // The shooter owns the thread. The target may die during the source
+    // traversal; its damage-listener lifetime must not terminate the chain.
+    player thread waw_tesla_run_chain( self, hit_location, hit_origin );
     return true;
+}}
+
+waw_tesla_run_chain( target, hit_location, hit_origin )
+{{
+    self endon( "disconnect" );
+    if ( isdefined( target ) && isalive( target ) )
+        target {entries['damage_entry']}( hit_location, hit_origin, self );
+    self.waw_tesla_chain_active = false;
 }}
 
 waw_tesla_network_choke()

@@ -294,12 +294,14 @@ def _stage_bridge(args: argparse.Namespace) -> int:
 
 
 def _build_mod(args: argparse.Namespace) -> int:
-    from . import modzone
+    from . import modzone, overheathud
 
     extra = args.stage.resolve() / "zone_raw" / args.project / t6bridge.MOD_EXTRA_ZONE
     extra_lines = extra.read_text(encoding="utf-8").splitlines() if extra.exists() else []
     # converted sound banks name their PCM relative to the decoded audio root
     project_root = extra.parent
+    extra_lines += [entry for entry in overheathud.stage(args.bo2.resolve(), project_root, args.work,
+                                                       args.unlinker.resolve()) if entry not in extra_lines]
     modzone.stage_lobby_map_table(args.bo2.resolve() / "raw/zm/mapstable.csv", project_root, args.project)
     modzone.stage_lobby_gametype_table(args.bo2.resolve() / "raw/zm/gametypestable.csv", project_root, args.project)
     extra_lines += [entry for entry in modzone.stage_menu_assets(project_root, args.project) if entry not in extra_lines]
@@ -311,7 +313,9 @@ def _build_mod(args: argparse.Namespace) -> int:
             ff, unavailable = modzone.link_mod(args.bo2.resolve(), args.work, args.unlinker.resolve(), extra_lines,
                 project_root, [project_root/'content_source/pcm', project_root/'content_source', args.techset_dump],
                 stock_dump=args.techset_dump)
-        if active:
+        flame_stage = project_root / 'content_source/weapons.stage.json'
+        has_flames = flame_stage.is_file() and bool(json.loads(flame_stage.read_text()).get('flame_tables'))
+        if active or has_flames:
             modzone.activate_mod_shaders(ff, project_root, args.work, args.linker, args.unlinker, args.techset_dump)
     else:
         ff, unavailable = modzone.link_mod(args.bo2.resolve(), args.work, args.unlinker.resolve(), extra_lines,

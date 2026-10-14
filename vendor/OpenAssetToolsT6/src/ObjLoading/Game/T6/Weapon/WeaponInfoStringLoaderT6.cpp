@@ -4,6 +4,7 @@
 #include "Game/T6/InfoString/InfoStringToStructConverter.h"
 #include "Game/T6/T6.h"
 #include "Game/T6/Weapon/WeaponFields.h"
+#include "Game/T6/Weapon/FlameTableFields.h"
 #include "Game/T6/Weapon/WeaponStrings.h"
 #include "Utils/Logging/Log.h"
 #include "Weapon/AccuracyGraphLoader.h"
@@ -18,6 +19,38 @@ using namespace T6;
 
 namespace
 {
+    class InfoStringToFlameConverter final : public InfoStringToStructConverter
+    {
+        bool ConvertExtensionField(const cspField_t&, const std::string&) override { return false; }
+    public:
+        InfoStringToFlameConverter(const InfoString& info, flameTable* table, ZoneScriptStrings& strings,
+                                  MemoryManager& memory, AssetCreationContext& context,
+                                  AssetRegistration<AssetWeapon>& registration)
+            : InfoStringToStructConverter(info, table, strings, memory, context, registration,
+                                          flameTableFields, std::extent_v<decltype(flameTableFields)>) {}
+    };
+
+    bool LoadFlameTable(const char* name, flameTable*& table, MemoryManager& memory, ISearchPath& search,
+                        ZoneScriptStrings& strings, AssetCreationContext& context,
+                        AssetRegistration<AssetWeapon>& registration)
+    {
+        table = nullptr;
+        if (!name || !name[0]) return true;
+        const auto file = search.Open(std::format("weapons/{}", name));
+        if (!file.IsOpen())
+        {
+            con::error("Missing required flame table: {}", name);
+            return false;
+        }
+        InfoString info;
+        if (!info.FromStream("FLAMETABLEFILE", *file.m_stream)) return false;
+        table = memory.Alloc<flameTable>();
+        InfoStringToFlameConverter converter(info, table, strings, memory, context, registration);
+        if (!converter.Convert()) return false;
+        table->name = memory.Dup(name);
+        return true;
+    }
+
     class InfoStringToWeaponConverter final : public InfoStringToStructConverter
     {
     protected:
@@ -624,6 +657,13 @@ namespace weapon
             con::error("Failed to parse weapon: \"{}\"", assetName);
             return AssetCreationResult::Failure();
         }
+
+        auto& def = weaponFullDef->weapDef;
+        if (!LoadFlameTable(def.flameTableFirstPerson, def.flameTableFirstPersonPtr, m_memory,
+                            m_search_path, m_zone.m_script_strings, context, registration)
+            || !LoadFlameTable(def.flameTableThirdPerson, def.flameTableThirdPersonPtr, m_memory,
+                              m_search_path, m_zone.m_script_strings, context, registration))
+            return AssetCreationResult::Failure();
 
         CalculateWeaponFields(*weaponFullDef);
         CalculateAttachmentFields(*weaponFullDef);

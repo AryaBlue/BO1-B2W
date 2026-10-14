@@ -176,8 +176,9 @@ def activate_mod_shaders(ff: Path, project: Path, work: Path, linker: Path, unli
     """Relink the fresh gameplay zone with bound shaders, preserving its texture ABI.
 
     The native bridge linker cannot read every mod-tools raw asset format. Its
-    global asset pools reuse the complete baseline instead. Only bound materials
-    and shader dependencies are exposed as fresh inputs; stock gameplay and image
+    global asset pools reuse the complete baseline instead. Bound materials,
+    shader dependencies and weapons requiring nested flame tables are exposed
+    as fresh inputs; the other gameplay and image
     assets retain their baseline data. The original ipak stays beside the result.
     """
     work = work.resolve()
@@ -198,6 +199,25 @@ def activate_mod_shaders(ff: Path, project: Path, work: Path, linker: Path, unli
     if proc.returncode:
         raise RuntimeError('shader baseline material extraction failed')
     overlay = work/'shader_overlay'
+    # The mod-tools linker preserves flame-table names but leaves the nested
+    # pointers empty. Recreate those weapons with our measured native loader
+    # during the final relink, retaining all baseline assets as dependencies.
+    flame_stage = project / 'content_source/weapons.stage.json'
+    if flame_stage.is_file():
+        data = json.loads(flame_stage.read_text())
+        content = project / 'content_source'
+        for entry in data.get('flame_tables', []):
+            source = content / entry['file']
+            target = overlay / entry['file']
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+        for entry in data.get('weapons', []):
+            if not entry.get('dependencies', {}).get('flametable'):
+                continue
+            source = content / 'weapons' / entry['name']
+            target = overlay / 'weapons' / entry['name']
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
     bound = set()
     current_files = {(root/entry['file']).resolve() for root, entry in staged_materials(project)}
     for root in (project, project/'content_source'):
@@ -239,6 +259,12 @@ def activate_mod_shaders(ff: Path, project: Path, work: Path, linker: Path, unli
             target = overlay / 'zm' / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+    # Explicit project rawfiles must override both stock disk inputs and the
+    # loaded baseline (notably the corrected stock overheat HUD bytecode).
+    for source in (project / 'ui_mp').rglob('*.lua'):
+        target = overlay / source.relative_to(project)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
     zone = (work/'zone_source/mod.zone').read_text()
     # Raw weapon files live under mp/sp; loaded assets use engine-internal names.
     zone = re.sub(r'(?m)^weapon,(?:mp|sp)/', 'weapon,', zone)
@@ -725,6 +751,17 @@ def link_mod(bo2: Path, work: Path, unlinker: Path, extra_lines: list[str] = (),
             source = asset_root / 'zm' / name
             if source.is_file():
                 target = table_override / 'zm' / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+        for line in extra_lines:
+            if not line.startswith('rawfile,'):
+                continue
+            relative = line.split(',', 1)[1].strip()
+            source = (asset_root / relative).resolve()
+            source.relative_to(asset_root.resolve())
+            if source.is_file():
+                target = table_override / relative
+                target.resolve().relative_to(table_override.resolve())
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
     for _ in range(MAX_DROPS):

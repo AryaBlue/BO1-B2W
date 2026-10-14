@@ -108,6 +108,7 @@
     "maps\\createfx\\dlc3_fx"
   ],
   "function_renames": {
+    "set_zombie_var": "maps\\mp\\waw\\_waw2bo2_compat::waw_set_zombie_var",
     "get_number_variants": "maps\\mp\\waw\\_waw2bo2_compat::waw_get_number_variants",
     "include_powerup": "maps\\mp\\zombies\\_zm_powerups::include_zombie_powerup",
     "enable_trigger": "maps\\mp\\waw\\_waw2bo2_compat::waw_enable_trigger",

@@ -22,6 +22,7 @@ gameworldmp/mapents straight into ``zone_out/<project>/<project>.ff``.
 from __future__ import annotations
 
 import copy
+import csv
 import os
 import json
 import re
@@ -31,7 +32,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from .resources import resource_root
-from . import progress, zombiebehavior
+from . import clientport, progress, viewmodels, zombiebehavior
 
 from . import assetresolve, audio, entities, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, materialisolation, oneway, paths, projectilecollision, scorebehavior, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones
 from .fbx import collision_material_slots, collision_slot_models, write_collision_fbx, write_world_fbx
@@ -1666,7 +1667,16 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
         images.append('waw_vision_lut')
     client_dir = project_root / 'clientscripts/mp/waw'
     client_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(gscport.COMPAT_DIR / '_waw2bo2_environment.csc', client_dir / '_waw2bo2_environment.csc')
+    environment = (gscport.COMPAT_DIR / '_waw2bo2_environment.csc').read_text(encoding='utf-8')
+    environment = flame_environment_source(environment, project_root / 'content_source')
+    weapon_runtime = project_root / 'content_source/weapons.runtime.json'
+    weapon_table = json.loads(weapon_runtime.read_text())['table'] if weapon_runtime.is_file() else {}
+    client_sound_names = zone_sound_names | compiled_sound_names | ({n for kinds in stock_waw.index.values()
+        for n in kinds.get('sound', [])} if stock_waw else set())
+    tesla_client = clientport.stage_tesla(roots, project_root, report.fx_table, weapon_table, client_sound_names)
+    if tesla_client:
+        environment = environment.replace('init()\n{', 'init()\n{\n' + tesla_client, 1)
+    (client_dir / '_waw2bo2_environment.csc').write_text(environment, encoding='utf-8')
     client_main = project_root / 'clientscripts/mp' / f'{project}.csc'
     client_text = client_main.read_text(encoding='utf-8')
     # The donor's fog-volume monitor selects its own vision every frame.
@@ -2115,6 +2125,48 @@ TEMPLATE_ZONE = Path("mods") / "zm_test" / "zm_test.zone"
 
 
 @progress.phase('Convert weapon runtime assets')
+def flame_environment_source(source: str, content: Path) -> str:
+    """Initialize T6's native flame pools for carried source gas weapons.
+
+    The CSC builtin allocates every pool before setting flame_system_enabled.
+    Setting the dvar directly skips allocation and crashes the native reset.
+    """
+    runtime_file = content / 'weapons.runtime.json'
+    if not runtime_file.is_file():
+        return source
+    runtime = json.loads(runtime_file.read_text(encoding='utf-8'))
+    for name in runtime.get('weapons', []):
+        path = content / 'weapons' / runtime['table'][name]
+        if not path.is_file():
+            continue
+        fields = weapons.read_info_file(path)
+        if fields.get('weaponType') == 'gas' and any(fields.get(k) for k in weapons.FLAME_TABLE_KEYS):
+            return source.replace('init()\n{', 'init()\n{\n    // Allocate native pools; never force the enabled dvar.\n    enableflamesystem();', 1)
+    return source
+
+
+def bolted_loop_effects(project: Path, table: dict[str, str]) -> set[str]:
+    result = set()
+    for name in set(table.values()):
+        path = fx.fx_file(project, name)
+        if not path.is_file():
+            continue
+        definition = json.loads(path.read_text())
+        if definition.get('elemDefCountLooping', 0) and definition.get('msecLoopingLife', 0) >= 2147483647:
+            result.add(name)
+    return result
+
+
+def source_zombie_var_overrides(roots: list[Path]) -> dict[str, str]:
+    """WaW table column one, with source-root precedence; never BO2's table."""
+    source = next((root / 'mp/zombiemode.csv' for root in roots
+                   if (root / 'mp/zombiemode.csv').is_file()), None)
+    if source is None:
+        return {}
+    with source.open(encoding='utf-8-sig', newline='') as stream:
+        return {row[0]: row[1] for row in csv.reader(stream) if len(row) > 1 and row[0] and row[1]}
+
+
 def _stage_weapon_runtime(report: StageReport, project: str, project_root: Path, roots: list[Path],
                           stock_materials: Path, techset_dump: Path | None, bo2_root: Path | None,
                           t6_unlinker: Path | None, stage: Path, wavelets, converted_fx: set[str],
@@ -2129,8 +2181,12 @@ def _stage_weapon_runtime(report: StageReport, project: str, project_root: Path,
         report.errors.append("weapons: no --techset-dump; weapon materials cannot be translated")
         return
     visuals = weapons.stage_visuals(roots, content, stock_materials, techset_dump, wavelets,
-                                    native_fallbacks=native_fallbacks)
+                                   native_fallbacks=native_fallbacks,
+                                   bo2_raw=bo2_root / 'raw' if bo2_root else None)
     report.warnings += visuals['warnings']
+    viewmodels.stage_shadow_variants(content)
+    from . import animnotes
+    animnotes.stage_weapon_events(content)
     loaded: dict[str, set[str]] = {}
     reserved: set[str] = set()
     if bo2_root is not None:
@@ -2152,7 +2208,9 @@ def _stage_weapon_runtime(report: StageReport, project: str, project_root: Path,
         report.warnings.append(f"UNSUPPORTED_WEAPON {name}: not carried in mod.ff: {'; '.join(reasons)}")
     (project_root / "maps" / "mp" / "waw").mkdir(parents=True, exist_ok=True)
     (project_root / "maps" / "mp" / "waw" / "_waw2bo2_assets.gsc").write_text(
-        gscport.assets_source(report.fx_table, waw_map, runtime["table"]), encoding="utf-8")
+        gscport.assets_source(report.fx_table, waw_map, runtime["table"],
+                             bolted_loop_effects(project_root, report.fx_table),
+                             source_zombie_var_overrides(roots)), encoding="utf-8")
     entities_json = project_root / "BSP" / "entities.json"
     if entities_json.exists():
         report.warnings += entities.map_wall_buys(entities_json, runtime["table"])

@@ -131,6 +131,8 @@ def stage(project: Path, roots: list[Path], iwd_dirs: list[Path], stock=None,
                         strings.add(original(text))
     for path in sorted((project / 'content_source/weapons').rglob('*')):
         if path.is_file():
+            if wawtext.read(path).startswith('FLAMETABLEFILE\\'):
+                continue  # nested simulation data, not a weapon display name
             fields = weapons.read_info_file(path)
             weapon_files[path] = fields
             requested.update(original(v) for k, v in fields.items()
