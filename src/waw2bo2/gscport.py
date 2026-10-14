@@ -1824,6 +1824,18 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
         speed_state_function = ported_path(zombiebehavior.SPEED_STATE)
         report.rewrites['source WaW speed round inputs -> shared runtime'] += 1
     selection_source = zombiebehavior.source_selection(sources, API['zombie_runtime'])
+    chase_source = zombiebehavior.source_chase_policy(sources, API['zombie_runtime'])
+    chase_function = None
+    if chase_source:
+        sources.text = dict(sources.text)
+        sources._parsed = dict(sources._parsed)
+        sources.origin = dict(sources.origin)
+        sources.text[zombiebehavior.CHASE_POLICY + '.gsc'] = chase_source
+        sources.origin[zombiebehavior.CHASE_POLICY + '.gsc'] = 'source zombie chase/entrance policy'
+        sources._parsed.pop(zombiebehavior.CHASE_POLICY + '.gsc', None)
+        tr.want(zombiebehavior.CHASE_POLICY)
+        chase_function = ported_path(zombiebehavior.CHASE_POLICY) + '::should_chase'
+        report.rewrites['source zombie chase/entrance policy -> native AI'] += 1
     selection_function = None
     if selection_source:
         sources.text = dict(sources.text)
@@ -1945,7 +1957,7 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     (out_dir / '_waw2bo2_zombie_behavior.gsc').write_text(
         zombiebehavior.runtime_source(API['zombie_runtime'], f'{CORE}::{speed_function}' if speed_function else None,
                                       selection_function, speed_state_function, source_membership,
-                                      f'{CORE}::{respawn_function}' if respawn_function else None),
+                                      f'{CORE}::{respawn_function}' if respawn_function else None, chase_function),
         encoding='utf-8')
     report.weapon_registration = {role: [f for f in fns if f] for role, fns in registration.items()}
     report.characters = appearance

@@ -128,3 +128,26 @@ Radio investigation is deferred at the user's request. The three starting
 radio activations advance the source counter to three. Converted recording
 samples are distinct, but a probe observed early completion notifications for
 the longer recordings; this is not a verified radio fix.
+
+## Swamp riser routing
+
+The source zombie_think explicitly routes its swamp riser actors directly to
+find_flesh, after checking script_forcegoal. The rise markers use in_water,
+which is not BO2's find_flesh spawn token. Relying on that token alone sent
+the converted risers to barricade entrance selection instead.
+
+The transpiler now preserves the source's ordered forced-goal/chase condition
+as an actor predicate and connects it to the owned native routing function.
+The original source map and actor guards remain in the generated script;
+the converter adds no map-name preset. Optional chaser targets remain
+intermediate path nodes rather than forced barricade goals. The original
+path graph stays intact.
+
+The build linked with no missing assets and passed material audits. All 567
+tests passed; 100 compiled scripts round-tripped through the installed map
+fastfile. In a controlled runtime test, three risers at authored in_water
+locations acquired the player and entered find_flesh. Their measured lateral
+movement over ten seconds was 296, 84, and 156 units, with no script errors.
+This covers sampled risers; normal gameplay testing across the swamp remains
+useful. Temporary test points are granted by a local testing script, not by
+the converted map's gameplay code.

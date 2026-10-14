@@ -8,6 +8,45 @@ RUNTIME = r'maps\mp\waw\_waw2bo2_zombie_behavior'
 ACTOR_TREE = 'waw2bo2_zombie_actor'
 SELECTION = r'maps\_waw2bo2_source_spawns'
 SPEED_STATE = r'maps\_waw2bo2_source_speed_state'
+CHASE_POLICY = r'maps\_waw2bo2_source_chase_policy'
+
+
+def source_chase_policy(sources, definition: dict) -> str | None:
+    """Retain the source's ordered choice between forced goals and chasing."""
+    from .gscport import top_level_statements
+    contract = definition['source_chase']
+    source = sources.get(contract['script'])
+    fn = source.functions.get(contract['function']) if source else None
+    if fn is None:
+        return None
+    tokens = source.tokens
+    for a, b in top_level_statements(tokens, fn.body_open, fn.body_close):
+        if tokens[a].low != 'if':
+            continue
+        branches, i, found = [], a, False
+        while i < b:
+            header_start = i
+            if tokens[i].low == 'else':
+                i += 1
+            if tokens[i].low == 'if':
+                if tokens[i + 1].text != '(':
+                    break
+                i = gsc._match(tokens, i + 1, '(', ')') + 1
+            if tokens[i].text != '{':
+                break
+            close = gsc._match(tokens, i, '{', '}')
+            refs = list(gsc.references(tokens, i + 1, close))
+            chase = any(r.name.lower() == contract['chase_function'] for r in refs) and any(
+                r.name.lower() == contract['setup_function'] for r in refs)
+            found |= chase
+            branches.append(gsc.emit(tokens[header_start:i]) + '{ return ' + ('true' if chase else 'false') + '; }')
+            i = close + 1
+            if i >= b or tokens[i].low != 'else':
+                break
+        if found:
+            return '\n'.join(['// Source zombie_think chase/entrance decision.',
+                              'should_chase()', '{', *branches, 'return false;', '}'])
+    return None
 
 
 def source_speed_state(sources, definition: dict) -> str | None:
@@ -297,7 +336,7 @@ def stage_actor_movement(sources, out_root: Path, bo2_root: Path, definition: di
 
 def runtime_source(definition: dict, speed_function: str | None, selection_function: str | None = None,
                    speed_state_function: str | None = None, source_membership: bool = False,
-                   respawn_function: str | None = None) -> str:
+                   respawn_function: str | None = None, chase_function: str | None = None) -> str:
     native = definition['native_spawner']
     owned = definition['owned_spawner']
     native_round = definition['native_round_runtime']
@@ -309,6 +348,7 @@ def runtime_source(definition: dict, speed_function: str | None, selection_funct
     membership = definition['source_membership']
     rise_field = membership['riser_array_field']
     respawn = definition['source_respawn']
+    chase = f'return self {chase_function}();' if chase_function else 'return false;'
     respawn_init = (f"level.{respawn['native_callback']} = ::source_respawn;" if respawn_function else '')
     respawn_body = (f'''source_respawn( player, return_struct )
 {{
@@ -495,6 +535,11 @@ choose_spawn_location()
     point.waw_source_spawner = actor;
     return point;
 }}
+
+source_chases()
+{{
+    {chase}
+}}
 {respawn_body}
 '''
 
@@ -506,6 +551,23 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
     native, owned = definition['native_spawner'], definition['owned_spawner']
     source = (bo2_root / 'raw' / (native.replace('\\', '/') + '.gsc')).read_text(encoding='utf-8')
     script = gsc.parse(source, native)
+    has_policy = (out_root / 'maps/mp/waw/_waw2bo2_source_chase_policy.gsc').is_file()
+    skip = script.functions.get('should_skip_teardown')
+    if has_policy and skip is None:
+        raise ValueError(f'{native}: missing chase/entrance routing predicate')
+    if has_policy:
+        script.tokens[skip.body_open].text += ('\n    if ( self ' + RUNTIME + '::source_chases() )\n        return true;\n')
+    # A source chaser's optional target is an intermediate path node, not a
+    # forced barricade. Let the native chase branch consume that node first.
+    think = script.functions.get('zombie_think')
+    if has_policy and think:
+        for i in range(think.body_open + 1, think.body_close - 2):
+            if script.tokens[i].low == 'if' and script.tokens[i + 1].text == '(':
+                end = gsc._match(script.tokens, i + 1, '(', ')')
+                cond = ''.join(t.low for t in script.tokens[i + 2:end])
+                if cond == '!isdefined(find_flesh_struct_string)&&isdefined(self.target)&&self.target!=""':
+                    script.tokens[end].text = ' && !self ' + RUNTIME + '::source_chases() )'
+                    break
     core = out_root / 'maps/mp/waw/_waw2bo2_core.gsc'
     if core.is_file() and 'waw_tesla_init()' in core.read_text(encoding='utf-8'):
         death = script.functions.get('zombie_death_points')
