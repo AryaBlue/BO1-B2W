@@ -1,0 +1,82 @@
+import copy
+import json
+import tempfile
+import unittest
+from pathlib import Path
+
+from waw2bo2 import constraints
+
+
+def rope():
+    return dict(type=8, attach_point_type1=2, attach_point_type2=0,
+                target_ent1='suspended_model', target_ent2='',
+                target_index1=123, target_index2=-1, material=',rope_material',
+                offset=[0, 0, 0], pos=[0, 0, -3], pos2=[100, 200, 300],
+                dir=[0, 0, 0], scale=[0.15, 0, 0], distance=34,
+                damp=0, power=0, spin_scale=0, minAngle=0, maxAngle=0)
+
+
+class ConstraintTests(unittest.TestCase):
+    def stage(self, entries, root):
+        source = root / 'source.json'
+        source.write_text(json.dumps(dict(version=1, constraints=entries)))
+        return constraints.stage(source, root / 'project')
+
+    def test_named_attachment_rebinds_without_changing_rope_geometry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original = rope()
+            report = self.stage([original], root)
+            self.assertEqual(report, dict(count=1, ropes=1, materials=['rope_material'], exported=True))
+            staged = json.loads((root / 'project/BSP/constraints.json').read_text())['constraints'][0]
+            expected = copy.deepcopy(original)
+            expected.update(target_index1=-1, material='rope_material')
+            self.assertEqual(staged, expected)
+
+    def test_unsupported_attachments_and_bad_geometry_fail_explicitly(self):
+        changes = [dict(attach_point_type1=1), dict(target_ent1=''),
+                   dict(pos=[0, 1]), dict(distance=float('inf'))]
+        with tempfile.TemporaryDirectory() as tmp:
+            for change in changes:
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    self.stage([dict(rope(), **change)], Path(tmp))
+
+    def test_limits_and_missing_source_remove_stale_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with self.assertRaisesRegex(ValueError, 'rope count'):
+                self.stage([rope() for _ in range(301)], root)
+            self.stage([rope()], root)
+            report = constraints.stage(root / 'missing.json', root / 'project')
+            self.assertFalse(report['exported'])
+            self.assertFalse((root / 'project/BSP/constraints.json').exists())
+
+    def test_native_rope_reconstructs_removed_endpoint_and_keeps_source_material(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = dict(rope(), targetname='suspension', flags=0, timeout=0)
+            entry.update(pos=[1, 0, -3], pos2=[100, 200, 330])
+            self.stage([entry], root)
+            project = root / 'project'
+            source = project / 'materials/rope_material.json'
+            source.parent.mkdir()
+            source.write_text('{"textures":[{"image":"source_rope"}]}')
+            data = {'entities': [{'classname': 'script_model', 'targetname': 'suspended_model',
+                                 'origin': '100 200 300', 'angles': '0 90 0'},
+                                {'classname': 'rope', 'target': 'compiled_out_endpoint'}]}
+            (project / 'BSP/entities.json').write_text(json.dumps(data))
+            report = constraints.stage_entities(project)
+            self.assertEqual(report, dict(ropes=1, endpoints=1, materials=['mc/waw_rope/rope_material']))
+            out = json.loads((project / 'BSP/entities.json').read_text())['entities']
+            end = next(e for e in out if e['classname'] == 'info_null')
+            self.assertEqual(end['origin'], '100 201 297')
+            self.assertEqual(end['target'], 'suspended_model')
+            native = next(e for e in out if e['classname'] == 'rope')
+            self.assertEqual(native['origin'], '100 200 330')
+            self.assertEqual(native['target'], end['targetname'])
+            self.assertEqual(native['material'], 'waw_rope/rope_material')
+            self.assertEqual((project / 'materials/mc/waw_rope/rope_material.json').read_bytes(), source.read_bytes())
+
+
+if __name__ == '__main__':
+    unittest.main()

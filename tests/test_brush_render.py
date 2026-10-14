@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 from waw2bo2.world import FormatError, read_gfx_world
-from waw2bo2.fbx import merge_surfaces
+from waw2bo2.fbx import merge_surfaces, write_world_fbx
 
 
 class BrushRenderTests(unittest.TestCase):
@@ -32,3 +32,13 @@ class BrushRenderTests(unittest.TestCase):
         for ranges in ([(0, 1), (3, 1)], [(0, 1), (1, 2), (2, 1)]):
             with self.subTest(ranges=ranges), self.assertRaises(FormatError):
                 self.read(ranges)
+
+    def test_shadow_helpers_keep_geometry_and_carry_no_draw_metadata(self):
+        world = self.read([(0, 3)])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'world.fbx'
+            ordinary = write_world_fbx(world, path)
+            self.assertNotIn('_nd1_', path.read_text())
+            hidden = write_world_fbx(world, path, shadow_only_materials=frozenset({'wall'}))
+            self.assertEqual(hidden, ordinary)
+            self.assertIn('_nd1_bm0_pl1_lm0', path.read_text())

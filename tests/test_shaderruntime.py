@@ -261,6 +261,32 @@ div r0.x, cb0[58].x, r0.x
             self.assertEqual(shaders.compile_hlsl(hlsl, 'ps_5_0')[:4], b'DXBC')
 
 
+    def test_water_adds_depth_and_scene_color_when_donor_has_neither(self):
+        source = '''// floatZSampler s0 1
+// refractSampler s1 1
+ps_3_0
+dcl_texcoord v0.xy
+dcl_2d s0
+dcl_2d s1
+texld r0, v0, s0
+texld r1, v0, s1
+add oC0, r0, r1
+'''
+        native_pass = {'args': [], 'perPrimArgCount': 0, 'perObjArgCount': 0, 'stableArgCount': 0}
+        with patch.object(runtime, '_native_program', side_effect=lambda _, stage, __: NATIVE if stage == 'vs' else TARGET), \
+                patch.object(runtime, 'native_depth_reference', return_value=(0, 928, 16)) as reference:
+            contract = runtime.paired_pixel_contract(source,
+                {'args': [{'type': 4, 'dest': 0}, {'type': 4, 'dest': 1}]},
+                native_pass, Path('.'), [{'semantic': 'TEXCOORD0', 'width': 2}])
+        reference.assert_called_once()
+        self.assertEqual([a['u']['value'] for a in native_pass['args']], [18, 9])
+        self.assertEqual(native_pass['stableArgCount'], 2)
+        self.assertNotEqual(contract['samplers']['s0']['texture'], contract['samplers']['s1']['texture'])
+        hlsl, _ = shaders.translate(source, contract)
+        self.assertIn('t6_cb0[58].x / max(abs(', hlsl)
+        if os.name == 'nt':
+            self.assertEqual(shaders.compile_hlsl(hlsl, 'ps_5_0')[:4], b'DXBC')
+
     def test_per_surface_textures_set_the_pass_sampler_flags(self):
         # T6 binds the surface lightmap (t13) and probe (t15) only for passes
         # whose customSamplerFlags ask for them (bit 1 lightmap, bit 0 probe).

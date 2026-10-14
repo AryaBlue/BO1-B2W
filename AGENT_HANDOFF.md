@@ -1,5 +1,46 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Stock Shi No Numa DLC2 port, 2026-10-14
+
+- Active branch `codex/shi-no-numa-dlc2-port`; user has not requested its push
+  or merge. Source is stock WaW `nazi_zombie_sumpf.ff`. Shared conversion
+  changes and limits: `docs/SHI_NO_NUMA_DLC2_PORT.md`.
+- Evidence/build/probe helpers: `work/shi_no_numa_dlc2`. 543 tests pass.
+  T4 exporter is maintained in `vendor/OpenAssetTools.patch`; its working
+  source checkout is `work/ci_validation_checkout/vendor/OpenAssetTools`.
+  T6 clipmap linker changes are tracked directly in `vendor/OpenAssetToolsT6`.
+- Keep the separate installed `zm_shi_no_numa_waw_shadowdiag` identified as a
+  diagnostic, not the final map. User observed partial shadow improvement.
+  Source cutout plank visible programs contain alpha discard. Subsequent
+  doorway/outdoor panel screenshots exposed missing native NO_DRAW for
+  shadow-only geometry (stock flags 25 vs bridge 17). The additional camera
+  range correction excludes the five helper surfaces from color drawing while
+  retaining shadow geometry; the user confirmed the panels are gone.
+  Maintained T4 exporter now emits v6 render data, including layers
+  and source shadow geometry that the previous v4 exporter omitted.
+  Full gameplay progression is not
+  established by build/probe success.
+- Peter's suspension remains unresolved despite preserved source constraints,
+  live entity bindings and two initialized ropes. User explicitly requested
+  skipping Peter for now. Do not claim the data preservation fixes his physics.
+- Wunderwaffe: restore source Tesla init/chain through T6's zombie damage
+  callback shared by hip fire/ADS. Retain electric trail; suppress the T4
+  tank_shell placeholder's native T6 explosion impact. User requested ten
+  targets (dumped source defaults to twenty); runtime caps at ten. Full rebuild
+  in `build_tesla.log`; clean live probe confirms 10 kills from 12 targets,
+  two survivors, zero script runtime errors. Extracted functions now use T6
+  player.name and namespaced sound-variant lookup. User's game PID 29800 had
+  closed before probes; probe helper stopped only its own processes and removed
+  its temporary observer. Final updated regular mod is installed.
+  Reopened regular `zm_shi_no_numa_waw` for user testing as PID 35580; leave
+  that game running. No temporary probe is installed.
+- User corrected the board report: WaW boards are outside and flush; the gap
+  is a converter defect. Native repair animation final poses add ~31 units
+  forward. Staging calibrates all 19 roots from actual source plank depth,
+  keeping attack slots outside and entry structs as repair triggers. Earlier
+  live probe observed board opening and zombies entering. Final visual board
+  alignment and absence of shell impact FX still need user confirmation.
+
 ## Baseball Field build fix, 2026-10-13
 
 - Branch `codex/baseball-field-build-fix` fixes stock framework version discovery.

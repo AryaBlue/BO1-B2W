@@ -584,7 +584,15 @@ def source_dumps(settings, paths: CachePaths, *, refresh=False) -> dict[str, Pat
         selected = [('map', source), ('patch', folder / (source.stem + '_patch.ff')),
                     ('mod', folder / 'mod.ff')]
         expected = {ff for _, ff in selected}
-        selected += [('extra:' + ff.stem, ff) for ff in sorted(folder.glob('*.ff')) if ff not in expected]
+        extras = sorted(folder.glob('*.ff'))
+        if folder.is_relative_to((Path(settings.waw) / 'zone').resolve()):
+            # Stock levels share their language folder with the entire game.
+            # Only this level's companions are map sources; other stock assets
+            # remain dependencies resolved through the shared game index.
+            companions = {source.stem + '_load', 'localized_' + source.stem,
+                          'localized_' + source.stem + '_patch'}
+            extras = [ff for ff in extras if ff.stem in companions]
+        selected += [('extra:' + ff.stem, ff) for ff in extras if ff not in expected]
         selected = [(role, ff) for role, ff in selected if ff.is_file()]
         unique = list(dict.fromkeys(ff for _, ff in selected))
         # ":short-staging" retires custom-map dumps published before exports

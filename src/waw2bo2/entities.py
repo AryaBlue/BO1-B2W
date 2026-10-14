@@ -129,12 +129,17 @@ def convert_entities(ents: list[dict[str, str]], project: str,
                 linked = [e for e in ents if e.get("targetname") == target]
                 if linked and not any(e.get("classname", "").startswith("zbarrier_") for e in linked):
                     native_target = target
+                    # Native board animations advance from their root, which
+                    # also owns zombie attack slots. The entry struct stays
+                    # the repair trigger. Calibrate the root from source plank
+                    # depth and native repair poses during staging.
+                    anchor = ent
                     out.append({
                         "classname": "zbarrier_zmcore_BasicWoodBarrier",
                         "type": "zmcore_BasicWoodBarrier",
                         "targetname": native_target,
-                        "origin": ent.get("origin", "0 0 0"),
-                        "angles": ent.get("angles", "0 0 0"),
+                        "origin": anchor.get("origin", "0 0 0"),
+                        "angles": anchor.get("angles", ent.get("angles", "0 0 0")),
                         "zbarriernumboards": "6",
                         **{f"zbarrierboardmodel{i}": f"p6_anim_zm_barricade_board_0{i}" for i in range(1, 7)},
                         **{f"zbarrierboardanim{i}": f"o_zombie_board_{i}_repair" for i in range(1, 7)},
@@ -149,6 +154,15 @@ def convert_entities(ents: list[dict[str, str]], project: str,
             # initial_zone). Non-zone volumes stay harmless: the zone must be enabled.
             renamed[f"info_volume script_noteworthy {ent.get('script_noteworthy')} -> player_volume"] += 1
             ent["script_noteworthy"] = "player_volume"
+        if cls == 'script_struct' and ent.get('targetname') == 'player_respawn_point' and \
+                not ent.get('script_noteworthy') and not ent.get('script_string'):
+            # WaW nearby-team anchors target indexed player locations. T6's
+            # zone manager otherwise assumes these are zone-bound spawns and
+            # asserts. Preserve the anchor and target for the source callback,
+            # but exclude it from T6's gametype-filtered native spawn list.
+            from .gscport import API
+            ent['script_string'] = API['zombie_runtime']['source_respawn']['native_exclusion_tag']
+            renamed['WaW team respawn anchor -> source callback (native gametype exclusion)'] += 1
         if cls == "trigger_multiple" and ent.get("targetname") == "playable_area" and "script_noteworthy" not in ent:
             # WaW marks where players may stand with "playable_area" triggers
             # and never kills outside zones. BO2 kills players outside enabled

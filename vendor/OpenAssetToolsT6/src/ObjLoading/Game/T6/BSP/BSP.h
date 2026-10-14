@@ -51,6 +51,7 @@ namespace BSP
         int primaryLightIndex = -1;
         unsigned brushModel = 0;
         int meshIndex = -1; // waw2bo2 "waw_mesh_<i>" FBX mesh (shadow geometry refers to it), -1 when absent
+        bool noDraw = false; // source shadow-only helper geometry
     };
 
     struct BSPWorld

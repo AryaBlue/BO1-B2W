@@ -63,6 +63,19 @@ class ZoneGraphTests(unittest.TestCase):
 
 
 class SynthesizedZoneTests(unittest.TestCase):
+    def test_barricade_root_keeps_attack_origin_and_entry_keeps_repair_trigger(self):
+        goal = {'classname': 'script_struct', 'targetname': 'exterior_goal', 'target': 'window',
+                'origin': '0 0 0', 'angles': '0 90 0'}
+        entry = {'classname': 'script_struct', 'targetname': 'window',
+                 'origin': '0 48 0', 'angles': '0 90 0'}
+        board = {'classname': 'script_brushmodel', 'targetname': 'window', 'origin': '0 48 32',
+                 'model': '*1', 'script_noteworthy': '1'}
+        out, _, _ = entities.convert_entities([goal, entry, board], 'test', {})
+        barrier = next(e for e in out if e.get('classname', '').startswith('zbarrier_'))
+        self.assertEqual(barrier['origin'], goal['origin'])
+        self.assertEqual(barrier['angles'], goal['angles'])
+        self.assertEqual(next(e for e in out if e.get('targetname') == 'exterior_goal')['origin'], goal['origin'])
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

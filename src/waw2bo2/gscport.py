@@ -984,10 +984,6 @@ class Translator:
         self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
         self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
         self.report.rewrites["WaW deathanim assignments kept BO2's (ASD state)"] += keep_bo2_deathanims(tokens)
-        for i, token in enumerate(tokens):
-            if i and token.low == "playername" and tokens[i - 1].text == ".":
-                token.text = "name"
-                self.report.rewrites["WaW playername field -> T6 name"] += 1
         defs = {fn.start for fn in script.functions.values()}
         for name, fn in script.functions.items():
             if self.shadows_builtin(name):
@@ -1011,6 +1007,10 @@ class Translator:
         # WaW custom scripts may access the hint registry directly. Keep these
         # accesses in the same source registry as the adapted helper calls.
         for i in range(2, len(tokens)):
+            if tokens[i].low == 'playername' and tokens[i - 1].text == '.' and \
+                    (i + 1 == len(tokens) or tokens[i + 1].text != '('):
+                tokens[i].text = 'name'
+                self.report.rewrites['WaW playername field -> T6 name'] += 1
             if tokens[i].text.lower() == "zombie_hints" and tokens[i - 1].text == "." and tokens[i - 2].text.lower() == "level":
                 tokens[i].text = "waw2bo2_hints"
         for ref in gsc.references(tokens):
@@ -1554,6 +1554,12 @@ class Translator:
             if ref.qualifier is None or ref.pointer or ref.method:
                 continue
             target = norm(ref.qualifier)
+            tesla = API['tesla_runtime']
+            if target == tesla['source_script'] and ref.name.lower() == tesla['initialize'] and \
+                    (target, ref.name.lower()) in self.core_funcs:
+                # The damage adapter calls the extracted initializer, including
+                # a map override. Do not start its connection threads twice.
+                continue
             if self.bo2_stock_perks and stockperks.is_perk_framework(target) and \
                     ref.name.lower() not in self.waw_perk_parts.get(target, ()):
                 continue
@@ -1787,6 +1793,19 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     registration = {role: [tr.extract_entry(core, fn) for core, fn in entries if sources.get(core) is not None
                            and fn in sources.get(core).functions]
                     for role, entries in WEAPON_REGISTRATION.items()}
+    # The native zombie framework replaces WaW's damage dispatch, not its
+    # scripted wonder-weapon behavior. Retain the source chain and bind it
+    # through T6's callback shared by hip-fire and ADS damage.
+    tesla_definition = API['tesla_runtime']
+    tesla = tesla_definition['source_script']
+    tesla_functions = [tesla_definition[key] for key in ('initialize', 'damage_predicate', 'damage_entry')]
+    tesla_script = sources.get(tesla)
+    tesla_entries = {}
+    if tesla_script and all(n in tesla_script.functions for n in tesla_functions):
+        tesla_entries = {key: tr.extract_entry(tesla, tesla_definition[key]) for key in
+                         ('initialize', 'damage_predicate', 'damage_entry')}
+        tr.post_calls.append(f'{CORE}::waw_tesla_init();')
+        report.rewrites['source Tesla chain -> native zombie damage callback'] += 1
     appearance = has_waw_appearance(sources)
     if appearance:
         tr.want(LOADOUT)
@@ -1813,6 +1832,8 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
                                                re.IGNORECASE)))
 
     drain()
+    if tesla_entries:
+        core_parts.append(tesla_callback_source(tesla_entries))
     # level state the extracted box code reads (set in the framework's init)
     if registration.get("box"):
         state = tr.extract_level_state(*BOX_STATE_INIT)
@@ -1824,6 +1845,24 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     read = set().union(*(level_fields_read(gsc.tokenize(text)) for text in [*tr.done.values(), *core_parts]))
     framework_state = [state for core, init in FRAMEWORK_STATE_INITS
                        if (state := tr.extract_level_state(core, init, read))]
+    # Source zone managers can own the active actor list instead of DLC3's
+    # adjacency graph. Retain its initializer only when ported gameplay reads
+    # that list and the round selector can be translated exactly.
+    selection_contract = API['zombie_runtime']['source_selection']
+    membership_field = selection_contract['array_field']
+    source_membership = False
+    if selection_function and membership_field in read:
+        state = tr.extract_level_state(selection_contract['script'],
+                                       API['zombie_runtime']['source_membership']['initializer'], {membership_field})
+        if state:
+            framework_state.append(state)
+            source_membership = True
+            report.rewrites['source active spawner membership -> shared runtime'] += 1
+    respawn_contract = API['zombie_runtime']['source_respawn']
+    respawn_script = sources.get(respawn_contract['script'])
+    respawn_function = None
+    if respawn_script and respawn_contract['function'] in respawn_script.functions:
+        respawn_function = tr.extract_entry(respawn_contract['script'], respawn_contract['function'])
     if hint_registry:
         framework_state.append(hint_registry)
     for core, function in DAMAGE_PRELUDES:
@@ -1857,7 +1896,8 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     (out_dir / "_waw2bo2_weapons.gsc").write_text(weapons_source(registration), encoding="utf-8")
     (out_dir / '_waw2bo2_zombie_behavior.gsc').write_text(
         zombiebehavior.runtime_source(API['zombie_runtime'], f'{CORE}::{speed_function}' if speed_function else None,
-                                      selection_function, speed_state_function),
+                                      selection_function, speed_state_function, source_membership,
+                                      f'{CORE}::{respawn_function}' if respawn_function else None),
         encoding='utf-8')
     report.weapon_registration = {role: [f for f in fns if f] for role, fns in registration.items()}
     report.characters = appearance
@@ -2179,6 +2219,47 @@ def top_level_statements(tokens: list[gsc.Token], open_: int, close: int) -> lis
 # knife, default lethal grenade, default last-stand pistol and its solo
 # upgrade). They are included but never put in the box.
 BO2_FRAMEWORK_WEAPONS = ("knife_zm", "frag_grenade_zm", "m1911_zm", "m1911_upgraded_zm")
+
+
+def tesla_callback_source(entries: dict[str, str]) -> str:
+    definition = API['tesla_runtime']
+    return f'''
+// WaW's source chain owns Tesla kills; the projectile only starts the chain.
+waw_tesla_init()
+{{
+    {entries['initialize']}();
+    // Standard Wunderwaffe limit requested for the converted runtime.
+    if ( isdefined( level.zombie_vars["tesla_max_enemies_killed"] ) )
+        level.zombie_vars["tesla_max_enemies_killed"] = min( {definition['max_targets']}, level.zombie_vars["tesla_max_enemies_killed"] );
+    {definition['native_register']}( ::waw_tesla_damage );
+}}
+
+waw_tesla_damage( mod, hit_location, hit_origin, player, amount )
+{{
+    if ( !isdefined( player ) || !isplayer( player ) || !self {entries['damage_predicate']}( mod ) )
+        return false;
+    if ( !isdefined( player.tesla_network_death_choke ) )
+        player.tesla_network_death_choke = 0;
+    if ( !isdefined( player.waw_tesla_choke_bound ) )
+    {{
+        player.waw_tesla_choke_bound = true;
+        player thread waw_tesla_network_choke();
+    }}
+    self thread {entries['damage_entry']}( hit_location, hit_origin, player );
+    return true;
+}}
+
+waw_tesla_network_choke()
+{{
+    self endon( "disconnect" );
+    for ( ;; )
+    {{
+        wait_network_frame();
+        wait_network_frame();
+        self.tesla_network_death_choke = 0;
+    }}
+}}
+'''
 
 
 def weapons_source(registration: dict[str, list[str | None]]) -> str:

@@ -189,6 +189,11 @@ def _match_lit(src: Techset, source: str, candidates: list[str], want_family: st
 
 def match(source: str, candidates: list[str]) -> Match:
     src = parse(source)
+    if source == 'm_rope':
+        # The same techrope_global_black asset uses m_rope in WaW and
+        # mc_lit_sm_r0c0 in T6; T6's rope renderer supplies that model stream.
+        m = match('mc_l_sm_r0c0', candidates)
+        return Match(source, m.target, m.cost, ['WaW rope -> T6 model-lit rope stream (same-asset measurement)'] + m.notes)
     if source == 'default':
         # WaW's raw $default3d uses a plain colorMap, rather than mtl_default's
         # lit/specular debug texture. Preserve that image on a model draw pass.

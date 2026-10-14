@@ -116,6 +116,20 @@ class ZombieBehaviorTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'conditional movement table'):
                 zombiebehavior.movement_sets(sources, gscport.API['zombie_runtime'])
 
+    def test_source_map_condition_selects_authored_movement_overrides(self):
+        with tempfile.TemporaryDirectory() as temp:
+            sources = self.make_sources(Path(temp), 'init_standard_zombie_anims(){ '
+                'level.scr_anim["zombie"]["run1"]=%base; '
+                'if(level.script == "source_map") { level.scr_anim["zombie"]["run1"]=%special; '
+                'level.scr_anim["zombie"]["run2"]=%special; } '
+                'else { level.scr_anim["zombie"]["run1"]=%other; } }')
+            _, sets = zombiebehavior.movement_sets(sources, gscport.API['zombie_runtime'], 'source_map')
+            self.assertEqual(sets, {'run': ['special', 'special']})
+            _, sets = zombiebehavior.movement_sets(sources, gscport.API['zombie_runtime'], 'another_map')
+            self.assertEqual(sets, {'run': ['other']})
+            with self.assertRaisesRegex(ValueError, 'conditional movement table'):
+                zombiebehavior.movement_sets(sources, gscport.API['zombie_runtime'])
+
     def test_source_clips_bind_owned_server_and_client_states(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -159,6 +173,62 @@ class ZombieBehaviorTests(unittest.TestCase):
             self.assertNotIn('unrelated', text)
             self.assertNotIn('spawn_zombie', text)
 
+    def test_spawner_sampler_without_history_keeps_single_source_draw(self):
+        with tempfile.TemporaryDirectory() as temp:
+            sources = self.make_sources(Path(temp), 'round_spawning(){ while(1){ '
+                'spawn_point=level.enemy_spawns[randomint(level.enemy_spawns.size)]; '
+                'spawn_zombie(spawn_point); } }')
+            text = zombiebehavior.source_selection(sources, gscport.API['zombie_runtime'])
+            self.assertEqual(text.count('randomint(candidates.size)'), 1)
+            self.assertNotIn('spawn_zombie', text)
+            self.assertNotIn('old_spawn=', text)
+            gsc.parse(text, 'single source draw')
+
+    def test_unknown_sampler_without_history_is_not_assumed_random(self):
+        with tempfile.TemporaryDirectory() as temp:
+            sources = self.make_sources(Path(temp), 'round_spawning(){ '
+                'spawn_point=level.enemy_spawns[custom_index()]; spawn_zombie(spawn_point); }')
+            self.assertIsNone(zombiebehavior.source_selection(sources, gscport.API['zombie_runtime']))
+
+    def test_source_zone_manager_keeps_active_array_initializer(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for name, text in {
+                'maps/test.gsc': 'main(){ maps\\_zombiemode::main(); level.enemy_spawns=update(level.enemy_spawns); } '
+                                 'update(spawns){return spawns;}',
+                'maps/_zombiemode.gsc': 'main(){level.enemy_spawns=getentarray("initial","targetname");} '
+                    'round_spawning(){while(1){spawn_point=level.enemy_spawns[randomint(level.enemy_spawns.size)]; spawn_zombie(spawn_point);}}',
+                'maps/_loadout.gsc': 'init_loadout(){} give_model(){}',
+            }.items():
+                p = root / name
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(text)
+            gscport.port_map(gscport.Sources([root], [], None), T6Api({'getentarray': (2, 2)}, {}), 'test', root / 'out')
+            core = (root / 'out/maps/mp/waw/_waw2bo2_core.gsc').read_text()
+            runtime = (root / 'out/maps/mp/waw/_waw2bo2_zombie_behavior.gsc').read_text()
+            self.assertIn('level.enemy_spawns=getentarray("initial","targetname")', core)
+            self.assertIn('level.waw_source_spawn_membership = 1;', runtime)
+            self.assertIn('return spawn_point.waw_source_spawner;', runtime)
+
+    def test_source_team_respawn_anchors_do_not_enter_native_zone_list(self):
+        anchor = {'classname': 'script_struct', 'targetname': 'player_respawn_point',
+                  'target': 'player_slots', 'origin': '1 2 3'}
+        native = dict(anchor, origin='4 5 6', script_noteworthy='yard')
+        out, _, _ = entities.convert_entities([anchor, native], 'test', {})
+        points = [e for e in out if e.get('targetname') == 'player_respawn_point']
+        self.assertEqual(points[0]['target'], 'player_slots')
+        self.assertEqual(points[0]['origin'], '1 2 3')
+        self.assertEqual(points[0]['script_string'], 'waw_source_respawn')
+        self.assertNotIn('script_string', points[1])
+        runtime = zombiebehavior.runtime_source(gscport.API['zombie_runtime'], None,
+                                               respawn_function='source::team_respawn')
+        self.assertIn('level.check_for_valid_spawn_near_team_callback = ::source_respawn', runtime)
+        parsed = gsc.parse(runtime, 'source respawn adapter')
+        fn = parsed.functions['source_respawn']
+        body = gsc.emit(parsed.tokens[fn.body_open:fn.body_close])
+        self.assertIn('source::team_respawn( player )', body)
+        self.assertIn('point.origin = origin', body)
+
     def test_native_spawner_picks_use_source_sampler(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -171,6 +241,9 @@ class ZombieBehaviorTests(unittest.TestCase):
             out.mkdir(parents=True)
             (out / '_waw2bo2_zombie_behavior.gsc').write_text('init(){}')
             (out / '_waw2bo2_zm.gsc').write_text('round_spawning(){ '
+                'while(level.zombie_spawn_locations.size <= 0) wait 0.1; '
+                'spawn_point=level.zombie_spawn_locations[randomint(level.zombie_spawn_locations.size)]; '
+                'old_spawn=spawn_point; '
                 'spawner=random(level.zombie_spawners); other=random(other_array); '
                 'ai=spawn_zombie(spawner,spawner.targetname,spawn_point); }\n'
                 'init(){ maps\\mp\\zombies\\_zm_spawner::init(); }\n'
@@ -182,6 +255,31 @@ class ZombieBehaviorTests(unittest.TestCase):
             self.assertIn('other=random(other_array)', text)
             self.assertIn('maps\\mp\\waw\\_waw2bo2_spawner::init()', text)
             self.assertIn('::refresh_speed("walk")', text)
+            self.assertIn('::spawn_locations_available()', text)
+            self.assertIn('::choose_spawn_location()', text)
+            self.assertLess(text.index('::choose_spawn_location()'), text.index('::choose_spawner('))
+            gsc.parse(text, 'active source membership round loop')
+
+    def test_source_tesla_deaths_skip_native_duplicate_points_and_drops(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.make_movement_callback(root)
+            native = root / 'bo2/raw/maps/mp/zombies/_zm_spawner.gsc'
+            native.parent.mkdir(parents=True)
+            native.write_text('zombie_spawn_init(){ self init_zombie_run_cycle(); self thread zombie_think(); } '
+                              'do_zombie_spawn(){spot=random(spots);} zombie_think(){} '
+                              'zombie_death_points(origin, mod, loc, attacker, zombie, team){ award(); }')
+            out = root / 'out/maps/mp/waw'
+            out.mkdir(parents=True)
+            (out / '_waw2bo2_zombie_behavior.gsc').write_text('init(){}')
+            (out / '_waw2bo2_core.gsc').write_text('waw_tesla_init(){}')
+            zombiebehavior.stage_native_support(root / 'out', root / 'bo2', gscport.API['zombie_runtime'])
+            text = (out / '_waw2bo2_spawner.gsc').read_text()
+            script = gsc.parse(text, 'native Tesla death adapter')
+            fn = script.functions['zombie_death_points']
+            body = gsc.emit(script.tokens[fn.body_open:fn.body_close])
+            self.assertLess(body.index('zombie.tesla_death'), body.index('award()'))
+            self.assertIn('return;', body)
 
     def test_chosen_active_spawn_location_is_bound_before_deferred_native_callbacks(self):
         runtime = zombiebehavior.runtime_source(gscport.API['zombie_runtime'], None)

@@ -123,6 +123,15 @@ waw_contact_kill_end()
     self.waw_contact_previous_damage = undefined;
 }
 
+waw_array_remove( array, value )
+{
+    result = [];
+    for ( i = 0; i < array.size; i++ )
+        if ( array[i] != value )
+            result[result.size] = array[i];
+    return result;
+}
+
 waw_contact_kill_damage( victim )
 {
     return 0;
@@ -643,6 +652,14 @@ waw_playsoundasmaster( alias )
 waw_soundexists( alias )
 {
     return isdefined( alias ) && soundexists( "waw/" + alias );
+}
+
+waw_get_number_variants( prefix )
+{
+    for ( i = 0; i < 100; i++ )
+        if ( !waw_soundexists( prefix + "_" + i ) )
+            return i;
+    return 100;
 }
 
 // Conversion diagnostic: a zombie that has not moved 32 units in 15 s while

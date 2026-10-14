@@ -68,6 +68,8 @@ class MaterialIsolationTests(unittest.TestCase):
             fbx = project / 'BSP/map_gfx.fbx'
             fbx.parent.mkdir()
             fbx.write_text('Material::mc/shared" Material::mc/shared_extra"')
+            (project / 'BSP/lightmaps.json').write_text(json.dumps({'wawMaterials': ['mc/shared', 'unchanged']}))
+            (project / 'BSP/constraints.json').write_text(json.dumps({'constraints': [{'material': 'mc/shared'}, {'material': ''}]}))
             script = project / 'maps/mp/test.gsc'
             script.parent.mkdir(parents=True)
             script.write_text('init(){material="mc/shared";self setshader(material);}')
@@ -79,6 +81,10 @@ class MaterialIsolationTests(unittest.TestCase):
             self.assertEqual(json.loads(gltf.read_text())['materials'][0]['name'], 'waw_world/mc/shared')
             self.assertEqual(fbx.read_text(), 'Material::waw_world/mc/shared" Material::mc/shared_extra"')
             self.assertIn('material="waw_world/mc/shared"', script.read_text())
+            self.assertEqual(json.loads((project / 'BSP/lightmaps.json').read_text())['wawMaterials'],
+                             ['waw_world/mc/shared', 'unchanged'])
+            self.assertEqual(json.loads((project / 'BSP/constraints.json').read_text())['constraints'],
+                             [{'material': 'waw_world/mc/shared'}, {'material': ''}])
 
     def test_default_use_hint_does_not_replace_authored_entity_hints(self):
         with tempfile.TemporaryDirectory() as temp:

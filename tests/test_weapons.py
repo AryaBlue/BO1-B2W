@@ -7,6 +7,23 @@ from waw2bo2 import weapons
 
 
 class WeaponTests(unittest.TestCase):
+    def test_tesla_bolt_retains_electric_trail_without_t6_shell_impact(self):
+        schema = {'weaponType': 'WFT_WEAPONTYPE', 'impactType': 'WFT_IMPACT_TYPE',
+                  'projTrailEffect': 'CSPFT_FX', 'projExplosionEffect': 'CSPFT_FX',
+                  'explosionInnerDamage': 'CSPFT_INT'}
+        source = {'weaponType': 'projectile', 'impactType': 'tank_shell',
+                  'projTrailEffect': 'maps/zombie/fx_zombie_tesla_electric_bolt',
+                  'projExplosionEffect': '', 'explosionInnerDamage': '1'}
+        result = weapons.convert('custom_tesla', source, schema, schema)
+        self.assertEqual(result.fields['impactType'], 'none')
+        self.assertEqual(result.fields['projExplosionEffect'], '')
+        self.assertEqual(result.fields['explosionInnerDamage'], '1')
+        self.assertEqual(result.fields['projTrailEffect'], 'waw/' + source['projTrailEffect'])
+        # A real shell or authored custom explosion is not suppressed.
+        for changes in ({'projTrailEffect': 'custom/shell'}, {'projExplosionEffect': 'custom/explosion'}):
+            result = weapons.convert('custom', {**source, **changes}, schema, schema)
+            self.assertEqual(result.fields['impactType'], 'tank_shell')
+
     def test_shared_ammo_groups_preserve_limits_without_engine_collisions(self):
         schema = {"sharedAmmoCapName": "CSPFT_STRING", "sharedAmmoCap": "CSPFT_INT",
                   "ammoName": "CSPFT_STRING", "clipName": "CSPFT_STRING"}

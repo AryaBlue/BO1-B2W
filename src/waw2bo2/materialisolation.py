@@ -29,6 +29,17 @@ def stage(report, project: Path, stock: Path):
         renamed[name] = output
     if not renamed:
         return renamed
+    for filename, field in (('lightmaps.json', 'wawMaterials'), ('constraints.json', 'constraints')):
+        manifest = project / 'BSP' / filename
+        if not manifest.is_file():
+            continue
+        data = json.loads(manifest.read_text())
+        if filename == 'lightmaps.json':
+            data[field] = [renamed.get(name, name) for name in data[field]]
+        else:
+            for constraint in data[field]:
+                constraint['material'] = renamed.get(constraint['material'], constraint['material'])
+        manifest.write_text(json.dumps(data, indent=2) + '\n')
     rewrite_hud(project, renamed, (getattr(report, 'scripts', None) or {}).get('hud_materials', []))
     for path in (project / 'model_export').rglob('*.gltf'):
         data = json.loads(path.read_text(encoding='utf-8'))

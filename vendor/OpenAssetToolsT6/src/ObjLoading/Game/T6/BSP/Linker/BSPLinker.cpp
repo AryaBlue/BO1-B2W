@@ -69,7 +69,7 @@ namespace BSP
             return false;
 
         ComWorldLinker comWorldLinker(m_memory, m_search_path, m_context);
-        ClipMapLinker clipMapLinker(m_memory, m_search_path, m_context);
+        ClipMapLinker clipMapLinker(m_memory, m_search_path, m_context, m_zone);
         GameWorldMpLinker gameWorldMpLinker(m_memory, m_search_path, m_context, m_zone);
         GfxWorldLinker gfxWorldLinker(m_memory, m_search_path, m_context);
         MapEntsLinker mapEntsLinker(m_memory, m_search_path, m_context);
@@ -101,7 +101,10 @@ namespace BSP
         auto* clipMap = clipMapLinker.LinkClipMap(bsp); // requires gfxworld and mapents asset
         if (!clipMap)
             return false;
-        m_context.AddAsset<AssetClipMap>(clipMap->name, clipMap);
+        AssetRegistration<AssetClipMap> clipRegistration(clipMap->name, clipMap);
+        for (const auto string : clipMapLinker.ScriptStrings())
+            clipRegistration.AddScriptString(string);
+        m_context.AddAsset(std::move(clipRegistration));
 
         return true;
     }
