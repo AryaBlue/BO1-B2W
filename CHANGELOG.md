@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Compare map framework scripts with every stock-zone version retained in the asset cache, rather than only the merged stock definition. This fixes Baseball Field's newer stock damage body being rejected as a custom damage prelude and avoids duplicate stock damage processing.
+
 - Normalize BO2 Mod Tools skybox bone-bound vector objects to the bridge's array schema, preserving their values and metadata. This fixes Collingwood's `boneInfo/0/mins` parsing failure during map linking.
 
 - Recover only the requested WaW stock dependency asset types, retaining and expanding previously extracted types. Animation lookups no longer trigger unrelated campaign model/image/audio exports, and a material-only cache no longer claims missing asset kinds. See [Collingwood validation and limits](docs/COLLINGWOOD_DEPENDENCY_EXTRACTION.md).

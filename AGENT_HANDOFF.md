@@ -1,5 +1,20 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Baseball Field build fix, 2026-10-13
+
+- Branch `codex/baseball-field-build-fix` fixes stock framework version discovery.
+  The merged stock view chose an older damage body; BBF uses the newer Der Riese
+  stock body. `Sources` now reads comparison variants from catalogued stock-zone
+  folders without changing map or asset priority. Positive authored damage
+  applications remain rejected; no damage wrapper bypass was added.
+- Actual local BBF IWD reproduces the submitted error with merged-only stock
+  comparison and passes the corrected comparison without a duplicate callback.
+- Full local build passes: zero missing assets; 112 compiled scripts byte-exact;
+  30,294 map / 43,373 mod material arguments audited; 5,000 bone hitboxes in
+  125 models preserved; 522 tests pass. Evidence/package:
+  `work/baseball_field_build_fix`; details `docs/BASEBALL_FIELD_BUILD_FIX.md`.
+- No map install or gameplay test performed for this request.
+
 ## Collingwood skybox bounds, 2026-10-13
 
 - Branch `codex/collingwood-skybox-bounds` fixes the new failure bundle's native

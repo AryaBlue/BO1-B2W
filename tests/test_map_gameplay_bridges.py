@@ -1,4 +1,5 @@
 import tempfile
+import json
 import unittest
 from pathlib import Path
 
@@ -19,6 +20,42 @@ def _api() -> T6Api:
 
 
 class DamagePreludeTests(unittest.TestCase):
+    def test_catalogued_new_stock_damage_body_is_not_a_custom_prelude(self):
+        head = STOCK_DAMAGE.split('{\n', 1)[0]
+        old = head + '{\nif (iDamage < self.health) { return; }\n}\n'
+        newer = head + '''{
+            if (sMeansOfDeath == "MOD_FALLING") sMeansOfDeath = "MOD_EXPLOSIVE";
+            if (self.health > 75) {
+                self maps\\_callbackglobal::finishPlayerDamageWrapper(eInflictor, eAttacker, 75,
+                    iDFlags, sMeansOfDeath, sWeapon, vPoint, vDir, sHitLoc, modelIndex, psOffsetTime);
+                return;
+            }
+            if (iDamage < self.health) { return; }
+        }\n'''
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for home, text in ((root / 'map', newer), (root / 'stock', old), (root / 'factory', newer)):
+                (home / 'maps').mkdir(parents=True)
+                (home / 'maps/_zombiemode.gsc').write_text('// map-local copy\n' + text if home.name == 'map' else text)
+            before = gscport.PortReport()
+            gscport.Translator(gscport.Sources([root / 'map'], [], root / 'stock'), _api(), before).extract_damage_prelude()
+            self.assertTrue(any('prelude applies damage itself' in e for e in before.errors))
+            (root / 'stock/catalog.json').write_text(json.dumps({'zones': {
+                'zone/english/factory.ff': {'folder': str(root / 'factory')}}}))
+            sources = gscport.Sources([root / 'map'], [], root / 'stock')
+            self.assertIn(newer, sources.stock_variants('maps\\_zombiemode'))
+            report = gscport.PortReport()
+            translator = gscport.Translator(sources, _api(), report)
+            self.assertIsNone(translator.extract_damage_prelude())
+            self.assertEqual(report.errors, [])
+            # An authored rule before the newer stock body is still retained.
+            (root / 'map/maps/_zombiemode.gsc').write_text(newer.replace('{\n', '{\nif (self.shielded) return;\n', 1))
+            edited = gscport.PortReport()
+            translator = gscport.Translator(gscport.Sources([root / 'map'], [], root / 'stock'), _api(), edited)
+            self.assertIsNotNone(translator.extract_damage_prelude())
+            self.assertEqual(edited.errors, [])
+            self.assertIn('self.shielded', '\n'.join(translator.level_state_parts))
+
     def test_dlc_powerup_callback_preserves_source_parameter_and_registration(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
