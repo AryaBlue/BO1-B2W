@@ -8,6 +8,45 @@
 #include common_scripts\utility;
 #include maps\mp\_utility;
 
+waw_oktospawn()
+{
+    // T4 0x5175F0 admits fewer than four newly spawned entities and checks
+    // its per-client snapshot bytes against 800. T6 owns a different packet
+    // budget, unavailable to GSC. Conservatively cap script admissions at
+    // four per server frame; never return an undefined gameplay predicate.
+    frame = gettime();
+    if ( !isdefined( level.waw_spawn_budget_frame ) || level.waw_spawn_budget_frame != frame )
+    {
+        level.waw_spawn_budget_frame = frame;
+        level.waw_spawn_budget_requests = 0;
+    }
+    if ( level.waw_spawn_budget_requests >= 4 )
+        return false;
+    level.waw_spawn_budget_requests++;
+    return true;
+}
+
+// WaW GetEnt indexes script_linkname. T6 loads the field but its native
+// lookup returns undefined; scan live entities so switch/hinge links retain
+// their authored identities, including repeated names for array queries.
+waw_getentarray_linkname( value, key )
+{
+    matches = [];
+    entities = getentarray();
+    for ( i = 0; i < entities.size; i++ )
+        if ( isdefined( entities[i].script_linkname ) && entities[i].script_linkname == value )
+            matches[matches.size] = entities[i];
+    return matches;
+}
+
+waw_getent_linkname( value, key )
+{
+    matches = waw_getentarray_linkname( value, key );
+    if ( matches.size )
+        return matches[0];
+    return undefined;
+}
+
 init()
 {
     if ( isdefined( level.waw2bo2_compat_ready ) )

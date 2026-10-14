@@ -50,6 +50,9 @@
     "native_location_function": "do_zombie_spawn",
     "plain_spawn_location": "spawn_location"
   },
+  "entity_lookup_bridges": {
+    "script_linkname": {"getent": "waw_getent_linkname", "getentarray": "waw_getentarray_linkname"}
+  },
   "core_scripts": {
     "common_scripts\\utility": "common_scripts\\utility",
     "maps\\_utility": "maps\\mp\\_utility",
@@ -120,6 +123,7 @@
     "maps\\mp\\zombies\\_zm_utility::destroy_hud": "waw_destroy_hud"
   },
   "compat_wrappers": [
+    "oktospawn",
     "setvisibletoplayer",
     "setvelocity",
     "startragdoll",

@@ -88,3 +88,43 @@ shadow geometry/light-region tables consumed by the Python reader. The
 previous maintained exporter wrote v4; this map had consequently lost
 333,780 bytes of layer data and 43 shadow-light records. The new export
 preserves the existing positions, indices, static models and brush ownership.
+
+## Perk prompts and traps, 2026-10-14
+
+The generic perk prompt now uses the source framework's existing
+`vending_set_hintstring` selector when that selector is present. WaW used the
+generic prefix with prices painted on the machines; the port now shows the
+source's full named purchase prompts and prices. Localization translates the
+activation placeholder in use hints to T6's input binding while retaining
+ordinary HUD formatting arguments and the source unlock conditions.
+
+The flogger launches a living ragdoll and delegates its delayed kill to
+`play_imp_sound`. Its unsupported `OkToSpawn()` predicate returned undefined,
+breaking that thread. The shared runtime now returns a boolean with a four
+admissions-per-server-frame budget. Native T4 code at 0x5175F0 checks fewer
+than four new entities plus an 800-byte snapshot budget; T6 owns a different
+packet budget which GSC cannot inspect. This conservative admission policy
+does not reproduce the T4 byte counter. Source sound/FX conditions and the
+0.75-second delayed damage remain intact. Ragdolls still wait for that death,
+and explicit source kills retain their original attacker. The flogger remains
+locked until the source `nw_magic_box` flag is set.
+
+Electric-trap switches retain their authored `script_linkname` fields in the
+live map, but T6's native `GetEnt` does not find them by that field. Literal
+queries for this field now use a shared entity scan, including array queries.
+Ordinary native field queries and custom functions named `getent` are retained.
+
+The final isolated live probe confirms a physical flogger kill/launch and
+physical contact kills in all four electric traps against fresh 10,000-health
+zombies. All four have the source electric death mark; no script runtime errors
+occur. The admission predicate returns four true results, then false, and resets
+next frame. Explicit ragdoll kill attribution remains intact. There are 550
+passing tests and 98 byte-exact compiled script round trips. Both native material
+audits and the 2,283-hitbox audit pass; linking reports no missing assets. Perk
+prompt text is verified in the packaged localization; user visual confirmation
+of the HUD remains useful. Updated regular mod is installed.
+
+Radio investigation is deferred at the user's request. The three starting
+radio activations advance the source counter to three. Converted recording
+samples are distinct, but a probe observed early completion notifications for
+the longer recordings; this is not a verified radio fix.

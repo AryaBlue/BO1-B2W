@@ -5,7 +5,7 @@
 - Active branch `codex/shi-no-numa-dlc2-port`; user has not requested its push
   or merge. Source is stock WaW `nazi_zombie_sumpf.ff`. Shared conversion
   changes and limits: `docs/SHI_NO_NUMA_DLC2_PORT.md`.
-- Evidence/build/probe helpers: `work/shi_no_numa_dlc2`. 543 tests pass.
+- Evidence/build/probe helpers: `work/shi_no_numa_dlc2`. 550 tests pass.
   T4 exporter is maintained in `vendor/OpenAssetTools.patch`; its working
   source checkout is `work/ci_validation_checkout/vendor/OpenAssetTools`.
   T6 clipmap linker changes are tracked directly in `vendor/OpenAssetToolsT6`.
@@ -32,14 +32,30 @@
   player.name and namespaced sound-variant lookup. User's game PID 29800 had
   closed before probes; probe helper stopped only its own processes and removed
   its temporary observer. Final updated regular mod is installed.
-  Reopened regular `zm_shi_no_numa_waw` for user testing as PID 35580; leave
-  that game running. No temporary probe is installed.
+  Previous user game PID 35580 closed before the trap tests. Only owned probe
+  processes were stopped; no temporary probe remains installed.
 - User corrected the board report: WaW boards are outside and flush; the gap
   is a converter defect. Native repair animation final poses add ~31 units
   forward. Staging calibrates all 19 roots from actual source plank depth,
   keeping attack slots outside and entry structs as repair triggers. Earlier
   live probe observed board opening and zombies entering. Final visual board
   alignment and absence of shell impact FX still need user confirmation.
+- Perk hints use the source's full selector/prices instead of the generic
+  prefix, with T6 activation-key bindings. Keep source hut unlock events.
+- Flogger's sound thread contains the source's delayed kill; the unsupported
+  `OkToSpawn()` stub broke its boolean guard. Runtime now admits up to four
+  requests per server frame (T4's 800-byte snapshot counter has no GSC T6
+  counterpart). No extra kill fallback remains; source .75 s damage is kept.
+- Electric switches have valid live `script_linkname` values but native T6
+  GetEnt does not find that field. A shared lookup scan bridges literal queries.
+  Final isolated live probe: flogger contact kill/launch, explicit death owner
+  retained, all four electric traps physically kill fresh 10,000-health zombies
+  with source death marks, zero runtime errors. `trap_observations_clean.log`
+  captures it; `finalize_traps_clean.log` / `verify_traps_clean.log` cover the
+  installed package. 98 scripts byte-exact, zero missing assets, audits pass.
+- Radios explicitly deferred by user. Counter advances correctly through all
+  three starting radios, but early completion of longer recordings remains
+  unverified; do not claim a radio fix. Peter remains deferred.
 
 ## Baseball Field build fix, 2026-10-13
 

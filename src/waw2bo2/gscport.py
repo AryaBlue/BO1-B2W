@@ -285,6 +285,30 @@ def neutralize_animations(tokens: list[gsc.Token], tree: str) -> None:
             tokens[i + 1].kind = gsc.STRING
 
 
+def bridge_generic_perk_hints(tokens: list[gsc.Token], script: gsc.Script) -> int:
+    """Use the source's priced hint selector when it supplies one.
+
+    WaW's generic perk prompt relies on prices painted on the machine. T6
+    has room for the full prompts already precached by the source framework.
+    Retain that framework's names and prices rather than inventing a table.
+    """
+    if 'vending_set_hintstring' not in script.functions:
+        return 0
+    fixes = 0
+    for ref in gsc.references(tokens):
+        if ref.name.lower() != 'sethintstring' or not ref.method:
+            continue
+        i = ref.index
+        if (i > 0 and tokens[i - 1].low == 'self'
+                and i + 3 < len(tokens) and tokens[i + 1].text == '('
+                and tokens[i + 2].text == '&"ZOMBIE_PERK_GENERIC"'
+                and tokens[i + 3].text == ')'):
+            tokens[i].text = 'vending_set_hintstring'
+            tokens[i + 2].text = 'self.script_noteworthy'
+            fixes += 1
+    return fixes
+
+
 def bridge_contact_kill_attacks(tokens: list[gsc.Token], script: gsc.Script) -> int:
     """Let source proximity/ragdoll kills own combat during their monitor.
 
@@ -1013,6 +1037,7 @@ class Translator:
                 self.report.rewrites['WaW playername field -> T6 name'] += 1
             if tokens[i].text.lower() == "zombie_hints" and tokens[i - 1].text == "." and tokens[i - 2].text.lower() == "level":
                 tokens[i].text = "waw2bo2_hints"
+        self.report.rewrites['source priced perk hints'] += bridge_generic_perk_hints(tokens, script)
         for ref in gsc.references(tokens):
             if neutralized_ranges is not None:
                 self.anim_neutralized = any(start <= ref.index < end for start, end in neutralized_ranges)
@@ -1022,6 +1047,29 @@ class Translator:
             name = ref.name.lower()
             where = f"{where_file}:{tok.line}"
             argc = None if ref.pointer else _argc(tokens, ref.index)
+            # T6 retains script_linkname on entities but does not index it
+            # for GetEnt. Route literal field queries through a source-order
+            # scan; ordinary targetname/classname lookups remain native.
+            if (ref.qualifier is None and argc == 2
+                    and self.owner(script, name) is None
+                    and name in ('getent', 'getentarray')):
+                depth = 0
+                for end in range(ref.index + 1, len(tokens)):
+                    if tokens[end].text == '(':
+                        depth += 1
+                    elif tokens[end].text == ')':
+                        depth -= 1
+                        if depth == 0:
+                            field = tokens[end - 1].text.strip('"').lower()
+                            bridge = API.get('entity_lookup_bridges', {}).get(field, {}).get(name)
+                            if (bridge and tokens[end - 1].kind == gsc.STRING
+                                    and tokens[end - 1].text.startswith('"')
+                                    and tokens[end - 2].text == ','):
+                                tok.text = f'{COMPAT}::{bridge}'
+                                self.report.rewrites[f'WaW entity lookup field {field}'] += 1
+                            break
+                if tok.text != ref.name:
+                    continue
             perk_owner = norm(ref.qualifier) if ref.qualifier else self.owner(script, name)
             if self.bo2_stock_perks and name in self.waw_perk_parts.get(perk_owner, ()):
                 if ref.qualifier is None and perk_owner != script.path:
