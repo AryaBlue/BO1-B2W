@@ -1,5 +1,16 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Collingwood skybox bounds, 2026-10-13
+
+- Branch `codex/collingwood-skybox-bounds` fixes the new failure bundle's native
+  sky model parsing error after script compilation. BO2 Mod Tools uses vector
+  objects for bone bounds; our bridge requires arrays. Both sky staging paths
+  now normalize vectors while retaining metadata.
+- Native baseline rejection reproduced with the real donor sky model, then
+  corrected model linked/extracted with matching numeric bounds. Evidence:
+  `work/collingwood_skybox_bounds`; details in `docs/COLLINGWOOD_SKYBOX_BOUNDS.md`.
+- Full source map remains unavailable; no full build/install or release claimed.
+
 ## Collingwood dependency extraction, 2026-10-13
 
 - Branch `codex/collingwood-build-regression`: typed prepared stock-cache

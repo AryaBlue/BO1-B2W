@@ -602,6 +602,22 @@ def _sky_with_hdr_alpha(report: StageReport, project_root: Path, sky_image: str)
 _SKY_IMAGE_ROOTS: list[Path] = []
 
 
+def bridge_bone_bounds(model: dict) -> None:
+    """Normalize Mod Tools vector objects to the bridge's bone-bound arrays.
+
+    WaW exports already use arrays. Retain all authored values and other bone
+    metadata when importing a native BO2 model with the Mod Tools schema.
+    """
+    for bone in model.get('boneInfo', []):
+        for field in ('mins', 'maxs', 'offset'):
+            value = bone.get(field)
+            if isinstance(value, dict):
+                try:
+                    bone[field] = [value[axis] for axis in ('x', 'y', 'z')]
+                except KeyError as exc:
+                    raise StageError(f"xmodel bone {bone.get('bone', '?')}: {field} lacks {exc.args[0]} coordinate") from exc
+
+
 def stage_source_skybox(report: StageReport, project: str, project_root: Path, roots: list[Path],
                         source_name: str, native_root: Path, bo2_root: Path) -> str:
     """Preserve the source dome, layered materials and animated cloud UVs."""
@@ -652,6 +668,7 @@ def stage_source_skybox(report: StageReport, project: str, project_root: Path, r
         report.materials.append({"name": name, "file": techsets.oat_material_path(name).as_posix(),
                                 "t6_techset": target["techniqueSet"], "shader_runtime": runtime})
     model["_game"] = "t6"
+    bridge_bone_bounds(model)
     model.update(T6_XMODEL_DEFAULTS)
     model.pop("physPreset", None)
     destination = project_root / "xmodel" / f"skybox_{project}.json"
@@ -692,6 +709,7 @@ def stage_skybox(report: StageReport, project: str, project_root: Path, bo2_root
         report.errors.append(f"skybox: {src_json} or {src_mat} missing (run the mod tools All2Raw)")
         return None, None
     xm = _load_json(src_json)
+    bridge_bone_bounds(xm)
     for lod in xm.get("lods", []):
         src = raw / lod["file"]
         if not src.exists():
