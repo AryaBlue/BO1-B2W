@@ -8,6 +8,45 @@
 #include common_scripts\utility;
 #include maps\mp\_utility;
 
+waw_oktospawn()
+{
+    // T4 0x5175F0 admits fewer than four newly spawned entities and checks
+    // its per-client snapshot bytes against 800. T6 owns a different packet
+    // budget, unavailable to GSC. Conservatively cap script admissions at
+    // four per server frame; never return an undefined gameplay predicate.
+    frame = gettime();
+    if ( !isdefined( level.waw_spawn_budget_frame ) || level.waw_spawn_budget_frame != frame )
+    {
+        level.waw_spawn_budget_frame = frame;
+        level.waw_spawn_budget_requests = 0;
+    }
+    if ( level.waw_spawn_budget_requests >= 4 )
+        return false;
+    level.waw_spawn_budget_requests++;
+    return true;
+}
+
+// WaW GetEnt indexes script_linkname. T6 loads the field but its native
+// lookup returns undefined; scan live entities so switch/hinge links retain
+// their authored identities, including repeated names for array queries.
+waw_getentarray_linkname( value, key )
+{
+    matches = [];
+    entities = getentarray();
+    for ( i = 0; i < entities.size; i++ )
+        if ( isdefined( entities[i].script_linkname ) && entities[i].script_linkname == value )
+            matches[matches.size] = entities[i];
+    return matches;
+}
+
+waw_getent_linkname( value, key )
+{
+    matches = waw_getentarray_linkname( value, key );
+    if ( matches.size )
+        return matches[0];
+    return undefined;
+}
+
 init()
 {
     if ( isdefined( level.waw2bo2_compat_ready ) )
@@ -121,6 +160,15 @@ waw_contact_kill_end()
     if ( isdefined( self.custom_damage_func ) && self.custom_damage_func == ::waw_contact_kill_damage )
         self.custom_damage_func = self.waw_contact_previous_damage;
     self.waw_contact_previous_damage = undefined;
+}
+
+waw_array_remove( array, value )
+{
+    result = [];
+    for ( i = 0; i < array.size; i++ )
+        if ( array[i] != value )
+            result[result.size] = array[i];
+    return result;
 }
 
 waw_contact_kill_damage( victim )
@@ -347,11 +395,49 @@ waw_model_overlay_fx( fx, origin )
     return fx;
 }
 
+waw_set_zombie_var( var, value, div, is_float )
+{
+    // WaW: fourth argument is a float flag, third is a divisor.
+    // BO2's same-named function uses a float flag followed by a table column.
+    // Only source table overrides may replace the authored default.
+    if ( isdefined( level.waw_zombie_var_overrides ) && isdefined( level.waw_zombie_var_overrides[var] ) )
+    {
+        if ( isdefined( is_float ) && is_float )
+            value = float( level.waw_zombie_var_overrides[var] );
+        else
+            value = int( level.waw_zombie_var_overrides[var] );
+    }
+    if ( isdefined( div ) )
+        value = value / div;
+    level.zombie_vars[var] = value;
+}
+
 waw_playfxontag( fx, ent, tag )
 {
     if ( !isdefined( fx ) || !isdefined( ent ) )
         return;
+    if ( isdefined( level.waw2bo2_bolted_loops ) && isdefined( level.waw2bo2_bolted_loops[fx] ) )
+    {
+        // T6's transient PlayFXOnTag event cannot own an indefinitely looping
+        // source effect. A script FX entity gives the bolt an explicit lifetime.
+        carrier = spawnfx( fx, ent gettagorigin( tag ), anglestoforward( ent.angles ), anglestoup( ent.angles ) );
+        triggerfx( carrier );
+        level thread waw_bolted_fx_lifetime( carrier, ent, tag );
+        return carrier;
+    }
     playfxontag( fx, ent, tag );
+}
+
+waw_bolted_fx_lifetime( carrier, parent, tag )
+{
+    while ( isdefined( parent ) && isdefined( carrier ) )
+    {
+        carrier.origin = parent gettagorigin( tag );
+        carrier.angles = parent.angles;
+        wait 0.05;
+    }
+    if ( isdefined( carrier ) )
+        carrier delete();
 }
 
 waw_playloopedfx( fx, delay, origin, cull, forward, up )
@@ -643,6 +729,14 @@ waw_playsoundasmaster( alias )
 waw_soundexists( alias )
 {
     return isdefined( alias ) && soundexists( "waw/" + alias );
+}
+
+waw_get_number_variants( prefix )
+{
+    for ( i = 0; i < 100; i++ )
+        if ( !waw_soundexists( prefix + "_" + i ) )
+            return i;
+    return 100;
 }
 
 // Conversion diagnostic: a zombie that has not moved 32 units in 15 s while

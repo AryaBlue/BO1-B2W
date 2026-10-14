@@ -3,6 +3,7 @@
 #include "Game/T6/InfoString/InfoStringFromStructConverter.h"
 #include "Game/T6/ObjConstantsT6.h"
 #include "Game/T6/Weapon/WeaponFields.h"
+#include "Game/T6/Weapon/FlameTableFields.h"
 #include "Game/T6/Weapon/WeaponStrings.h"
 #include "InfoString/InfoString.h"
 #include "Weapon/AccuracyGraphWriter.h"
@@ -17,6 +18,24 @@ using namespace T6;
 
 namespace
 {
+    class InfoStringFromFlameConverter final : public InfoStringFromStructConverter
+    {
+        void FillFromExtensionField(const cspField_t&) override { assert(false); }
+    public:
+        explicit InfoStringFromFlameConverter(const flameTable* table)
+            : InfoStringFromStructConverter(table, flameTableFields, std::extent_v<decltype(flameTableFields)>) {}
+    };
+
+    void DumpFlameTable(AssetDumpingContext& context, const flameTable* table)
+    {
+        if (!table || !table->name || !table->name[0]) return;
+        const auto file = context.OpenAssetFile(std::string("weapons/") + table->name);
+        if (!file) return;
+        InfoStringFromFlameConverter converter(table);
+        const auto text = converter.Convert().ToString("FLAMETABLEFILE");
+        file->write(text.c_str(), text.size());
+    }
+
     class InfoStringFromWeaponConverter final : public InfoStringFromStructConverter
     {
     protected:
@@ -490,5 +509,7 @@ namespace weapon
         }
 
         DumpAccuracyGraphs(context, asset);
+        DumpFlameTable(context, asset.Asset()->weapDef->flameTableFirstPersonPtr);
+        DumpFlameTable(context, asset.Asset()->weapDef->flameTableThirdPersonPtr);
     }
 } // namespace weapon

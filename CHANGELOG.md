@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Restore the source Tesla chain through BO2's zombie damage callback, cap standard Wunderwaffe chains at ten targets, and suppress the unintended shell impact FX while retaining the source electric projectile trail.
+
+- Extend stock WaW DLC2 conversion with source active-spawner membership, conditional movement tables and nearby-team respawns. Preserve map physics constraints and ropes, place native barricades at window-entry anchors, bind source water depth/refraction inputs, and correct translated shadow depth ordering. See [Shi No Numa validation and remaining limits](docs/SHI_NO_NUMA_DLC2_PORT.md).
+
 - Compare map framework scripts with every stock-zone version retained in the asset cache, rather than only the merged stock definition. This fixes Baseball Field's newer stock damage body being rejected as a custom damage prelude and avoids duplicate stock damage processing.
 
 - Normalize BO2 Mod Tools skybox bone-bound vector objects to the bridge's array schema, preserving their values and metadata. This fixes Collingwood's `boneInfo/0/mins` parsing failure during map linking.

@@ -25,8 +25,19 @@
     "library_functions: functions of third-party WaW map libraries -> compat waw_<value>, where BO2 has the native",
     "  feature the library worked around (e.g. treminaor's trem_hintstrings drew hints through a WaW menu)."
   ],
+  "tesla_runtime": {
+    "source_script": "maps\\_zombiemode_tesla",
+    "initialize": "init",
+    "damage_predicate": "is_tesla_damage",
+    "damage_entry": "tesla_damage_init",
+    "native_register": "maps\\mp\\zombies\\_zm_spawner::register_zombie_damage_callback",
+    "max_targets": 10
+  },
   "zombie_runtime": {
+    "source_chase": {"script": "maps\\_zombiemode_spawner", "function": "zombie_think", "chase_function": "find_flesh", "setup_function": "zombie_setup_attack_properties"},
     "source_selection": {"script": "maps\\_zombiemode", "function": "round_spawning", "array_field": "enemy_spawns", "candidate": "spawn_point", "previous": "old_spawn"},
+    "source_membership": {"initializer": "main", "riser_array_field": "zombie_rise_spawners", "riser_actor_value": "riser", "native_riser_location": "riser_location", "source_chaser_value": "zombie_chaser", "native_chaser_value": "find_flesh"},
+    "source_respawn": {"script": "maps\\_zombiemode", "function": "check_for_valid_spawn_near_team", "native_callback": "check_for_valid_spawn_near_team_callback", "native_exclusion_tag": "waw_source_respawn"},
     "source_movement": {"script": "maps\\_zombiemode", "function": "init_standard_zombie_anims", "field": "scr_anim", "row": "zombie", "states": {"walk": "zm_move_walk", "run": "zm_move_run", "sprint": "zm_move_sprint"}},
     "source_speed": {"script": "maps\\_zombiemode_spawner", "function": "set_run_speed", "arguments": 0, "receiver": "zombie", "result_field": "zombie_move_speed", "owned_result_field": "waw_zombie_move_speed"},
     "source_round_state": {"script": "maps\\_zombiemode", "start_function": "round_spawning", "end_function": "round_think"},
@@ -39,6 +50,9 @@
     "native_movement": {"script": "maps\\mp\\animscripts\\zm_run", "function": "setanimstatefromspeed", "callback": "setanimstatefromspeed"},
     "native_location_function": "do_zombie_spawn",
     "plain_spawn_location": "spawn_location"
+  },
+  "entity_lookup_bridges": {
+    "script_linkname": {"getent": "waw_getent_linkname", "getentarray": "waw_getentarray_linkname"}
   },
   "core_scripts": {
     "common_scripts\\utility": "common_scripts\\utility",
@@ -95,6 +109,8 @@
     "maps\\createfx\\dlc3_fx"
   ],
   "function_renames": {
+    "set_zombie_var": "maps\\mp\\waw\\_waw2bo2_compat::waw_set_zombie_var",
+    "get_number_variants": "maps\\mp\\waw\\_waw2bo2_compat::waw_get_number_variants",
     "include_powerup": "maps\\mp\\zombies\\_zm_powerups::include_zombie_powerup",
     "enable_trigger": "maps\\mp\\waw\\_waw2bo2_compat::waw_enable_trigger",
     "add_zombie_hint": "maps\\mp\\waw\\_waw2bo2_compat::waw_add_zombie_hint",
@@ -109,6 +125,7 @@
     "maps\\mp\\zombies\\_zm_utility::destroy_hud": "waw_destroy_hud"
   },
   "compat_wrappers": [
+    "oktospawn",
     "setvisibletoplayer",
     "setvelocity",
     "startragdoll",

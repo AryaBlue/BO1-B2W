@@ -255,6 +255,19 @@ class All2RawTests(unittest.TestCase):
         self.assertEqual(resolver.prepared_sources['en_common_zm'], inputs)
         self.assertTrue((before / 'extraction.json').is_file())
 
+    def test_stock_level_sources_include_its_companions_without_other_levels(self):
+        for name in ('nazi_zombie_swamp', 'nazi_zombie_swamp_patch', 'nazi_zombie_swamp_load',
+                     'localized_nazi_zombie_swamp', 'nazi_zombie_other', 'localized_nazi_zombie_other'):
+            self.ff('english', name).write_text(name)
+        settings = Settings(waw=str(self.game), bo2=str(self.game), t4=str(self.root), work=str(self.root),
+                            fastfile=str(self.ff('english', 'nazi_zombie_swamp')), project='zm_swamp')
+        result = all2raw.source_dumps(settings, all2raw.CachePaths.for_settings(settings))
+        self.assertEqual(set(result), {'map', 'patch', 'extra:nazi_zombie_swamp_load',
+                                      'extra:localized_nazi_zombie_swamp'})
+        names = {Path(c[-1]).stem for c in self.commands}
+        self.assertEqual(names, {'nazi_zombie_swamp', 'nazi_zombie_swamp_patch',
+                                'nazi_zombie_swamp_load', 'localized_nazi_zombie_swamp'})
+
     def test_compact_policy_excludes_heavy_game_assets(self):
         self.assertEqual(all2raw.stock_assets('T4', Path('campaign.ff')), 'rawfile')
         self.assertEqual(all2raw.stock_assets('T4', Path('common.ff')), 'rawfile')

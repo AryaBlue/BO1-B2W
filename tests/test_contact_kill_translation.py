@@ -58,6 +58,20 @@ class ContactKillTranslationTests(unittest.TestCase):
         self.assertEqual(translator.resolve_builtin('launchragdoll', 1, 'test', script, set(), True),
                          gscport.COMPAT + '::waw_launchragdoll')
 
+    def test_spawn_admission_predicate_has_a_boolean_runtime_bridge(self):
+        translator = gscport.Translator(gscport.Sources([], [], None),
+            T6Api({}, {}, methods={'dodamage': (2, 8)}), gscport.PortReport())
+        script = gsc.parse('f(){if(OkToSpawn())self PlaySound("hit");wait .75;self DoDamage(self.health+600,self.origin);}', 'test')
+        result = translator.resolve_builtin('oktospawn', 0, 'test', script, set(), False)
+        self.assertEqual(result, gscport.COMPAT + '::waw_oktospawn')
+        self.assertEqual(translator.stubs, {})
+        translator.resolve_refs(script.tokens, script, 'test', set(),
+                                {f.start for f in script.functions.values()})
+        translated = gsc.emit(script.tokens)
+        self.assertIn('::waw_oktospawn()', translated)
+        self.assertIn('wait .75;', translated)
+        self.assertIn('self DoDamage(self.health+600,self.origin)', translated)
+
     def test_ordinary_attacks_and_exploding_enemies_are_unchanged(self):
         for text in (self.source.replace('self.health + 666', '10'),
                      self.source.replace('self StartRagdoll();', ''),

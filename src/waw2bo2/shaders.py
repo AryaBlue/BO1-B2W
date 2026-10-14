@@ -362,6 +362,11 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
                     # them with coord.z/coord.w); WaW compares the texel with the
                     # undivided coord.z. Scaling by w (> 0) gives the same test.
                     expr = f'({expr} * ({coord}).w)'
+                if bindings.get('samplers', {}).get(sampler, {}).get('reverse_depth_compare'):
+                    # In source depth units: sample - reference becomes
+                    # reference - native sample. Projection above has already
+                    # put both depths in the same units for texldp.
+                    expr = f'float4(2.0 * ({coord}).z - ({expr}).x, ({expr}).yzw)'
             if constant is not None:
                 expr = 'float4(' + ', '.join(repr(float(c)) for c in constant) + ')'
             if sampler in sample_scale:

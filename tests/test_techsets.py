@@ -3,6 +3,12 @@ from waw2bo2 import techsets
 
 
 class HudTechniqueTests(unittest.TestCase):
+    def test_rope_uses_measured_native_rope_material_stream(self):
+        result = techsets.match('m_rope', ['mc_lit_sm_r0c0_77e21qq8'])
+        self.assertEqual(result.target, 'mc_lit_sm_r0c0_77e21qq8')
+        with self.assertRaises(techsets.TechsetError):
+            techsets.match('m_rope', ['wpc_lit_sm_r0c0_12345678'])
+
     def test_same_family_canopy_and_shadowcaster_are_not_rejected(self):
         self.assertEqual(techsets.match('mc_treecanopy', ['mc_treecanopy_4ze496f7']).target,
                          'mc_treecanopy_4ze496f7')

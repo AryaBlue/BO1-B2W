@@ -9,13 +9,15 @@
 #include "Game/T6/BSP/BSPCalculation.h"
 #include "SearchPath/ISearchPath.h"
 #include "Utils/MemoryManager.h"
+#include "Zone/Zone.h"
 
 namespace BSP
 {
     class ClipMapLinker
     {
     public:
-        ClipMapLinker(MemoryManager& memory, ISearchPath& searchPath, AssetCreationContext& context);
+        ClipMapLinker(MemoryManager& memory, ISearchPath& searchPath, AssetCreationContext& context, Zone& zone);
+        const std::vector<scr_string_t>& ScriptStrings() const { return m_script_strings; }
 
         [[nodiscard]] T6::clipMap_t* LinkClipMap(const BSPData& bsp);
 
@@ -47,7 +49,7 @@ namespace BSP
         void LoadBoxData(T6::clipMap_t& clipMap) const;
         void LoadVisibility(T6::clipMap_t& clipMap) const;
         void LoadDynEnts(T6::clipMap_t& clipMap) const;
-        void LoadRopesAndConstraints(T6::clipMap_t& clipMap) const;
+        bool LoadRopesAndConstraints(T6::clipMap_t& clipMap);
         void LoadSubModelCollision(T6::clipMap_t& clipMap, const BSPData& bsp) const;
         bool LoadXModelCollision(T6::clipMap_t& clipMap) const;
 
@@ -68,6 +70,8 @@ namespace BSP
         MemoryManager& m_memory;
         ISearchPath& m_search_path;
         AssetCreationContext& m_context;
+        Zone& m_zone;
+        std::vector<scr_string_t> m_script_strings;
 
         std::vector<BrushSource> brushSources;
         size_t worldBrushCount = 0;

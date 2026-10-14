@@ -20,7 +20,7 @@ def asset_path(kind: str, name: str) -> Path:
         # WaW joins "sound/" + name and collapses repeated separators
         name = re.sub("/+", "/", name.replace(chr(92), "/")).lstrip("/")
     weapons.output_name(kind, name)  # reject traversal/zone injection before I/O
-    if kind == "weapon":
+    if kind in ("weapon", "flametable"):
         return Path("weapons") / name
     if kind == "xmodel":
         return Path("xmodel") / f"{name}.json"
@@ -97,6 +97,8 @@ class Resolver:
                 if not value:
                     continue
                 child_kind = weapons.DEPENDENCY_TYPES.get(t4.get(key))
+                if key in weapons.FLAME_TABLE_KEYS:
+                    child_kind = 'flametable'
                 if child_kind:
                     children.add((child_kind, value))
                 if t4.get(key) == "WFT_BOUNCE_SOUND":
@@ -139,6 +141,10 @@ class Resolver:
                     self.nodes[kind, name].setdefault('recovered_geometry', []).append(str(source))
                 gltf = json.loads(source.read_text())
                 children.update(("material", m["name"]) for m in gltf.get("materials", []))
+        elif kind == "flametable":
+            source = weapons.read_flame_table(path)
+            children.update(('material', source[k]) for k in weapons.FLAME_MATERIAL_KEYS if source.get(k))
+            children.update(('sound', source[k]) for k in weapons.FLAME_SOUND_KEYS if source.get(k))
         elif kind == "material":
             material = json.loads(path.read_text())
             children.update(("image", t["image"].removeprefix(",")) for t in material.get("textures", []) if t.get("image"))

@@ -551,7 +551,7 @@ new file mode 100644
 index 0000000..e6b3211
 --- /dev/null
 +++ b/src/ObjWriting/Game/T4/Maps/WorldConverterDumperT4.cpp
-@@ -0,0 +1,518 @@
+@@ -0,0 +1,578 @@
 +#include "WorldConverterDumperT4.h"
 +
 +#include <array>
@@ -658,7 +658,7 @@ index 0000000..e6b3211
 +
 +        auto& stream = *file;
 +        WriteArray(stream, MAGIC.data(), MAGIC.size());
-+        Write(stream, uint32_t{4});
++        Write(stream, uint32_t{6});
 +        Write(stream, world->vertexCount);
 +        Write(stream, static_cast<uint32_t>(world->indexCount));
 +        Write(stream, static_cast<uint32_t>(world->surfaceCount));
@@ -748,6 +748,40 @@ index 0000000..e6b3211
 +            Write(stream, static_cast<uint32_t>(world->models[i].surfaceCount));
 +        }
 +
++        // v5: preserve the extra vertex stream used by layered materials.
++        Write(stream, world->vertexLayerDataSize);
++        WriteArray(stream, world->vld.data, world->vertexLayerDataSize);
++        for (int i = 0; i < world->surfaceCount; ++i) {
++            const auto& surface = world->dpvs.surfaces[i];
++            Write(stream, surface.tris.vertexLayerData);
++            const auto* set = surface.material ? surface.material->techniqueSet : nullptr;
++            Write(stream, set ? static_cast<uint8_t>(set->worldVertFormat) : uint8_t{0xFF});
++        }
++        // v6: authored shadow casters and light-region hulls.
++        Write(stream, world->primaryLightCount);
++        for (unsigned light = 0; light < world->primaryLightCount; ++light) {
++            const auto* geom = world->shadowGeom ? &world->shadowGeom[light] : nullptr;
++            Write(stream, geom ? geom->surfaceCount : uint16_t{0});
++            Write(stream, geom ? geom->smodelCount : uint16_t{0});
++            if (geom) {
++                WriteArray(stream, geom->sortedSurfIndex, geom->surfaceCount);
++                WriteArray(stream, geom->smodelIndex, geom->smodelCount);
++            }
++            const auto* region = world->lightRegion ? &world->lightRegion[light] : nullptr;
++            Write(stream, region ? region->hullCount : 0u);
++            if (region) for (unsigned h = 0; h < region->hullCount; ++h) {
++                const auto& hull = region->hulls[h];
++                WriteArray(stream, hull.kdopMidPoint, 9);
++                WriteArray(stream, hull.kdopHalfSize, 9);
++                Write(stream, hull.axisCount);
++                for (unsigned a = 0; a < hull.axisCount; ++a) {
++                    WriteArray(stream, hull.axis[a].dir, 3);
++                    Write(stream, hull.axis[a].midPoint);
++                    Write(stream, hull.axis[a].halfSize);
++                }
++            }
++        }
++
 +        const auto& grid = world->lightGrid;
 +        if (grid.rowAxis > 2 || grid.colAxis > 2 || grid.maxs[grid.rowAxis] < grid.mins[grid.rowAxis])
 +            throw std::runtime_error("Invalid WaW light-grid axes/bounds");
@@ -778,6 +812,32 @@ index 0000000..e6b3211
 +    void ClipMapDumperT4::DumpAsset(AssetDumpingContext& context, const XAssetInfo<clipMap_t>& asset)
 +    {
 +        const auto* clip = asset.Asset();
++
++        // Preserve authored map physics joints and their rendered ropes.
++        const auto constraintFile = context.OpenAssetFile(OutputName(asset.m_name, ".constraints.json"));
++        if (constraintFile) {
++            const auto& strings = context.m_zone.m_script_strings;
++            const auto str = [&strings](unsigned id) { return id && id < strings.Count() ? strings.Value(id) : std::string(); };
++            const auto vec = [](const float* v) { return nlohmann::json::array({v[0],v[1],v[2]}); };
++            nlohmann::json entries = nlohmann::json::array();
++            for(int i=0;i<clip->num_constraints;i++) {
++                const auto& c=clip->constraints[i];
++                nlohmann::json j={{"targetname",str(c.targetname)},{"type",static_cast<int>(c.type)},
++                    {"attach_point_type1",static_cast<int>(c.attach_point_type1)},{"target_index1",c.target_index1},
++                    {"target_ent1",str(c.target_ent1)},{"target_bone1",c.target_bone1?c.target_bone1:""},
++                    {"attach_point_type2",static_cast<int>(c.attach_point_type2)},{"target_index2",c.target_index2},
++                    {"target_ent2",str(c.target_ent2)},{"target_bone2",c.target_bone2?c.target_bone2:""},
++                    {"offset",vec(c.offset)},{"pos",vec(c.pos)},{"pos2",vec(c.pos2)},{"dir",vec(c.dir)},
++                    {"flags",c.flags},{"timeout",c.timeout},{"min_health",c.min_health},{"max_health",c.max_health},
++                    {"distance",c.distance},{"damp",c.damp},{"power",c.power},{"scale",vec(c.scale)},
++                    {"spin_scale",c.spin_scale},{"minAngle",c.minAngle},{"maxAngle",c.maxAngle},
++                    {"material",c.material&&c.material->info.name?c.material->info.name:""},
++                    {"constraintHandle",c.constraintHandle},{"rope_index",c.rope_index}};
++                entries.push_back(std::move(j));
++            }
++            *constraintFile << nlohmann::json({{"version",1},{"constraints",entries}}).dump(2);
++        }
++
 +        const auto file = context.OpenAssetFile(OutputName(asset.m_name, ".clip.bin"));
 +        if (!file)
 +            return;
@@ -1070,7 +1130,6 @@ index 0000000..e6b3211
 +        out << "\"\n}\n";
 +    }
 +} // namespace world_converter
-
 diff --git a/src/ObjWriting/Game/T4/Maps/WorldConverterDumperT4.h b/src/ObjWriting/Game/T4/Maps/WorldConverterDumperT4.h
 new file mode 100644
 index 0000000..4d755f6

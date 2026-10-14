@@ -351,6 +351,8 @@ namespace BSP
             gfxSurface->lightmapIndex = SurfaceLightmap(plan, bspSurface);
             gfxSurface->reflectionProbeIndex = BSPEditableConstants::DEFAULT_SURFACE_REFLECTION_PROBE;
             gfxSurface->flags = BSPEditableConstants::DEFAULT_SURFACE_FLAGS;
+            if (bspSurface.noDraw)
+                gfxSurface->flags |= GFX_SURFACE_NO_DRAW;
 
             gfxSurface->tris.triCount = static_cast<uint16_t>(bspSurface.triCount);
             gfxSurface->tris.baseIndex = static_cast<int>(bspSurface.indexOfFirstIndex);
@@ -422,6 +424,11 @@ namespace BSP
         // the opaque pass is wrong.
         const auto regionGroup = [](const GfxSurface& surf)
         {
+            // Camera draw ranges must exclude helper geometry too. NO_DRAW
+            // alone does not keep a surface out of these contiguous ranges.
+            // Keep helpers after the color groups for shadow/collision use.
+            if (surf.flags & GFX_SURFACE_NO_DRAW)
+                return 4;
             switch (surf.material ? surf.material->cameraRegion : CAMERA_REGION_LIT_OPAQUE)
             {
             case CAMERA_REGION_LIT_TRANS:
@@ -472,10 +479,10 @@ namespace BSP
             range.second++;
         }
         gfxWorld.dpvs.staticSurfaceCount = m_brush_surface_ranges[0].second;
-        unsigned int groupEnd[4] = {};
+        unsigned int groupEnd[5] = {};
         for (size_t i = 0; i < gfxWorld.dpvs.staticSurfaceCount; i++)
             groupEnd[regionGroup(sorted[i])]++;
-        for (auto g = 1; g < 4; g++)
+        for (auto g = 1; g < 5; g++)
             groupEnd[g] += groupEnd[g - 1];
         gfxWorld.dpvs.litSurfsBegin = 0;
         gfxWorld.dpvs.litSurfsEnd = groupEnd[0];

@@ -22,6 +22,7 @@ gameworldmp/mapents straight into ``zone_out/<project>/<project>.ff``.
 from __future__ import annotations
 
 import copy
+import csv
 import os
 import json
 import re
@@ -31,7 +32,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from .resources import resource_root
-from . import progress, zombiebehavior
+from . import clientport, progress, viewmodels, zombiebehavior
 
 from . import assetresolve, audio, entities, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, materialisolation, oneway, paths, projectilecollision, scorebehavior, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones
 from .fbx import collision_material_slots, collision_slot_models, write_collision_fbx, write_world_fbx
@@ -1239,6 +1240,7 @@ def stage_geometry(report: StageReport, world, clip, roots: list[Path], project_
             report.warnings.append(f"world vertex format unknown for {sorted(still)}; layers dropped")
     sky = set()
     tool_surfaces = set()
+    shadow_only = set()
     blend_data = set()
     for name in {s.material for s in world.surfaces}:
         src = _find(roots, techsets.oat_material_path(name))
@@ -1248,6 +1250,8 @@ def stage_geometry(report: StageReport, world, clip, roots: list[Path], project_
                 sky.add(name)
             elif technique in NON_RENDER_TECHSETS:
                 tool_surfaces.add(name)
+            elif techsets.parse(technique or '').unlit_kind == 'shadowcaster':
+                shadow_only.add(name)
             elif len(techsets.parse(technique or "").layers) > 1:
                 blend_data.add(name)
         elif name.startswith("*"):
@@ -1282,7 +1286,8 @@ def stage_geometry(report: StageReport, world, clip, roots: list[Path], project_
             f"{sum(s.material in tool_surfaces for s in world.surfaces)} WaW editor-only surfaces "
             f"({', '.join(sorted(tool_surfaces))}) removed from the render world")
     world.surfaces = kept
-    mesh_of_surface = write_world_fbx(world, bsp / "map_gfx.fbx", frozenset(blend_data))
+    mesh_of_surface = write_world_fbx(world, bsp / "map_gfx.fbx", frozenset(blend_data), frozenset(shadow_only))
+    report.content['shadow_only_surfaces'] = sum(s.material in shadow_only for s in world.surfaces)
     write_shadow_geometry(report, world, mesh_of_surface, bsp / "shadowgeom.json")
     slot_materials = write_collision_fbx(clip, bsp / "map_col.fbx")
     # BSP/clipmaterials.json: FBX collision material -> WaW clip flags. The
@@ -1378,6 +1383,10 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
 
     world = progress.timed('Read map world', read_gfx_world, gfx_bin)
     clip = progress.timed('Read map collision', read_collision, clip_bin)
+    from . import constraints
+    map_constraints = constraints.stage(clip_bin.with_name(
+        clip_bin.name.removesuffix('.clip.bin') + '.constraints.json'), project_root)
+    report.content['physics_constraints'] = map_constraints
     sky_image = stage_geometry(report, world, clip, roots, project_root, stock_waw)
     ents_file = source_entities(gfx_bin, stage, roots)
     script_models: set[str] = set()
@@ -1410,6 +1419,9 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
         try:
             report.entities, script_models = entities.write_entities(ents_file, project, project_root / "BSP",
                                                                      clip, start_zones, animscripts, zone_names)
+            if bo2_root is not None:
+                from . import barriers
+                report.entities['barrier_alignment'] = barriers.align_native_boards(project_root / 'BSP', bo2_root)
         except ValueError as exc:
             raise StageError(f"map entities: {exc}") from exc
         synthesized = report.entities.get("synthesized_zones")
@@ -1505,7 +1517,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
     projectile_models = projectilecollision.recover(report, world, clip, project_root, roots)
     fx_models = stage_fx_models(report, project_root, effects.models)
     hud_materials = sorted(report.scripts.get("hud_materials", [])) if report.scripts else []
-    names = {s.material for s in world.surfaces} | model_materials | set(hud_materials)
+    names = {s.material for s in world.surfaces} | model_materials | set(hud_materials) | set(map_constraints['materials'])
     weapon_materials = set(weapon_report['models']['materials']) if weapon_report else set()
     if weapon_report:
         weapon_materials.update(weapon_report['dependencies'].get('material', []))
@@ -1655,7 +1667,16 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
         images.append('waw_vision_lut')
     client_dir = project_root / 'clientscripts/mp/waw'
     client_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(gscport.COMPAT_DIR / '_waw2bo2_environment.csc', client_dir / '_waw2bo2_environment.csc')
+    environment = (gscport.COMPAT_DIR / '_waw2bo2_environment.csc').read_text(encoding='utf-8')
+    environment = flame_environment_source(environment, project_root / 'content_source')
+    weapon_runtime = project_root / 'content_source/weapons.runtime.json'
+    weapon_table = json.loads(weapon_runtime.read_text())['table'] if weapon_runtime.is_file() else {}
+    client_sound_names = zone_sound_names | compiled_sound_names | ({n for kinds in stock_waw.index.values()
+        for n in kinds.get('sound', [])} if stock_waw else set())
+    tesla_client = clientport.stage_tesla(roots, project_root, report.fx_table, weapon_table, client_sound_names)
+    if tesla_client:
+        environment = environment.replace('init()\n{', 'init()\n{\n' + tesla_client, 1)
+    (client_dir / '_waw2bo2_environment.csc').write_text(environment, encoding='utf-8')
     client_main = project_root / 'clientscripts/mp' / f'{project}.csc'
     client_text = client_main.read_text(encoding='utf-8')
     # The donor's fog-volume monitor selects its own vision every frame.
@@ -1827,6 +1848,8 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
             zone.write(''.join(line + '\n' for line in stockperks.asset_lines(project_root)))
     material_names = materialisolation.stage(report, project_root, techset_dump) if techset_dump else {}
     report.content['material_identities'] = material_names
+    rope_runtime = constraints.stage_entities(project_root)
+    report.content['physics_constraint_runtime'] = rope_runtime
     hud_materials = {material_names.get(name, name) for name in hud_materials}
     staged = {m["name"] for m in report.materials}
     from . import rumbles
@@ -1836,7 +1859,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
     report.content['rumbles'] = rumble_report
     report.errors += [f'RUMBLE_DEPENDENCY_MISSING {name}' for name in rumble_report['missing']]
     write_zone(stage, project, images, ipak, sorted(script_models | fx_models | projectile_models), scripts, zbarriers, effects.zone_fx + model_overlay_fx,
-               [m for m in hud_materials if m in staged], [localization_report['asset']], rumble_report['files'])
+               [m for m in hud_materials if m in staged] + rope_runtime['materials'], [localization_report['asset']], rumble_report['files'])
 
     (project_root / "bridge_stage.report.json").write_text(report.to_json(), encoding="utf-8")
     return report
@@ -2102,6 +2125,48 @@ TEMPLATE_ZONE = Path("mods") / "zm_test" / "zm_test.zone"
 
 
 @progress.phase('Convert weapon runtime assets')
+def flame_environment_source(source: str, content: Path) -> str:
+    """Initialize T6's native flame pools for carried source gas weapons.
+
+    The CSC builtin allocates every pool before setting flame_system_enabled.
+    Setting the dvar directly skips allocation and crashes the native reset.
+    """
+    runtime_file = content / 'weapons.runtime.json'
+    if not runtime_file.is_file():
+        return source
+    runtime = json.loads(runtime_file.read_text(encoding='utf-8'))
+    for name in runtime.get('weapons', []):
+        path = content / 'weapons' / runtime['table'][name]
+        if not path.is_file():
+            continue
+        fields = weapons.read_info_file(path)
+        if fields.get('weaponType') == 'gas' and any(fields.get(k) for k in weapons.FLAME_TABLE_KEYS):
+            return source.replace('init()\n{', 'init()\n{\n    // Allocate native pools; never force the enabled dvar.\n    enableflamesystem();', 1)
+    return source
+
+
+def bolted_loop_effects(project: Path, table: dict[str, str]) -> set[str]:
+    result = set()
+    for name in set(table.values()):
+        path = fx.fx_file(project, name)
+        if not path.is_file():
+            continue
+        definition = json.loads(path.read_text())
+        if definition.get('elemDefCountLooping', 0) and definition.get('msecLoopingLife', 0) >= 2147483647:
+            result.add(name)
+    return result
+
+
+def source_zombie_var_overrides(roots: list[Path]) -> dict[str, str]:
+    """WaW table column one, with source-root precedence; never BO2's table."""
+    source = next((root / 'mp/zombiemode.csv' for root in roots
+                   if (root / 'mp/zombiemode.csv').is_file()), None)
+    if source is None:
+        return {}
+    with source.open(encoding='utf-8-sig', newline='') as stream:
+        return {row[0]: row[1] for row in csv.reader(stream) if len(row) > 1 and row[0] and row[1]}
+
+
 def _stage_weapon_runtime(report: StageReport, project: str, project_root: Path, roots: list[Path],
                           stock_materials: Path, techset_dump: Path | None, bo2_root: Path | None,
                           t6_unlinker: Path | None, stage: Path, wavelets, converted_fx: set[str],
@@ -2116,8 +2181,12 @@ def _stage_weapon_runtime(report: StageReport, project: str, project_root: Path,
         report.errors.append("weapons: no --techset-dump; weapon materials cannot be translated")
         return
     visuals = weapons.stage_visuals(roots, content, stock_materials, techset_dump, wavelets,
-                                    native_fallbacks=native_fallbacks)
+                                   native_fallbacks=native_fallbacks,
+                                   bo2_raw=bo2_root / 'raw' if bo2_root else None)
     report.warnings += visuals['warnings']
+    viewmodels.stage_shadow_variants(content)
+    from . import animnotes
+    animnotes.stage_weapon_events(content)
     loaded: dict[str, set[str]] = {}
     reserved: set[str] = set()
     if bo2_root is not None:
@@ -2139,7 +2208,9 @@ def _stage_weapon_runtime(report: StageReport, project: str, project_root: Path,
         report.warnings.append(f"UNSUPPORTED_WEAPON {name}: not carried in mod.ff: {'; '.join(reasons)}")
     (project_root / "maps" / "mp" / "waw").mkdir(parents=True, exist_ok=True)
     (project_root / "maps" / "mp" / "waw" / "_waw2bo2_assets.gsc").write_text(
-        gscport.assets_source(report.fx_table, waw_map, runtime["table"]), encoding="utf-8")
+        gscport.assets_source(report.fx_table, waw_map, runtime["table"],
+                             bolted_loop_effects(project_root, report.fx_table),
+                             source_zombie_var_overrides(roots)), encoding="utf-8")
     entities_json = project_root / "BSP" / "entities.json"
     if entities_json.exists():
         report.warnings += entities.map_wall_buys(entities_json, runtime["table"])
@@ -2193,7 +2264,7 @@ def stage_core_animtrees(report: StageReport, sources, roots: list[Path], projec
     staged: list[str] = []
     if api is not None and map_name is not None:
         requirements = gscport.discover_animation_dependencies(sources, api, map_name, actor_types)
-        movement_tree, movement = zombiebehavior.movement_sets(sources, gscport.API['zombie_runtime'])
+        movement_tree, movement = zombiebehavior.movement_sets(sources, gscport.API['zombie_runtime'], map_name)
         if movement_tree and movement:
             requirements.setdefault(movement_tree, set()).update(n for names in movement.values() for n in names)
     else:
@@ -2360,7 +2431,7 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
     else:
         rule_path.unlink(missing_ok=True)
     if actor_types and bo2_root is not None:
-        movement = zombiebehavior.stage_actor_movement(sources, project_root, bo2_root, gscport.API['zombie_runtime'])
+        movement = zombiebehavior.stage_actor_movement(sources, project_root, bo2_root, gscport.API['zombie_runtime'], map_name)
         if movement:
             report.scripts['actor_movement'] = movement
     report.scripts["staged_xanims"] = xanims

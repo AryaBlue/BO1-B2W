@@ -8,6 +8,45 @@ RUNTIME = r'maps\mp\waw\_waw2bo2_zombie_behavior'
 ACTOR_TREE = 'waw2bo2_zombie_actor'
 SELECTION = r'maps\_waw2bo2_source_spawns'
 SPEED_STATE = r'maps\_waw2bo2_source_speed_state'
+CHASE_POLICY = r'maps\_waw2bo2_source_chase_policy'
+
+
+def source_chase_policy(sources, definition: dict) -> str | None:
+    """Retain the source's ordered choice between forced goals and chasing."""
+    from .gscport import top_level_statements
+    contract = definition['source_chase']
+    source = sources.get(contract['script'])
+    fn = source.functions.get(contract['function']) if source else None
+    if fn is None:
+        return None
+    tokens = source.tokens
+    for a, b in top_level_statements(tokens, fn.body_open, fn.body_close):
+        if tokens[a].low != 'if':
+            continue
+        branches, i, found = [], a, False
+        while i < b:
+            header_start = i
+            if tokens[i].low == 'else':
+                i += 1
+            if tokens[i].low == 'if':
+                if tokens[i + 1].text != '(':
+                    break
+                i = gsc._match(tokens, i + 1, '(', ')') + 1
+            if tokens[i].text != '{':
+                break
+            close = gsc._match(tokens, i, '{', '}')
+            refs = list(gsc.references(tokens, i + 1, close))
+            chase = any(r.name.lower() == contract['chase_function'] for r in refs) and any(
+                r.name.lower() == contract['setup_function'] for r in refs)
+            found |= chase
+            branches.append(gsc.emit(tokens[header_start:i]) + '{ return ' + ('true' if chase else 'false') + '; }')
+            i = close + 1
+            if i >= b or tokens[i].low != 'else':
+                break
+        if found:
+            return '\n'.join(['// Source zombie_think chase/entrance decision.',
+                              'should_chase()', '{', *branches, 'return false;', '}'])
+    return None
 
 
 def source_speed_state(sources, definition: dict) -> str | None:
@@ -153,6 +192,16 @@ def source_selection(sources, definition: dict) -> str | None:
         if start is not None and depth == base and [t.low for t in tokens[i:i + 4]] == [c['previous'], '=', c['candidate'], ';']:
             end = i + 4
             break
+    if start is not None and end is None:
+        # DLC2 selects once without maintaining selection history. Accept only
+        # that complete random-index statement, not an unknown selection body.
+        close = next((i for i in range(start, fn.body_close) if tokens[i].text == ';'), None)
+        if close is not None:
+            words = [t.low for t in tokens[start:close + 1]]
+            expected = [c['candidate'], '=', 'level', '.', c['array_field'], '[',
+                        'randomint', '(', 'level', '.', c['array_field'], '.', 'size', ')', ']', ';']
+            if words == expected:
+                end = close + 1
     if start is None or end is None:
         return None
     body = copy.deepcopy(tokens[start:end])
@@ -165,7 +214,7 @@ def source_selection(sources, definition: dict) -> str | None:
             f'\nreturn {c["candidate"]};\n}}\n')
 
 
-def movement_sets(sources, definition: dict) -> tuple[str | None, dict[str, list[str]]]:
+def movement_sets(sources, definition: dict, map_name: str | None = None) -> tuple[str | None, dict[str, list[str]]]:
     """Read flat, authored movement table assignments, retaining variant weights."""
     contract = definition['source_movement']
     script = sources.get(contract['script'])
@@ -190,10 +239,46 @@ def movement_sets(sources, definition: dict) -> tuple[str | None, dict[str, list
         fn = candidates[0] if candidates else None
     if fn is None:
         return None, {}
+    # level.script is the immutable input map name. Resolve only that known
+    # condition; dynamic conditions retain their braces and diagnostics.
+    from .gscport import top_level_statements
+    def fold(opening, closing):
+        result = []
+        for a, b in top_level_statements(script.tokens, opening, closing):
+            original = script.tokens[a:b]
+            if map_name is None or script.tokens[a].low != 'if':
+                result.extend(original)
+                continue
+            guard_end = gsc._match(script.tokens, a + 1, '(', ')')
+            words = [t.low for t in script.tokens[a + 2:guard_end]]
+            if (len(words) != 5 or words[:3] != ['level', '.', 'script'] or
+                    words[3] not in ('==', '!=') or not words[4].startswith('"')):
+                result.extend(original)
+                continue
+            yes = guard_end + 1
+            if script.tokens[yes].text != '{':
+                result.extend(original)
+                continue
+            yes_end = gsc._match(script.tokens, yes, '{', '}')
+            no = no_end = None
+            if yes_end + 1 < b and script.tokens[yes_end + 1].low == 'else':
+                no = yes_end + 2
+                if script.tokens[no].text != '{':
+                    result.extend(original)
+                    continue
+                no_end = gsc._match(script.tokens, no, '{', '}')
+            matched = map_name.lower() == words[4].strip('"')
+            if words[3] == '!=':
+                matched = not matched
+            if matched:
+                result.extend(fold(yes, yes_end))
+            elif no is not None:
+                result.extend(fold(no, no_end))
+        return result
+    tokens = [script.tokens[fn.body_open], *fold(fn.body_open, fn.body_close), script.tokens[fn.body_close]]
     found = {}
-    tokens = script.tokens
     depth = 0
-    for i in range(fn.body_open + 1, fn.body_close):
+    for i in range(1, len(tokens) - 1):
         depth += tokens[i].text == '{'
         depth -= tokens[i].text == '}'
         words = [t.low for t in tokens[i:i + 13]]
@@ -211,8 +296,8 @@ def movement_sets(sources, definition: dict) -> tuple[str | None, dict[str, list
     return fn.animtree, {speed: [entries[i] for i in sorted(entries)] for speed, entries in found.items()}
 
 
-def stage_actor_movement(sources, out_root: Path, bo2_root: Path, definition: dict) -> dict:
-    _, sets = movement_sets(sources, definition)
+def stage_actor_movement(sources, out_root: Path, bo2_root: Path, definition: dict, map_name: str | None = None) -> dict:
+    _, sets = movement_sets(sources, definition, map_name)
     if not sets:
         return {}
     asd = (bo2_root / 'raw/animstatedefs/zm_nuked_basic.asd').read_text(encoding='utf-8')
@@ -250,7 +335,8 @@ def stage_actor_movement(sources, out_root: Path, bo2_root: Path, definition: di
 
 
 def runtime_source(definition: dict, speed_function: str | None, selection_function: str | None = None,
-                   speed_state_function: str | None = None) -> str:
+                   speed_state_function: str | None = None, source_membership: bool = False,
+                   respawn_function: str | None = None, chase_function: str | None = None) -> str:
     native = definition['native_spawner']
     owned = definition['owned_spawner']
     native_round = definition['native_round_runtime']
@@ -258,6 +344,23 @@ def runtime_source(definition: dict, speed_function: str | None, selection_funct
     entry = definition['native_spawn_init']
     result_field = definition['source_speed']['owned_result_field']
     callback_field = definition['native_movement']['callback']
+    member_field = definition['source_selection']['array_field']
+    membership = definition['source_membership']
+    rise_field = membership['riser_array_field']
+    respawn = definition['source_respawn']
+    chase = f'return self {chase_function}();' if chase_function else 'return false;'
+    respawn_init = (f"level.{respawn['native_callback']} = ::source_respawn;" if respawn_function else '')
+    respawn_body = (f'''source_respawn( player, return_struct )
+{{
+    origin = {respawn_function}( player );
+    if ( !isdefined( origin ) || !isdefined( return_struct ) || !return_struct )
+        return origin;
+    point = spawnstruct();
+    point.origin = origin;
+    point.angles = ( 0, 0, 0 );
+    return point;
+}}
+''' if respawn_function else '')
     speed = (f'self {speed_function}();\n'
              f'    self refresh_speed();\n'
              '    if ( !isdefined( self.waw_speed_callback_bound ) )\n'
@@ -274,6 +377,8 @@ def runtime_source(definition: dict, speed_function: str | None, selection_funct
     return f'''// waw2bo2: source WaW speed rules and plain spawner origin ownership.
 init()
 {{
+    level.waw_source_spawn_membership = {int(source_membership)};
+    {respawn_init}
     {state_init}
     // Native initialization can register a cached stock round-spawn pointer.
     // Keep authored custom providers; route the native default to our copy.
@@ -368,6 +473,8 @@ source_animstate( animstate, substate )
 
 choose_spawner( candidates, spawn_point )
 {{
+    if ( isdefined( spawn_point ) && isdefined( spawn_point.waw_source_spawner ) )
+        return spawn_point.waw_source_spawner;
     // Synthesized locations retain each WaW actor's origin. Choose its source
     // actor when available instead of an actor in a closed or distant zone.
     if ( isdefined( spawn_point ) )
@@ -388,6 +495,52 @@ choose_spawner( candidates, spawn_point )
     level.waw_previous_spawner = chosen;
     return chosen;
 }}
+
+spawn_locations_available()
+{{
+    if ( isdefined( level.waw_source_spawn_membership ) && level.waw_source_spawn_membership )
+        return isdefined( level.{member_field} ) && level.{member_field}.size > 0;
+    return level.zombie_spawn_locations.size > 0;
+}}
+
+choose_spawn_location()
+{{
+    if ( !isdefined( level.waw_source_spawn_membership ) || !level.waw_source_spawn_membership )
+        return level.zombie_spawn_locations[randomint( level.zombie_spawn_locations.size )];
+    actor = choose_spawner( level.{member_field}, undefined );
+    anchor = actor;
+    noteworthy = "spawn_location";
+    if ( isdefined( actor.script_string ) && actor.script_string == "{membership['riser_actor_value']}" )
+    {{
+        if ( !isdefined( level.{rise_field} ) || !level.{rise_field}.size )
+            return undefined;
+        anchor = level.{rise_field}[randomint( level.{rise_field}.size )];
+        noteworthy = "{membership['native_riser_location']}";
+    }}
+    point = spawnstruct();
+    point.origin = anchor.origin;
+    point.angles = anchor.angles;
+    point.script_noteworthy = noteworthy;
+    // T6 interprets any other string as a specific barrier id. WaW's
+    // riser_door and ordinary actors use the nearest-window path instead.
+    if ( noteworthy == "{membership['native_riser_location']}" )
+    {{
+        if ( isdefined( anchor.script_noteworthy ) && anchor.script_noteworthy == "{membership['native_chaser_value']}" )
+            point.script_string = "{membership['native_chaser_value']}";
+    }}
+    else if ( isdefined( actor.script_string ) && actor.script_string == "{membership['source_chaser_value']}" )
+        point.script_string = "{membership['native_chaser_value']}";
+    point.target = actor.target;
+    point.targetname = actor.targetname;
+    point.waw_source_spawner = actor;
+    return point;
+}}
+
+source_chases()
+{{
+    {chase}
+}}
+{respawn_body}
 '''
 
 
@@ -398,6 +551,33 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
     native, owned = definition['native_spawner'], definition['owned_spawner']
     source = (bo2_root / 'raw' / (native.replace('\\', '/') + '.gsc')).read_text(encoding='utf-8')
     script = gsc.parse(source, native)
+    has_policy = (out_root / 'maps/mp/waw/_waw2bo2_source_chase_policy.gsc').is_file()
+    skip = script.functions.get('should_skip_teardown')
+    if has_policy and skip is None:
+        raise ValueError(f'{native}: missing chase/entrance routing predicate')
+    if has_policy:
+        script.tokens[skip.body_open].text += ('\n    if ( self ' + RUNTIME + '::source_chases() )\n        return true;\n')
+    # A source chaser's optional target is an intermediate path node, not a
+    # forced barricade. Let the native chase branch consume that node first.
+    think = script.functions.get('zombie_think')
+    if has_policy and think:
+        for i in range(think.body_open + 1, think.body_close - 2):
+            if script.tokens[i].low == 'if' and script.tokens[i + 1].text == '(':
+                end = gsc._match(script.tokens, i + 1, '(', ')')
+                cond = ''.join(t.low for t in script.tokens[i + 2:end])
+                if cond == '!isdefined(find_flesh_struct_string)&&isdefined(self.target)&&self.target!=""':
+                    script.tokens[end].text = ' && !self ' + RUNTIME + '::source_chases() )'
+                    break
+    core = out_root / 'maps/mp/waw/_waw2bo2_core.gsc'
+    if core.is_file() and 'waw_tesla_init()' in core.read_text(encoding='utf-8'):
+        death = script.functions.get('zombie_death_points')
+        if death is None or 'zombie' not in death.params:
+            raise ValueError(f'{native}: Tesla needs the native zombie death-points contract')
+        # WaW skips its entire ordinary death-points/drop path for a Tesla
+        # death; tesla_do_damage already awards the source chain's points.
+        script.tokens[death.body_open].text += (
+            '\n    if ( isdefined( zombie.tesla_death ) && zombie.tesla_death )\n'
+            '        return;\n')
     fn = script.functions.get(definition['native_spawn_init'])
     location = script.functions.get(definition['native_location_function'])
     if fn is None or location is None:
@@ -458,6 +638,20 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
                         zm.tokens[ref.index - 1].text = ''
         fn = zm.functions.get('round_spawning')
         if fn:
+            for i in range(fn.body_open + 1, fn.body_close - 6):
+                words = [t.low for t in zm.tokens[i:i + 7]]
+                if words == ['level', '.', 'zombie_spawn_locations', '.', 'size', '<=', '0']:
+                    zm.tokens[i].text = '!' + RUNTIME + '::spawn_locations_available()'
+                    for token in zm.tokens[i + 1:i + 7]:
+                        token.text = ''
+            history = [i for i in range(fn.body_open + 1, fn.body_close - 3)
+                       if [t.low for t in zm.tokens[i:i + 4]] == ['old_spawn', '=', 'spawn_point', ';']]
+            if history:
+                zm.tokens[history[-1] + 3].text += (
+                    '\n        if ( isdefined( level.waw_source_spawn_membership ) && level.waw_source_spawn_membership )\n'
+                    '            spawn_point = ' + RUNTIME + '::choose_spawn_location();\n'
+                    '        if ( !isdefined( spawn_point ) )\n'
+                    '        {\n            wait 0.1;\n            continue;\n        }\n')
             for ref in gsc.references(zm.tokens, fn.body_open, fn.body_close):
                 if ref.name.lower() == 'spawn_zombie' and not ref.pointer and ref.qualifier in (None, r'maps\mp\zombies\_zm_utility'):
                     zm.tokens[ref.index].text = RUNTIME + '::spawn_zombie'

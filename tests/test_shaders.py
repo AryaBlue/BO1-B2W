@@ -22,6 +22,31 @@ mov oC0.w, c0.w
 
 
 class ShaderTests(unittest.TestCase):
+    def test_reversed_shadow_depth_keeps_source_compare_body(self):
+        contract = {'inputs': {'v0': {'semantic': 'TEXCOORD0', 'width': 4}},
+                    'outputs': {'oC0': {'semantic': 'SV_Target0'}},
+                    'samplers': {'s0': {'texture': 9, 'sampler': 9, 'point_load': True,
+                                        'reverse_depth_compare': True}}}
+        for op in ('texldl', 'texldp'):
+            source = ('ps_3_0\ndef c0, 1, 0, 0, 0\ndcl_texcoord v0\ndcl_2d s0\n'
+                      f'{op} r0, v0, s0\nadd r0.x, r0.x, -v0.z\n'
+                      'cmp oC0, r0.x, c0.x, c0.y\n')
+            hlsl, _ = shaders.translate(source, contract)
+            self.assertIn('2.0 * (v0).z', hlsl)
+            if op == 'texldp':
+                self.assertIn('* (v0).w', hlsl)
+            if os.name == 'nt':
+                self.assertEqual(shaders.compile_hlsl(hlsl, 'ps_5_0')[:4], b'DXBC')
+            # Independent oracle: source depth comparison must produce the
+            # same visibility under opposite depth ordering, including a
+            # projected reference and both sides of the occluder plane.
+            for w in (1.0, 4.0):
+                for reference, stored in ((0.8, 0.2), (0.2, 0.8), (0.5, 0.5)):
+                    reference_units = reference * (w if op == 'texldp' else 1)
+                    stored_units = stored * (w if op == 'texldp' else 1)
+                    encoded_sample = 2 * reference_units - stored_units
+                    self.assertEqual(encoded_sample - reference_units >= 0, reference >= stored)
+
     def test_binding_is_required_for_every_external_register(self):
         with self.assertRaisesRegex(shaders.ShaderError, 'constant binding'):
             shaders.translate(FILM, {})

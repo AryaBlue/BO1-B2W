@@ -45,10 +45,11 @@ namespace BSP
         }
     } // namespace
 
-    ClipMapLinker::ClipMapLinker(MemoryManager& memory, ISearchPath& searchPath, AssetCreationContext& context)
+    ClipMapLinker::ClipMapLinker(MemoryManager& memory, ISearchPath& searchPath, AssetCreationContext& context, Zone& zone)
         : m_memory(memory),
           m_search_path(searchPath),
-          m_context(context)
+          m_context(context),
+          m_zone(zone)
     {
     }
 
@@ -151,14 +152,98 @@ namespace BSP
         clipMap.box_brush->verts = nullptr;
     }
 
-    void ClipMapLinker::LoadRopesAndConstraints(clipMap_t& clipMap) const
+    bool ClipMapLinker::LoadRopesAndConstraints(clipMap_t& clipMap)
     {
         clipMap.num_constraints = 0; // max 511
         clipMap.constraints = nullptr;
 
+        const auto path = GetFileNameForBSPAsset("constraints.json");
+        const auto file = m_search_path.Open(path);
+        int ropes = 0;
+        if (file.IsOpen())
+        {
+            try
+            {
+                const auto data = json::parse(*file.m_stream);
+                if (data.at("version").get<int>() != 1 || data.at("constraints").size() > 511)
+                    throw std::runtime_error("unsupported map constraint schema/count");
+                const auto& entries = data.at("constraints");
+                clipMap.num_constraints = static_cast<int>(entries.size());
+                clipMap.constraints = m_memory.Alloc<PhysConstraint>(entries.size());
+                const auto string = [this](const std::string& value) -> uint16_t {
+                    if (value.empty()) return 0;
+                    const auto id = m_zone.m_script_strings.AddOrGetScriptString(value);
+                    if (id > std::numeric_limits<uint16_t>::max())
+                        throw std::runtime_error("map physics script string overflow");
+                    m_script_strings.push_back(id);
+                    return static_cast<uint16_t>(id);
+                };
+                for (size_t i = 0; i < entries.size(); i++)
+                {
+                    const auto& j = entries[i];
+                    auto& c = clipMap.constraints[i];
+                    const int type = j.at("type").get<int>();
+                    if (type < CONSTRAINT_NONE || type > CONSTRAINT_ROPE)
+                        throw std::runtime_error("unknown WaW constraint type");
+                    c.type = static_cast<ConstraintType>(type);
+                    ropes += c.type == CONSTRAINT_ROPE;
+                    c.targetname = string(j.at("targetname").get<std::string>());
+                    c.target_ent1 = string(j.at("target_ent1").get<std::string>());
+                    c.target_ent2 = string(j.at("target_ent2").get<std::string>());
+                    const auto attachment = [](int type, uint16_t entity) {
+                        if (type == 1) throw std::runtime_error("dynent constraint attachment requires dynent staging");
+                        if (type != 0 && type != 2 && type != 3) throw std::runtime_error("unknown constraint attachment type");
+                        if (type != 0 && !entity) throw std::runtime_error("entity constraint attachment requires target name");
+                        return static_cast<AttachPointType>(type);
+                    };
+                    c.attach_point_type1 = attachment(j.at("attach_point_type1").get<int>(), c.target_ent1);
+                    c.attach_point_type2 = attachment(j.at("attach_point_type2").get<int>(), c.target_ent2);
+                    c.target_index1 = c.attach_point_type1 == 0 ? j.at("target_index1").get<int>() : -1;
+                    c.target_index2 = c.attach_point_type2 == 0 ? j.at("target_index2").get<int>() : -1;
+                    const auto bone1 = j.at("target_bone1").get<std::string>();
+                    const auto bone2 = j.at("target_bone2").get<std::string>();
+                    c.target_bone1 = bone1.empty() ? nullptr : m_memory.Dup(bone1.c_str());
+                    c.target_bone2 = bone2.empty() ? nullptr : m_memory.Dup(bone2.c_str());
+                    const auto vector = [&j](const char* field, vec3_t& value) {
+                        const auto& v = j.at(field);
+                        if (v.size() != 3) throw std::runtime_error("invalid constraint vector");
+                        for (int axis=0; axis<3; axis++) {
+                            value.v[axis] = v[axis].get<float>();
+                            if (!std::isfinite(value.v[axis])) throw std::runtime_error("non-finite constraint vector");
+                        }
+                    };
+                    vector("offset", c.offset); vector("pos", c.pos); vector("pos2", c.pos2);
+                    vector("dir", c.dir); vector("scale", c.scale);
+#define WAW_CONSTRAINT_INT(field) c.field = j.at(#field).get<int>()
+                    WAW_CONSTRAINT_INT(flags); WAW_CONSTRAINT_INT(timeout);
+                    WAW_CONSTRAINT_INT(min_health); WAW_CONSTRAINT_INT(max_health);
+                    WAW_CONSTRAINT_INT(constraintHandle); WAW_CONSTRAINT_INT(rope_index);
+#undef WAW_CONSTRAINT_INT
+#define WAW_CONSTRAINT_FLOAT(field) c.field = j.at(#field).get<float>(); if (!std::isfinite(c.field)) throw std::runtime_error("non-finite constraint scalar " #field)
+                    WAW_CONSTRAINT_FLOAT(distance); WAW_CONSTRAINT_FLOAT(damp); WAW_CONSTRAINT_FLOAT(power);
+                    WAW_CONSTRAINT_FLOAT(spin_scale); WAW_CONSTRAINT_FLOAT(minAngle); WAW_CONSTRAINT_FLOAT(maxAngle);
+#undef WAW_CONSTRAINT_FLOAT
+                    const auto material = j.at("material").get<std::string>();
+                    if (!material.empty()) {
+                        const auto asset = m_context.LoadDependency<AssetMaterial>(material);
+                        if (!asset) throw std::runtime_error("constraint material not found: " + material);
+                        c.material = asset->Asset();
+                    }
+                }
+                if (ropes > 300) throw std::runtime_error("map rope count exceeds T6 limit");
+                con::info("Linked {} source map physics constraints ({} ropes)", entries.size(), ropes);
+            }
+            catch (const std::exception& e)
+            {
+                con::error("Map physics constraints {}: {}", path, e.what());
+                return false;
+            }
+        }
+
         // The game allocates 32 empty ropes
-        clipMap.max_ropes = 32; // max 300
+        clipMap.max_ropes = std::max(32, ropes); // max 300
         clipMap.ropes = m_memory.Alloc<rope_t>(clipMap.max_ropes);
+        return true;
     }
 
     void ClipMapLinker::LoadSubModelCollision(clipMap_t& clipMap, const BSPData& bsp) const
@@ -1512,7 +1597,8 @@ namespace BSP
 
         LoadVisibility(*clipMap);
 
-        LoadRopesAndConstraints(*clipMap);
+        if (!LoadRopesAndConstraints(*clipMap))
+            return nullptr;
 
         LoadSubModelCollision(*clipMap, bsp);
 

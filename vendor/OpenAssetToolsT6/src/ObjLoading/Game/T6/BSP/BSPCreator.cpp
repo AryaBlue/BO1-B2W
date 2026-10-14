@@ -72,6 +72,7 @@ namespace
                 const auto tag = nodeName.rfind("_lm");
                 const auto lightTag = nodeName.rfind("_pl");
                 const auto brushTag = nodeName.rfind("_bm");
+                surface.noDraw = nodeName.find("_nd1_") != std::string::npos;
                 if (brushTag != std::string::npos && lightTag != std::string::npos && brushTag + 3 < lightTag)
                     surface.brushModel = std::stoul(nodeName.substr(brushTag + 3, lightTag - brushTag - 3));
                 if (lightTag != std::string::npos && tag != std::string::npos && lightTag + 3 < tag)

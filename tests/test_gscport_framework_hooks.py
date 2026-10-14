@@ -14,6 +14,50 @@ def _api() -> T6Api:
 
 
 class FrameworkHookTests(unittest.TestCase):
+    def test_custom_tesla_initializer_is_not_also_started_as_a_framework_hook(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'maps').mkdir()
+            (root / 'maps/_zombiemode.gsc').write_text('main(){ maps\\_zombiemode_tesla::init(); }')
+            (root / 'maps/_zombiemode_tesla.gsc').write_text('init(){ level.custom_tesla = true; }')
+            tr = gscport.Translator(gscport.Sources([root], [], None), _api(), gscport.PortReport())
+            tr.extract_entry(r'maps\_zombiemode_tesla', 'init')
+            self.assertEqual(tr.framework_hooks(), [])
+
+    def test_tesla_source_chain_is_bound_to_shared_native_damage_dispatch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'maps').mkdir()
+            (root / 'maps/testmap.gsc').write_text('main() { maps\\_zombiemode::main(); }')
+            (root / 'maps/_zombiemode_tesla.gsc').write_text(
+                'init() { level._effect["tesla_bolt"] = loadfx("custom/arc"); }\n'
+                'is_tesla_damage(mod) { return self.damageweapon == "tesla_gun"; }\n'
+                'tesla_damage_init(loc, origin, player) { self.seen_name = player.playername; '
+                'self.variants = maps\\_zombiemode_spawner::get_number_variants("custom"); self arc(player); }\n'
+                'arc(player) { self.chain_reached = true; }')
+            api = _api()
+            api.scripts[r'maps\mp\zombies\_zm_spawner'] = {'register_zombie_damage_callback': 1}
+            api.builtins.update({'isdefined': (1, 1), 'isplayer': (1, 1), 'min': (2, 2),
+                                 'loadfx': (1, 1), 'wait_network_frame': (0, 0)})
+            report = gscport.port_map(gscport.Sources([root], [], root), api, 'testmap', root / 'out')
+            generated = root / 'out/maps/mp/waw'
+            core = (generated / '_waw2bo2_core.gsc').read_text()
+            main = (generated / 'testmap.gsc').read_text()
+            self.assertIn('register_zombie_damage_callback( ::waw_tesla_damage )', core)
+            self.assertIn('player.waw_tesla_chain_active = true;', core)
+            self.assertIn('player thread waw_tesla_run_chain', core)
+            self.assertIn('target zombiemode_tesla__tesla_damage_init( hit_location, hit_origin, self )', core)
+            self.assertIn('self.waw_tesla_chain_active = false;', core)
+            self.assertIn('self.chain_reached = true', core)
+            self.assertIn('self.seen_name = player.name', core)
+            self.assertNotIn('player.playername', core)
+            self.assertIn('_waw2bo2_compat::waw_get_number_variants("custom")', core)
+            self.assertIn('waw_tesla_network_choke()', core)
+            self.assertIn('min( 10,', core)
+            self.assertIn('waw_tesla_init();', main)
+            self.assertIn('custom/arc', report.fx)
+            self.assertIn(r'maps\_zombiemode_tesla::arc', report.extracted)
+
     def test_template_spawnfx_bootstrap_is_not_the_engine_builtin(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

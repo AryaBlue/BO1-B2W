@@ -71,6 +71,69 @@ DEPENDENCY_TYPES = {"CSPFT_XMODEL": "xmodel", "CSPFT_MATERIAL": "material", "CSP
                     "CSPFT_SOUND": "sound", "WFT_ANIM_NAME": "xanim", "CSPFT_TRACER": "tracer",
                     "CSPFT_PHYS_PRESET": "physpreset"}
 
+FLAME_TABLE_KEYS = ('flameTableFirstPerson', 'flameTableThirdPerson')
+FLAME_MATERIAL_KEYS = ('fire', 'smoke', 'heat', 'drips', 'streamFuel', 'streamFuel2', 'streamFlame', 'streamFlame2')
+FLAME_SOUND_KEYS = ('flameOffLoopSound', 'flameIgniteSound', 'flameOnLoopSound', 'flameCooldownSound')
+
+
+def read_flame_table(path: Path) -> dict[str, str]:
+    text = wawtext.read(path)
+    if not text.startswith('FLAMETABLEFILE\\'):
+        raise WeaponError(f'{path}: expected compiled FLAMETABLEFILE')
+    return read_info('WEAPONFILE' + text.removeprefix('FLAMETABLEFILE'))
+
+
+def flame_stream_range(fields: dict[str, str]) -> float:
+    """Outer extent of the authored fuel/flame ribbons, in game units."""
+    return max(float(fields.get(key, '0') or '0') for key in
+               ('flameVar_streamFuelLength', 'flameVar_streamFlameLength'))
+
+
+def translate_flame_table(fields: dict[str, str]) -> dict[str, str]:
+    fields = dict(fields)
+    # T4 does not expose these brightness multipliers. Zero-initializing the
+    # T6-only fields hides the fire/drips and leaves only the fuel ribbon.
+    fields.setdefault('flameVar_fireBrightness', '1')
+    fields.setdefault('flameVar_dripsBrightness', '1')
+    # T6's carriers also apply damage. Do not let their travel continue past
+    # the source ribbon's authored reach, even with a long particle lifetime.
+    reach = flame_stream_range(fields)
+    speed = float(fields.get('flameVar_streamChunkSpeed', '0') or '0')
+    duration = float(fields.get('flameVar_streamChunkDuration', '0') or '0')
+    if reach > 0 and speed > 0 and duration > reach / speed:
+        fields['flameVar_streamChunkDuration'] = format(reach / speed, '.9g')
+    return fields
+
+
+def stage_flame_tables(roots: list[Path], project: Path, names: set[str]) -> list[dict]:
+    """Nested weapon data, with original simulation values and isolated assets."""
+    entries = []
+    schema = field_schema(resource_root() / 'vendor/OpenAssetToolsT6/src/ObjCommon/Game/T6/Weapon/FlameTableFields.h')
+    for name in sorted(names):
+        output = output_name('flametable', name)
+        source = next((r / 'weapons' / name for r in roots if (r / 'weapons' / name).is_file()), None)
+        if source is None:
+            raise WeaponError(f'missing compiled flame table: {name}')
+        fields = read_flame_table(source)
+        unknown = set(fields) - set(schema)
+        if unknown:
+            raise WeaponError(f'flame table {name}: unknown T6 fields {sorted(unknown)}')
+        fields = translate_flame_table(fields)
+        fields['name'] = output
+        for key in FLAME_MATERIAL_KEYS:
+            if fields.get(key):
+                fields[key] = output_name('material', fields[key])
+        for key in FLAME_SOUND_KEYS:
+            if fields.get(key):
+                output_name('sound', fields[key])
+                fields[key] = 'waw/' + fields[key]
+        destination = project / 'weapons' / output
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text('FLAMETABLEFILE' + write_info(fields).removeprefix('WEAPONFILE'), encoding='utf-8')
+        entries.append({'name': output, 'waw': name, 'source': str(source),
+                        'file': destination.relative_to(project).as_posix(), 'fields': len(fields)})
+    return entries
+
 
 def bounce_aliases(prefix: str, roots: list[Path], stock=None) -> set[str]:
     """Existing surface aliases for a T4 weapon's bounce-sound prefix."""
@@ -156,6 +219,8 @@ def convert(name: str, source: dict[str, str], t4_schema: dict[str, str], t6_sch
                                     "reason": "no measured T6 playerAnimType"}
             continue
         kind = DEPENDENCY_TYPES.get(src_type)
+        if key in FLAME_TABLE_KEYS:
+            kind = 'flametable'
         if value and src_type == "WFT_BOUNCE_SOUND":
             # Both loaders append surface suffixes to this prefix. The aliases
             # live in the WaW bank namespace, just like ordinary sound fields.
@@ -243,6 +308,15 @@ def convert(name: str, source: dict[str, str], t4_schema: dict[str, str], t6_sch
         out.fields["useAsMelee"] = "1"
         out.translations["useAsMelee"] = {"source": "inventoryType item + meleeAnim", "target": "1",
             "reason": "T4 held item melee swings itself; T6 needs useAsMelee"}
+    # WaW's Tesla bolt has no explosion effect. Its tank_shell impact entry
+    # is a T4 placeholder; T6 resolves it to its real shell explosion FX.
+    # Keep the one-point projectile/splash events that seed the script chain,
+    # and retain the authored electric trail rather than using a shell impact.
+    if source.get('projTrailEffect') == 'maps/zombie/fx_zombie_tesla_electric_bolt' and \
+            source.get('impactType') == 'tank_shell' and not source.get('projExplosionEffect'):
+        out.fields['impactType'] = 'none'
+        out.translations['impactType'] = {'source': 'tank_shell', 'target': 'none',
+            'reason': 'T4 Tesla bolt uses no explosion FX; T6 shell impact table adds one'}
     return out
 
 
@@ -480,6 +554,15 @@ def stage(roots: list[Path], project: Path, names: set[str] | None = None, stock
         dst = project / "weapons" / weapon.name
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(write_info(weapon.fields), encoding="utf-8")
+    flame_tables = stage_flame_tables(roots, project, dependencies.get('flametable', set()))
+    for entry in flame_tables:
+        fields = read_flame_table(Path(entry['source']))
+        for key in FLAME_MATERIAL_KEYS:
+            if fields.get(key):
+                dependencies.setdefault('material', set()).add(fields[key])
+        for key in FLAME_SOUND_KEYS:
+            if fields.get(key):
+                dependencies.setdefault('sound', set()).add(fields[key])
     graphs, missing_graphs = [], []
     for kind, folder in (("accuracy_aivsai", "aivsai"), ("accuracy_aivsplayer", "aivsplayer")):
         for name in sorted(dependencies.get(kind, ())):
@@ -509,7 +592,7 @@ def stage(roots: list[Path], project: Path, names: set[str] | None = None, stock
     lines = [f"xanim,{a['name']}" for a in animations]
     lines.extend(f"weapon,{w.name}" for w in sorted(converted.values(), key=lambda w: w.name))
     (project / "weapons.zone.fragment").write_text("\n".join(lines) + "\n", encoding="utf-8")
-    report.update(status="partial_source_stage", animations=animations, missing_animations=missing_animations,
+    report.update(status="partial_source_stage", flame_tables=flame_tables, animations=animations, missing_animations=missing_animations,
                   accuracy_graphs=graphs, missing_accuracy_graphs=missing_graphs,
                   dependencies={k: sorted(v) for k, v in dependencies.items()},
                   remaining=["model/material conversion", "sound-bank conversion", "FX dependency linking",
@@ -527,7 +610,8 @@ def stage(roots: list[Path], project: Path, names: set[str] | None = None, stock
 
 
 def stage_visuals(roots: list[Path], project: Path, stock_materials: Path, techset_dump: Path,
-                  wavelets=None, *, native_fallbacks: dict[str, Path] | None = None) -> dict:
+                  wavelets=None, *, native_fallbacks: dict[str, Path] | None = None,
+                  bo2_raw: Path | None = None) -> dict:
     """Translate weapon materials and isolate their original images from BO2.
 
     Uses the same measured material translator as world/FX assets. Missing
@@ -536,15 +620,41 @@ def stage_visuals(roots: list[Path], project: Path, stock_materials: Path, techs
     the weapons whose visuals are complete. ``wavelets`` (wavelet.IwdRecovery)
     decodes WaW wavelet IWIs the zone dumps could not export as DDS.
     """
-    from . import iwi, t6bridge, techsets
+    from . import fxmaterials, iwi, shaderruntime, t6bridge, techsets
 
     stage_report = json.loads((project / "weapons.stage.json").read_text(encoding="utf-8"))
     names = set(stage_report["models"]["materials"])
     names.update(stage_report["dependencies"].get("material", []))
     report = t6bridge.StageReport("weapon_visuals")
-    used = t6bridge.stage_materials(report, names, roots, stock_materials, project, techset_dump,
+    effects = {}
+    for name in names:
+        source = next((r / techsets.oat_material_path(name) for r in roots
+                       if (r / techsets.oat_material_path(name)).is_file()), None)
+        if source is not None:
+            data = json.loads(source.read_text())
+            if fxmaterials.is_effect_techset(data.get('techniqueSet', '')):
+                effects[name] = data
+    used = t6bridge.stage_materials(report, names - effects.keys(), roots, stock_materials, project, techset_dump,
                                     {n: output_name("material", n) for n in names}, image_prefix='',
                                     native_fallbacks=native_fallbacks)
+    donors = fxmaterials.index_effect_donors(stock_materials, techset_dump, bo2_raw or project) if effects else []
+    for name, source in sorted(effects.items()):
+        try:
+            donor, notes = fxmaterials.choose_donor(source, donors)
+            material = fxmaterials.build_effect_material(source, donor, notes)
+        except techsets.TechsetError as exc:
+            report.errors.append(f'material {name}: {exc}')
+            continue
+        runtime = shaderruntime.bind_material(source, material, roots, project, techset_dump)
+        relative = techsets.oat_material_path(output_name('material', name))
+        destination = project / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(material, indent=2), encoding='utf-8')
+        used.add(material['techniqueSet'])
+        report.materials.append({'name': output_name('material', name), 'source': name,
+            'file': relative.as_posix(), 't4_techset': source['techniqueSet'],
+            't6_techset': material['techniqueSet'], 'shader_runtime': runtime,
+            'donor': str(donor.path.relative_to(stock_materials)), 'notes': notes})
     translated = {e.get("source", e["name"]) for e in report.materials}
     failed: dict[str, list[str]] = {n: [e for e in report.errors if e.startswith(f"material {n}:")
                                         or e.startswith(f"material {n} (")] or ["not translated"]
@@ -790,6 +900,15 @@ def stage_runtime(project: Path, ipak: str, equivalents=None, loaded: dict[str, 
     material_images = visuals["material_images"]
     for name in runtime:
         fields = fields_by_weapon[name]
+        if fields.get('weaponType') == 'gas':
+            reaches = [flame_stream_range(read_flame_table(project / 'weapons' / fields[key]))
+                       for key in FLAME_TABLE_KEYS if fields.get(key)]
+            reach = max(reaches, default=0)
+            if reach > 0:
+                for key in ('maxRange', 'maxDamageRange', 'minDamageRange'):
+                    previous = float(fields.get(key, '0') or '0')
+                    if previous <= 0 or previous > reach:
+                        fields[key] = format(reach, '.9g')
         # Stock BO2 weapon files write all 1,027 fields; an absent string or
         # anim-name field stays a NULL pointer, which T6 dereferences (measured
         # crash: fireIntroAnim, anim index 3, a T6-only field WaW lacks). The
@@ -812,8 +931,21 @@ def stage_runtime(project: Path, ipak: str, equivalents=None, loaded: dict[str, 
             elif value.startswith(PREFIXES["xmodel"]):
                 for material in models[value.removeprefix(PREFIXES["xmodel"])]["materials"]:
                     images.update(material_images.get(output_name("material", material), ()))
+    flame_materials = set()
+    used_tables = {fields_by_weapon[n].get(key) for n in runtime for key in FLAME_TABLE_KEYS}
+    for entry in stage_report.get('flame_tables', []):
+        if entry['name'] not in used_tables:
+            continue
+        fields = read_flame_table(project / entry['file'])
+        for key in FLAME_MATERIAL_KEYS:
+            if fields.get(key):
+                flame_materials.add(fields[key])
+                images.update(material_images.get(fields[key], ()))
     lines = [f">level.ipak_read,{ipak}", f">ipak,{ipak}"] if images else []
     lines += [f"image,{n}" for n in sorted(images)]
+    # The baseline linker cannot follow nested tables. These assets must be
+    # present before the native relink fills the weapon's table pointers.
+    lines += [f"material,{n}" for n in sorted(flame_materials)]
     lines += [f"xanim,{n}" for n in sorted(anims)]
     # converted effects live in the map zone; mod.ff only references them
     lines += [f"fx,,{n}" for n in sorted(effects)]

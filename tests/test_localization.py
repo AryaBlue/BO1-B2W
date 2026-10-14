@@ -8,6 +8,27 @@ from waw2bo2 import localization, weapons
 
 
 class LocalizationTests(unittest.TestCase):
+    def test_nested_flame_tables_are_not_read_as_weapon_display_names(self):
+        table = self.project / 'content_source/weapons/waw_flametable/flame'
+        table.parent.mkdir(parents=True)
+        table.write_text('FLAMETABLEFILE\\name\\waw_flametable/flame\\flameVar_streamChunkSpeed\\700')
+        self.script.write_text('f(){x=&"ZOMBIE_HINT";}')
+        self.strings(self.root, 'map', {'ZOMBIE_HINT': 'Authored prompt'})
+        report = self.stage()
+        self.assertEqual(report['entries'][0]['value'], 'Authored prompt')
+        self.assertEqual(report['errors'], [])
+
+    def test_waw_use_hint_translates_button_but_not_hud_arguments(self):
+        self.script.write_text('f(){self SetHintString(&"ZOMBIE_PERK_JUGGERNAUT");x=&"HUD_SCORE";}')
+        self.strings(self.root, 'map', {
+            'ZOMBIE_PERK_JUGGERNAUT': 'Press &&1 to buy Jugger-Nog [Cost: 2500]',
+            'HUD_SCORE': 'Score: &&1'})
+        report = self.stage()
+        values = {e['key']: e['value'] for e in report['entries']}
+        self.assertEqual(values['ZOMBIE_PERK_JUGGERNAUT'],
+                         'Press ^3[{+activate}]^7 to buy Jugger-Nog [Cost: 2500]')
+        self.assertEqual(values['HUD_SCORE'], 'Score: &&1')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -102,7 +123,7 @@ class LocalizationTests(unittest.TestCase):
         self.strings(raw, 'raw', {'ZOMBIE_HINT': 'Raw text'})
         self.strings(bo2 / 'raw', 'native', {'ZOMBIE_HINT': 'Native text'})
         report = self.stage(raw_roots=[raw], bo2_root=bo2)
-        self.assertEqual(report['entries'][0]['value'], 'Map text &&1')
+        self.assertEqual(report['entries'][0]['value'], 'Map text ^3[{+activate}]^7')
         self.assertEqual(report['entries'][0]['kind'], 'WaW')
 
     def test_unknown_key_is_reported_and_shown_as_its_key(self):

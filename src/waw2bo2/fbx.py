@@ -88,7 +88,8 @@ def _layer_uv_sets(world: GfxWorld, used: dict[int, int], owner: dict, world_ver
     return sets
 
 
-def write_world_fbx(world: GfxWorld, path: Path, blend_data_materials: frozenset[str] = frozenset()) -> dict[int, int]:
+def write_world_fbx(world: GfxWorld, path: Path, blend_data_materials: frozenset[str] = frozenset(),
+                    shadow_only_materials: frozenset[str] = frozenset()) -> dict[int, int]:
     """Write the WaW world as merged meshes (see merge_surfaces), preserving UV seams and materials.
 
     The T6 BSP loader expects Blender-style right-handed Y-up coordinates and
@@ -150,7 +151,8 @@ def write_world_fbx(world: GfxWorld, path: Path, blend_data_materials: frozenset
                 a, b, c = compact_indices[j : j + 3]
                 polygons.extend((a, c, -b - 1))
             # the lightmap page travels in the name (read back by the bridge's BSPCreator)
-            name = f"waw_mesh_{i:05d}_bm{surface.brush_model}_pl{surface.primary_light_index}_lm{lightmap}"
+            no_draw = '_nd1' if material in shadow_only_materials else ''
+            name = f"waw_mesh_{i:05d}{no_draw}_bm{surface.brush_model}_pl{surface.primary_light_index}_lm{lightmap}"
             out.write(f" Geometry: {geom_id}, {_quoted('Geometry::' + name)}, \"Mesh\" {{\n")
             out.write(f"  Vertices: *{len(positions)} {{ a: {_numbers(positions)} }}\n")
             out.write(f"  PolygonVertexIndex: *{len(polygons)} {{ a: {_numbers(polygons)} }}\n")

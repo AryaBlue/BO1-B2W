@@ -362,7 +362,24 @@ def light_falloff_placement(primary_lights: Path, roots) -> tuple[float, float, 
 
 # T6 code textures bound through type-4 pass arguments (value = T6 code
 # texture index, measured on stock spot passes: attenuation 15 at slot 12).
-CODE_TEXTURE_ARGS = {'attenuationSampler': 15}
+CODE_TEXTURE_ARGS = {'attenuationSampler': 15, 'floatZSampler': 18, 'refractSampler': 9}
+
+
+@lru_cache(maxsize=32)
+def native_depth_reference(native_root: Path):
+    """Find a stock program proving the scene-depth units, independently of
+    whether the selected donor needs to sample depth itself."""
+    for path in sorted((native_root / 'shader_bin').glob('ps_*.cso')):
+        if b'floatZSampler' not in path.read_bytes():
+            continue
+        assembly = _assembly(path)
+        near = buffers(assembly).get('zNear')
+        if near is None or near[0] != 0 or near[1] % 16:
+            continue
+        row = near[1] // 16
+        if re.search(rf'div (r\d+\.[xyzw]), cb0\[{row}\]\.x, \1\b', assembly):
+            return near
+    raise shaders.ShaderError('stock reciprocal-depth reference absent')
 
 
 def _free_texture_slot(native_pass, native_ps):
@@ -567,6 +584,12 @@ def paired_pixel_contract(source_assembly, source_pass, native_pass, native_root
                 if not re.search(rf'^dcl_sampler s{sampler}, mode_comparison', ps, re.M):
                     raise shaders.ShaderError(f'native {source_name} sampler mode not recognized')
                 entry['point_load'] = True
+                # T6 creates these comparison samplers with GREATER (5),
+                # verified in the D3D11 sampler initializer. WaW's SM3 body
+                # compares sampled depth - reference >= 0. Its lookup matrix
+                # now contains T6 depth, so retain the source comparison body
+                # while reflecting the sample around its reference depth.
+                entry['reverse_depth_compare'] = True
                 contract.setdefault('unit_conversions', []).append(f'{source_name}: texel load at mip 0')
                 if os.environ.get('WAW2BO2_DIAG_SHADOW_LIT'):
                     entry['constant'] = [1.0, 1.0, 1.0, 1.0]  # diagnostic: shadow test always lit
@@ -574,13 +597,19 @@ def paired_pixel_contract(source_assembly, source_pass, native_pass, native_root
                 # Native soft-particle PS decodes reciprocal depth as zNear.x/abs(z).
                 # WaW soft-particle PS consumes camera-space depth directly.
                 near = native_fields.get('zNear')
+                if near is None or not re.search(
+                        rf'div (r\d+\.[xyzw]), cb0\[{near[1] // 16}\]\.x, \1\b', ps):
+                    reference = native_depth_reference(native_root)
+                    if near is not None and near != reference:
+                        raise shaders.ShaderError('donor/reference depth uniform layouts differ')
+                    near = reference
                 if near is None or near[0] != 0 or near[1] % 16:
                     raise shaders.ShaderError('native reciprocal-depth scale absent')
                 near_row = near[1] // 16
-                if not re.search(rf'div r\d+\.x, cb0\[{near_row}\]\.x, r\d+\.x', ps):
-                    raise shaders.ShaderError('native soft-particle depth encoding unrecognized')
                 entry.update(texel_expr=f'float4(t6_cb0[{near_row}].x / max(abs(T.x), 1e-20), T.yzw)', uses=[[0, near_row]])
                 contract.setdefault('unit_conversions', []).append('floatZ: reciprocal to camera depth')
+            elif source_name == 'refractSampler':
+                contract.setdefault('unit_conversions', []).append('refractSampler: native scene color code texture 9')
             elif source_name == 'modelLightingSampler' and sqrt_hdr:
                 # Measured: T6 lprobe = sqrt(hdr * 32 * L^2 * C^2) = sqrt(32 hdr) L C,
                 # displayed at twice that; WaW = 2 L' C, so L' = sqrt(8 * 4 hdr) L.
