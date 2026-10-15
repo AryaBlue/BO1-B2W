@@ -3292,6 +3292,24 @@ waw2bo2_set_zombie_var( var, value, is_float, column, is_team_based )
 """
 
 
+def waw_pvp_attack_notify(bootstrap: str) -> str:
+    """T4 notifies the victim "weapon_pvp_attack" (attacker, weapon, damage,
+    mod) when a player's weapon hits a player, including the shooter. WaW's
+    Wunderwaffe self-zap (tesla_pvp_thread: 25% of max health, never below 1,
+    electrocution) waits for it; T6 never sends it, so the zap only did the
+    projectile's 1 damage."""
+    script = gsc.parse(bootstrap, "owned zombie bootstrap")
+    fn = script.functions.get("callback_playerdamage")
+    if fn is None or len(fn.params) < 6:
+        raise ValueError("BO2 server bootstrap has no Callback_PlayerDamage")
+    attacker, damage, mod, weapon = fn.params[1], fn.params[2], fn.params[4], fn.params[5]
+    script.tokens[fn.body_open].text += (
+        f"\n    // waw2bo2: T4's player weapon hit notify (WaW scripts wait for it)\n"
+        f"    if ( isdefined( {attacker} ) && isplayer( {attacker} ) )\n"
+        f"        self notify( \"weapon_pvp_attack\", {attacker}, {COMPAT}::waw_weapon_name( {weapon} ), {damage}, {mod} );\n")
+    return gsc.emit(script.tokens)
+
+
 def waw_zombie_var_defaults(bootstrap: str) -> str:
     """BO2's zombie_vars (_zm::init_levelvars, its init_zombie_vars) through
     waw2bo2_set_zombie_var: WaW's framework value where WaW sets the variable."""
@@ -3432,6 +3450,7 @@ def stage_bo2_perk_support(out_root: Path, bo2_root: Path, *, bo2_stock_perks: b
         raise ValueError("BO2 server bootstrap explosive self-damage cap changed")
     bootstrap = bootstrap.replace(*WAW_SELF_DAMAGE_CAP)
     bootstrap = waw_zombie_var_defaults(bootstrap)
+    bootstrap = waw_pvp_attack_notify(bootstrap)
     bootstrap += WAW_ROUND_COUNTER_HELPER
     (server_dir / "_waw2bo2_zm.gsc").write_text(
         PERK_OVERRIDE_HEADER + bootstrap.replace(native, owned), encoding="utf-8")

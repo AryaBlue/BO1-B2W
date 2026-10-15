@@ -89,7 +89,9 @@ class PerkOwnershipTests(unittest.TestCase):
                 '        setroundsplayed( level.round_number );\n    }\n}\n'
                 'player_damage_override()\n{\n    if ( smeansofdeath == "MOD_PROJECTILE" )\n    {\n'
                 + gscport.WAW_SELF_DAMAGE_CAP[0] + '    }\n}\n'
-                'init_levelvars()\n{\n    set_zombie_var( "zombie_spawn_delay", 2.0, 1, column );\n}\n')
+                'init_levelvars()\n{\n    set_zombie_var( "zombie_spawn_delay", 2.0, 1, column );\n}\n'
+                'callback_playerdamage( einflictor, eattacker, idamage, idflags, smeansofdeath, sweapon, vpoint )\n'
+                '{\n    finish();\n}\n')
             out = root / 'out'
             client_stock = self.write_client_stock(root)
             gscport.stage_bo2_perk_support(out, root / 'bo2')
@@ -98,6 +100,8 @@ class PerkOwnershipTests(unittest.TestCase):
             self.assertNotIn('return 75;', owned_zm)
             self.assertIn('waw2bo2_set_zombie_var( "zombie_spawn_delay", 2.0, 1, column );', owned_zm)
             self.assertIn('waw2bo2_set_zombie_var( var, value, is_float, column, is_team_based )', owned_zm)
+            self.assertIn('self notify( "weapon_pvp_attack", eattacker, maps\\mp\\waw\\_waw2bo2_compat::'
+                          'waw_weapon_name( sweapon ), idamage, smeansofdeath );', owned_zm)
             self.assertIn('WaW applies the player', owned_zm)
             self.assertNotIn('perk_machine_spawn_init();', text)
             self.assertNotIn('array_thread(x,::buy)', text)

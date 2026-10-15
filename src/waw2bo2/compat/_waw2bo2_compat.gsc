@@ -588,6 +588,7 @@ waw_playfxontag( fx, ent, tag )
         // T6's transient PlayFXOnTag event cannot own an indefinitely looping
         // source effect. A script FX entity gives the bolt an explicit lifetime.
         carrier = spawnfx( fx, ent gettagorigin( tag ), anglestoforward( ent.angles ), anglestoup( ent.angles ) );
+        carrier.waw_fx = fx;
         triggerfx( carrier );
         level thread waw_bolted_fx_lifetime( carrier, ent, tag );
         return carrier;
@@ -597,21 +598,20 @@ waw_playfxontag( fx, ent, tag )
 
 waw_bolted_fx_lifetime( carrier, parent, tag )
 {
-    // A triggered FX entity keeps playing where it was triggered: moving
-    // its origin alone leaves the effect behind (the mystery box sky marker
-    // moves with the box). Re-trigger it at the parent's new transform.
-    last_origin = carrier.origin;
-    last_angles = parent.angles;
+    // A triggered FX entity keeps playing where it was triggered: moving its
+    // origin leaves the effect behind (the Wunderwaffe's travelling bolt
+    // between zombies, the mystery box sky marker). Once the parent moves,
+    // the effect rides the parent's tag natively, as BO2's moving effects do,
+    // and ends with the parent.
+    start = carrier.origin;
     while ( isdefined( parent ) && isdefined( carrier ) )
     {
-        origin = parent gettagorigin( tag );
-        if ( distancesquared( origin, last_origin ) > 1 || parent.angles != last_angles )
+        if ( distancesquared( parent gettagorigin( tag ), start ) > 1 )
         {
-            carrier.origin = origin;
-            carrier.angles = parent.angles;
-            triggerfx( carrier );
-            last_origin = origin;
-            last_angles = parent.angles;
+            fx = carrier.waw_fx;
+            carrier delete();
+            playfxontag( fx, parent, tag );
+            return;
         }
         wait 0.05;
     }
