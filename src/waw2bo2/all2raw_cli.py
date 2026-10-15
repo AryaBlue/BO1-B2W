@@ -6,6 +6,8 @@ from .launcher import ProcessRunner, Settings, discover, perform_extract_all
 
 
 def main(argv=None) -> int:
+    from .progress import configure_console
+    configure_console()
     parser = argparse.ArgumentParser(description='Extract all installed WaW/BO2 zones into a reusable shared cache.')
     for name in ('waw', 'bo2', 't4', 't6', 'work'):
         parser.add_argument('--' + name, help='override the saved ' + name + ' path')

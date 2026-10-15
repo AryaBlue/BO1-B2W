@@ -605,6 +605,8 @@ def _extract_all(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from .progress import configure_console
+    configure_console()
     try:
         args = parser().parse_args(argv)
         return args.func(args)

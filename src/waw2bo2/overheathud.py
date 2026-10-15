@@ -33,7 +33,7 @@ def stage(bo2: Path, project: Path, work: Path, unlinker: Path) -> list[str]:
     proc = captured([str(unlinker.resolve()), '--no-color', '--include-assets', 'rawfile',
                      '--output-folder', str(dump), str(bo2 / 'zone/all/patch_zm.ff')],
                     capture_output=True, text=True, errors='replace')
-    (dump / 'extract.log').write_text(proc.stdout + proc.stderr)
+    (dump / 'extract.log').write_text(proc.stdout + proc.stderr, encoding='utf-8')
     source = dump / HUD
     if proc.returncode or not source.is_file():
         raise RuntimeError(f'cannot extract stock overheat HUD; see {dump / "extract.log"}')

@@ -3,7 +3,16 @@ from functools import wraps
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
+
+
+def configure_console() -> None:
+    """Match the launcher's UTF-8 pipes even on legacy Windows code pages."""
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='backslashreplace',
+                               line_buffering=True, write_through=True)
 
 
 def verbose() -> bool:

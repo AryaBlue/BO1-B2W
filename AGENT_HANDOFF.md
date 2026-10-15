@@ -1,5 +1,29 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Windows Unicode build logging, 2026-10-15
+
+- Branch `codex/windows-unicode-build-logs` cut from main `458ce49`. User
+  reported CP1252 UnicodeEncodeError for U+FFFD at position 5156; map/stage and
+  diagnostics are unavailable. Reproduced that exact exception on the old lobby
+  verification logger with controlled native output. No actual failing map run
+  is claimed.
+- Shader extraction/link/verification, lobby verification and overheat-HUD
+  extraction wrote captured tool output using the system code page. These logs
+  now explicitly use UTF-8. Shader zone roundtrips and rewritten viewmodel
+  weapon infostrings use UTF-8 as well, preserving non-ASCII authored text.
+- A shared console initializer configures source CLI, All2Raw and packaged
+  entry-point stdout/stderr as UTF-8, matching the launcher's pipe decoder.
+  Undecodable diagnostic characters are retained; lone surrogate characters
+  use backslash escaping. Native failures still propagate normally.
+- 617 tests pass with Python UTF-8 mode disabled. Tests force CP1252 default
+  file writes and cover every affected native log, successful verification,
+  original native failures, Unicode console pipes and preserved weapon names.
+- Fresh portable self-test passes. With PYTHONIOENCODING=cp1252 and PYTHONUTF8=0,
+  the packaged CLI prints an invalid Unicode command argument as UTF-8 and
+  preserves argparse exit 2 without UnicodeEncodeError. Updated the normal
+  local desktop package. Evidence: `work/unicode_build_logs`; portable:
+  `work/unicode_fix_portable`. No release published or branch merged.
+
 ## Map compilation and portable flame schema regressions, 2026-10-15
 
 - Reproduced McDonald's through the GUI on main 8efb636. Fresh extraction passed

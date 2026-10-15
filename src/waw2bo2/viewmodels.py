@@ -77,7 +77,7 @@ def stage_shadow_variants(content: Path) -> dict:
             fields[key] = replacements[name]
             changed = True
         if changed:
-            path.write_text(weapons.write_info(fields))
+            path.write_text(weapons.write_info(fields), encoding='utf-8')
     stage['viewmodel_shadow_variants'] = replacements
     visual['viewmodel_shadow_materials'] = material_clones
     stage_path.write_text(json.dumps(stage, indent=2) + '\n')
