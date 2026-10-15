@@ -97,6 +97,8 @@ class PortReport:
     # HUD materials a stock policy draws in their WaW form although BO2 ships
     # a material of the same name (converted and isolated, never BO2's)
     waw_hud_materials: list[str] = field(default_factory=list)
+    # native T6 animtrees of non-human source actors (dog) -> WaW AI type
+    native_actor_trees: dict[str, str] = field(default_factory=dict)
 
     def to_json(self) -> dict:
         return {"map_main": self.map_main, "ported": self.ported, "core_overrides": self.core_overrides,
@@ -104,7 +106,8 @@ class PortReport:
                 "extracted": self.extracted,
                 "unsupported": self.unsupported, "rewrites": dict(self.rewrites), "fx": self.fx,
                 "animtrees": self.animtrees, "errors": self.errors,
-                "waw_hud_materials": self.waw_hud_materials}
+                "waw_hud_materials": self.waw_hud_materials,
+                "native_actor_trees": self.native_actor_trees}
 
 
 class Sources:
@@ -970,6 +973,12 @@ class Translator:
         renamed = API["function_renames"].get(name)
         if renamed:
             return renamed
+        # Direct script damage is authored gameplay, including WaW-only modes
+        # (e.g. the Betty). Native actor damage dispatch remains on T6.
+        if name in API.get('source_script_functions', {}).get(core, []):
+            extracted = self.extract(core, name)
+            if extracted:
+                return extracted
         # Template functions are authored source behavior. In particular,
         # DLC3's spawnFX() bootstraps createFX; it is not the engine spawnfx
         # builtin wrapped by waw_spawnfx(fx, origin, ...).
@@ -1829,6 +1838,87 @@ class Translator:
             self.post_calls.append(f"level thread {CORE}::{name}();")
         return names
 
+    def dog_rounds_hook(self) -> str | None:
+        """WaW _zombiemode::main starts dog rounds through _zombiemode_dogs::init,
+        which returns unless the map set level.dogs_enabled. BO2's _zm::init does
+        not start its counterpart (_zm_ai_dogs: same round counts and first dog
+        round timing); the port does, guarded the same way. The source dog
+        script still decides where dogs spawn (its spawn selection over the
+        spawners the map opened) and their health table."""
+        dogs = API['zombie_runtime']['dog_rounds']
+        source, native = dogs['source_script'], dogs['native_script']
+        script = self.sources.get(source)
+        if script is None:
+            return None
+        logic = "undefined"
+        spawning = script.functions.get(dogs['source_spawning'])
+        if spawning is not None:
+            called = {r.name.lower() for r in gsc.references(script.tokens, spawning.body_open, spawning.body_close)}
+            chosen = [n for n in dogs['spawn_logic'] if n in called and self.api.defines(native, n)]
+            if chosen:
+                logic = f"{dogs['owned_script']}::{chosen[0]}"
+            elif called & set(script.functions) - {dogs['source_spawning']}:
+                self.report.unsupported.setdefault(
+                    f"GSC {source}::{dogs['source_spawning']} spawn selection", []).append(
+                    self.sources.origin.get(source + ".gsc", source))
+        health = "undefined"
+        if dogs['health'] in script.functions:
+            health = f"{CORE}::{self.extract_entry(source, dogs['health'])}"
+        fog = self.client_fog_monitors(dogs['client_notifies'])
+        self.report.rewrites[f"WaW dog rounds -> {native} (source spawn selection/health)"] += 1
+        guard = f"level.{dogs['guard']}"
+        threads = "".join(f" level thread {CORE}::{name}();" for name in fog)
+        owned = dogs['owned_script']   # BO2's runtime with the source's dog sounds
+        return (f"if ( isdefined( {guard} ) && {guard} ) {{ {owned}::{dogs['native_init']}(); "
+                f"{COMPAT}::waw_dog_rounds( {logic}, {health}, {owned}::enable_dog_rounds );{threads} }}")
+
+    def client_fog_monitors(self, moments: dict) -> list[str]:
+        """The source map's client scripts react to a clientnotify with volume fog
+        (Shi No Numa: level waittill( "dog_start" ); SetVolFog( ... )). T6 client
+        scripts have no volumetric fog, and the server never sees a clientnotify,
+        so each monitor runs on the server at the moments the native framework
+        sends that notify (``moments``: msg -> [[server notify, delay]])."""
+        made = []
+        for key in sorted(k for k in self.sources.text if k.endswith(".csc")):
+            script = self.sources.get(key[:-4], ".csc")
+            if script is None:
+                continue
+            toks = script.tokens
+            for fn in script.functions.values():
+                for i in range(fn.body_open, fn.body_close - 4):
+                    if not (toks[i].low == "level" and toks[i + 1].low == "waittill" and toks[i + 2].text == "("
+                            and toks[i + 3].kind == gsc.STRING):
+                        continue
+                    msg = toks[i + 3].text.strip('"')
+                    if msg not in moments:
+                        continue
+                    close = gsc._match(toks, i + 2, "(", ")")
+                    block_end = next((j for j in range(close, fn.body_close) if toks[j].text == "}"), fn.body_close)
+                    fogs = []
+                    for ref in gsc.references(toks, close, block_end):
+                        if ref.name.lower() == "setvolfog" and not ref.method:
+                            end = gsc._match(toks, ref.index + 1, "(", ")")
+                            if all(t.kind == gsc.NUMBER or t.text in (",", "-", ".") for t in toks[ref.index + 2:end]):
+                                fogs.append(gsc.emit(toks[ref.index + 1:end + 1]).strip())
+                        elif ref.qualifier is None and not ref.method:
+                            self.report.unsupported.setdefault(
+                                f"CSC {ref.name} in a {msg} monitor (client-only)", []).append(key)
+                    if not fogs:
+                        continue
+                    for n, (notify, delay) in enumerate(moments[msg]):
+                        name = f"waw2bo2_client_{msg}_{n}"
+                        if any(part.startswith(name + "()") for part in self.level_state_parts):
+                            continue
+                        body = "".join(f"\t\t{COMPAT}::waw_setvolfog{args};\n" for args in fogs)
+                        wait = f"\t\twait {delay};\n" if delay else ""
+                        self.level_state_parts.append(
+                            f"{name}()\n{{\n\t// {key}::{fn.name}: client {msg} fog, on the server\n"
+                            f"\tlevel endon( \"end_game\" );\n\tfor ( ;; )\n\t{{\n"
+                            f"\t\tlevel waittill( \"{notify}\" );\n{wait}{body}\t}}\n}}\n")
+                        made.append(name)
+                        self.report.rewrites[f"client {msg} fog monitor -> server"] += 1
+        return made
+
     def framework_hooks(self) -> list[str]:
         """Calls WaW's _zombiemode::main (usually the map's override) makes
         into scripts that are not framework, e.g. a custom perk pack's init().
@@ -1851,6 +1941,12 @@ class Translator:
                 continue
             if self.bo2_stock_perks and stockperks.is_perk_framework(target) and \
                     ref.name.lower() not in self.waw_perk_parts.get(target, ()):
+                continue
+            dogs = API['zombie_runtime']['dog_rounds']
+            if target == norm(dogs['source_script']) and ref.name.lower() == dogs['source_init']:
+                call = self.dog_rounds_hook()
+                if call and call not in calls:
+                    calls.append(call)
                 continue
             if is_core(target, self.sources):
                 continue
@@ -1989,6 +2085,7 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     Custom maps keep their own logic."""
     sources = copy.copy(sources)
     framework_aliases = sources.bind_zombie_framework(f'maps/{map_name}')
+    actor_kinds: dict[str, str] = {}
     if actor_types:
         sources = copy.copy(sources)
         sources.text = dict(sources.text)
@@ -1999,6 +2096,8 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
             if script is None:
                 raise ValueError(f'WaW zombie actor {path}.gsc missing: donor appearance is forbidden')
             original = sources.text.get(path + '.gsc', sources.stock.get(path + '.gsc'))
+            # the source engine AI type (self.type) picks the native T6 actor family
+            actor_kinds[name] = zombieappearance.source_actor_kind(original)
             sources.text[path + '.gsc'] = zombieappearance.appearance_script(original)
             sources._parsed.pop(path + '.gsc', None)
     if bo2_stock_perks:
@@ -2221,16 +2320,25 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     report.weapon_registration = {role: [f for f in fns if f] for role, fns in registration.items()}
     report.characters = appearance
     report.fx = sorted(set(report.fx))
+    templates = actor_template if isinstance(actor_template, dict) else {"human": actor_template}
     for name in sorted(actor_types):
-        if actor_template is None:
+        kind = actor_kinds.get(name, "human")
+        template = templates.get(kind) or templates.get("human")
+        if template is None:
             raise ValueError('T6 actor template missing')
+        if kind not in templates:
+            report.errors.append(f"aitype\\{name}: no native T6 actor family for WaW AI type '{kind}'; "
+                                 f"built on the human zombie actor")
         target = out_root / 'aitype' / (zombieappearance.actor_name(name) + '.gsc')
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(zombieappearance.native_actor(actor_template, ported_path('aitype\\' + name)),
+        target.write_text(zombieappearance.native_actor(template, ported_path('aitype\\' + name)),
                           encoding='utf-8')
         client = out_root / 'aitype/clientscripts' / (zombieappearance.actor_name(name) + '.csc')
         client.parent.mkdir(parents=True, exist_ok=True)
-        client.write_text(zombieappearance.native_client_actor(name), encoding='utf-8')
+        tree = zombieappearance.template_tree(template)
+        client.write_text(zombieappearance.native_client_actor(name, tree), encoding='utf-8')
+        if kind in templates and kind != "human":
+            report.native_actor_trees[tree] = kind
     fix_arity(out_root, api, report)
     return report
 
@@ -2867,6 +2975,26 @@ BO2_PERK_OVERRIDES = (
 )
 
 
+def owned_dogs_source(bo2_root: Path) -> str:
+    """BO2's _zm_ai_dogs with the WaW sounds the source plays at the same points
+    (gsc_api zombie_runtime dog_rounds native_sounds / native_music): the map's
+    bank holds WaW's dog aliases as waw/<alias>, never BO2's hellhound ones."""
+    dogs = API['zombie_runtime']['dog_rounds']
+    native, owned = dogs['native_script'], dogs['owned_script']
+    text = (bo2_root / 'raw' / (native.replace('\\', '/') + '.gsc')).read_text(encoding='utf-8')
+    for bo2, waw in dogs['native_sounds'].items():
+        if f'"{bo2}"' not in text:
+            raise ValueError(f'{native}: dog sound "{bo2}" not found')
+        text = text.replace(f'"{bo2}"', f'"waw/{waw}"')
+    for state, waw in dogs['native_music'].items():
+        old = f'level thread maps\\mp\\zombies\\_zm_audio::change_zombie_music( "{state}" );'
+        if old not in text:
+            raise ValueError(f'{native}: dog music state "{state}" not found')
+        text = text.replace(old, f'level thread maps\\mp\\zombies\\_zm_utility::play_sound_2d( "waw/{waw}" );')
+    return ('// waw2bo2: BO2 dog rounds playing the source WaW dog sounds (generated).\n' +
+            text.replace(native + '::', owned + '::'))
+
+
 def stage_bo2_perk_support(out_root: Path, bo2_root: Path, *, bo2_stock_perks: bool = False) -> None:
     """Suppress BO2 machine/purchase controllers and HUD in converted WaW maps.
 
@@ -2959,6 +3087,10 @@ def stage_bo2_perk_support(out_root: Path, bo2_root: Path, *, bo2_stock_perks: b
     bootstrap += WAW_ROUND_COUNTER_HELPER
     (server_dir / "_waw2bo2_zm.gsc").write_text(
         PERK_OVERRIDE_HEADER + bootstrap.replace(native, owned), encoding="utf-8")
+    dogs = API['zombie_runtime']['dog_rounds']
+    if (bo2_root / 'raw' / (dogs['native_script'].replace('\\', '/') + '.gsc')).is_file():
+        (out_root / (dogs['owned_script'].replace('\\', '/') + '.gsc')).write_text(
+            owned_dogs_source(bo2_root), encoding='utf-8')
 
 
 def hook_bo2_perk_server(main_gsc: Path) -> None:

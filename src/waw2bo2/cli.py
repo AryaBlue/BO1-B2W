@@ -262,6 +262,7 @@ def _stage_bridge(args: argparse.Namespace) -> int:
         iwd_dirs=[p.resolve() for p in args.iwd_dir] if args.iwd_dir else None,
         waw_map_script=args.waw_map_script.resolve() if args.waw_map_script else None,
         waw_script_roots=[p.resolve() for p in args.waw_script_root or []],
+        waw_patch_script_roots=[p.resolve() for p in args.waw_patch_script_root or []],
         waw_stock_scripts=args.waw_stock_scripts.resolve() if args.waw_stock_scripts else None,
         t6_unlinker=args.t6_unlinker.resolve() if args.t6_unlinker else None,
         fx_fallback=args.fx_fallback,
@@ -495,6 +496,9 @@ def parser() -> argparse.ArgumentParser:
     sb_p.add_argument("--waw-script-root", type=Path, action="append",
                       help="rawfile dump of a zone WaW loads with the map (mod.ff), searched after the map zone "
                            "and before the IWDs")
+    sb_p.add_argument("--waw-patch-script-root", type=Path, action="append",
+                      help="rawfile dump of the map's _patch zone; WaW loads it after the map zone, so its "
+                           "scripts replace the map zone's (searched first)")
     sb_p.add_argument("--fx-fallback", action="store_true",
                       help="OPT-IN: play WaW effects that are not converted as stock BO2 effects "
                            "(compat/fx_fallback.json + compat/overrides/<map>.json); each is reported")

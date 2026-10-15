@@ -1345,6 +1345,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
                  extra_roots: list[Path] | None = None, ipak: bool = True,
                  iwd_dirs: list[Path] | None = None, waw_map_script: Path | None = None,
                  waw_script_roots: list[Path] | None = None, waw_stock_scripts: Path | None = None,
+                 waw_patch_script_roots: list[Path] | None = None,
                  t6_unlinker: Path | None = None, fx_fallback: bool = False,
                  waw_root: Path | None = None, t4_unlinker: Path | None = None,
                  waw_stock_dumps: Path | None = None, waw_mod_tools: Path | None = None,
@@ -1458,7 +1459,8 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
             if problems:
                 report.errors.append(f"WaW Mod Tools sources unusable: {'; '.join(problems)}")
                 source_waw = None
-        script_models |= port_scripts(report, stage, project_root, waw_map_script, bo2_root, waw_script_roots or [],
+        script_models |= port_scripts(report, stage, project_root, waw_map_script, bo2_root,
+                                      [*(waw_patch_script_roots or []), None, *(waw_script_roots or [])],
                                       iwd_dirs or [], waw_stock_scripts, t6_unlinker, roots, clip,
                                       stock_waw, source_waw, bo2_stock_perks=bo2_stock_perks,
                                       waw_stock_map=waw_stock_map,
@@ -1496,6 +1498,18 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
             with (project_root / MOD_EXTRA_ZONE).open('a', encoding='utf-8') as zone:
                 zone.write(f"rawfile,animtrees/{movement['tree']}.atr\n")
                 zone.write(f"rawfile,animstatedefs/{movement['tree']}.asd\n")
+        # native T6 trees of non-human source actors (WaW dogs on the T6 dog AI)
+        native_trees = report.scripts.get('native_actor_trees', {}) if report.scripts else {}
+        if native_trees and bo2_root is not None:
+            with (project_root / MOD_EXTRA_ZONE).open('a', encoding='utf-8') as zone:
+                for tree, kind in sorted(native_trees.items()):
+                    cfg = gscport.API['zombie_runtime']['actor_templates'].get(kind)
+                    if isinstance(cfg, dict) and cfg.get('owned_tree'):
+                        tree, atr = stage_owned_actor_tree(project_root, bo2_root, tree, cfg)
+                    else:
+                        atr = (bo2_root / 'raw/animtrees' / f'{tree}.atr').read_text(encoding='utf-8')
+                    zone.write(f"rawfile,animtrees/{tree}.atr\nrawfile,animstatedefs/{tree}.asd\n")
+                    zone.write("".join(f"xanim,{n}\n" for n in native_tree_xanims(atr)))
     # clipmap static models reference their xmodel (collSurfs) in the map zone
     clip_models = {m.name for m in clip.static_models if m.contents and m.surfaces}
     # Entity placements need the same complete lookup as script-only models.
@@ -1651,7 +1665,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
     # No loose raw/ visions: WaW (fastfile mode) reads visions only from loaded
     # zones and replaces a missing one with vision/default (CoDWaW sub_4629F0).
     vision_report = progress.timed('Convert vision and glow', visions.stage, project_root,
-        [*([waw_map_script.parent.parent] if waw_map_script else []),
+        [*(waw_patch_script_roots or []), *([waw_map_script.parent.parent] if waw_map_script else []),
          *(waw_script_roots or []), *roots, *([waw_stock_scripts] if waw_stock_scripts else [])],
         sorted({f for d in (iwd_dirs or []) for f in d.glob('*.iwd')}), stock_waw,
         visions.lut_donor(techset_dump), None, techset_dump)
@@ -2221,6 +2235,62 @@ def _stage_weapon_runtime(report: StageReport, project: str, project_root: Path,
                                      visual_errors=len(visuals["errors"]), runtime_report="content_source/weapons.runtime.json")
 
 
+def stage_owned_actor_tree(project_root: Path, bo2_root: Path, base: str, cfg: dict) -> tuple[str, str]:
+    """A native T6 actor graph plus named states from another native graph
+    (the dog: TranZit's shipped attack/move states, Nuketown's window barrier),
+    staged under an owned name the converted actors use. Returns (tree, atr)."""
+    raw = bo2_root / 'raw'
+    asd = (raw / 'animstatedefs' / f'{base}.asd').read_text(encoding='utf-8')
+    atr = (raw / 'animtrees' / f'{base}.atr').read_text(encoding='utf-8')
+    have = set(native_tree_xanims(atr))
+    added = []
+    for donor, states in cfg.get('add_states', {}).items():
+        donor_asd = (raw / 'animstatedefs' / f'{donor}.asd').read_text(encoding='utf-8')
+        for state in states:
+            if re.search(rf'^{re.escape(state)}\s*:', asd, re.M):
+                continue
+            block = re.search(rf'^{re.escape(state)}\s*:[^\n]*\n\{{.*?^\}}', donor_asd, re.M | re.S)
+            if block is None:
+                raise StageError(f'{donor}.asd has no state {state}')
+            asd = asd.rstrip('\n') + '\n\n' + block[0] + '\n'
+            for line in block[0].splitlines()[2:-1]:
+                words = line.split()
+                if len(words) == 2 and words[1] not in have and words[1] not in added:
+                    added.append(words[1])
+    if added:
+        atr, count = re.subn(r'(^body\s*\n\{)', lambda m: m[1] + '\n' + ''.join(f'\t{a}\n' for a in added),
+                             atr, count=1, flags=re.M)
+        if count != 1:
+            raise StageError(f'{base}.atr has no body group')
+    tree = cfg['owned_tree']
+    for directory, suffix, text in (('animtrees', '.atr', atr), ('animstatedefs', '.asd', asd)):
+        target = project_root / directory / (tree + suffix)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding='utf-8')
+    for actor in (project_root / 'aitype').rglob('waw_*.?sc'):
+        text = actor.read_text(encoding='utf-8')
+        if f'"{base}' not in text:
+            continue
+        text = text.replace(f'"{base}.', f'"{tree}.').replace(f'"{base}"', f'"{tree}"')
+        if added and actor.suffix == '.gsc':
+            # T6 keeps only animtree nodes compiled scripts reference
+            text += ('\nwaw_reference_added_states()\n{\n' +
+                     ''.join(f'    dummy_anim_ref = %{a};\n' for a in added) + '}\n')
+        actor.write_text(text, encoding='utf-8')
+    return tree, atr
+
+
+def native_tree_xanims(atr: str) -> list[str]:
+    """Animation names of a native T6 animtree (.atr): leaf entries, not groups."""
+    names = []
+    for line in re.sub(r'//[^\n]*', '', atr).splitlines():
+        word = line.strip()
+        if re.fullmatch(r'[A-Za-z0-9_]+', word) and word not in names:
+            names.append(word)
+    groups = set(re.findall(r'^\s*([A-Za-z0-9_]+)\s*\n\s*\{', re.sub(r'//[^\n]*', '', atr), re.M))
+    return [n for n in names if n not in groups]
+
+
 def stage_fx(report: StageReport, names: list[str], converted: dict[str, str], map_name: str, bo2_root: Path,
              api, project_root: Path, fallback: bool) -> None:
     """Script table of the WaW effects the scripts load: converted effects
@@ -2393,7 +2463,11 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
     models the scripts use that the map zone must carry."""
     map_name = waw_map_script.stem
     # the map zone's own rawfiles first (the folder holding maps/<map>.gsc)
-    script_roots = [waw_map_script.parent.parent, *roots]
+    # None marks the map zone's place: a _patch zone loads after the map zone
+    # and replaces its scripts, mod/IWD roots come after it
+    if None not in roots:
+        roots = [None, *roots]
+    script_roots = [waw_map_script.parent.parent if r is None else r for r in roots]
     iwds = sorted({f for d in iwd_dirs for f in d.glob("*.iwd")})
     if stock is None or not stock.exists():
         report.errors.append("no stock WaW scripts (--waw-stock-scripts): cannot tell the map's scripts from "
@@ -2407,7 +2481,10 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
     actor_types = gscport.zombieappearance.source_actor_types(project_root)
     actor_template = None
     if actor_types:
-        actor_template = (bo2_root / 'raw/aitype/zm_nuked_basic_01.gsc').read_text(encoding='utf-8')
+        # native T6 actor family per WaW engine AI type (self.type), e.g. dog
+        actor_template = {kind: (bo2_root / 'raw/aitype' / ((cfg if isinstance(cfg, str) else cfg['aitype']) + '.gsc'))
+                          .read_text(encoding='utf-8')
+                          for kind, cfg in gscport.API['zombie_runtime']['actor_templates'].items()}
     for old in (project_root / "animtrees").glob("*.atr") if (project_root / "animtrees").exists() else ():
         if old.read_text(encoding="utf-8", errors="replace").startswith(CORE_ANIMTREE_HEADER):
             old.unlink()    # staged by an earlier run (stage_core_animtrees)

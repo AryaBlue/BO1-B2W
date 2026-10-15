@@ -80,7 +80,7 @@ Validation: all 583 workspace tests pass. The final fastfiles round-trip 101
 compiled scripts and pass the material and authored-hitbox audits. In a
 three-minute LAN test with the original random-kick thread, Peter moved in
 all 180 samples and stayed near his authored height instead of falling to
-the floor. The rendered attachment measured 33.60â€“35.72 units from the anchor
+the floor. The rendered attachment measured 33.60–35.72 units from the anchor
 (34 authored; network mover interpolation/quantization affects the samples).
 An unconstrained copy used native physics and fell 112 units. Live rope
 records resolve `mc/rope` for Peter and the original `techrope_global_black`
@@ -174,3 +174,47 @@ movement over ten seconds was 296, 84, and 156 units, with no script errors.
 This covers sampled risers; normal gameplay testing across the swamp remains
 useful. Temporary test points are granted by a local testing script, not by
 the converted map's gameplay code.
+
+## Scripted Bouncing Betties
+
+The source waits two seconds, spawns a radius trigger admitting axis AI,
+then waits for contact before lifting its visual model 32 units over 0.2
+seconds and applying its source blast damage. T6's spawned radius overlaps
+live AI but did not dispatch the contact notification in the reproduced case.
+Source spawn calls now use a shared adapter: AI-enabled trigger_radius volumes
+poll native istouching against the source team mask and notify their source
+listeners. Other spawned classes retain native spawn behavior and argument
+counts; player contacts remain native. Deleting the trigger ends its worker.
+
+The script also called WaW zombie_damage with MOD_ZOMBIE_BETTY, absent from
+BO2's same-named handler. Explicit source script calls now preserve the source
+zombie_damage function, including its round-scaled damage, scoring, guards,
+and power-up logic. Native actor damage dispatch remains on BO2.
+
+All 579 tests passed, and 101 compiled scripts round-tripped through the
+installed fastfile. The build linked with no missing assets and passed both
+material audits. A controlled test invoked the source grenade-fire listener
+with a model fixture at a live zombie's position. Before the fix, native
+istouching returned true but no activation event arrived. Afterward, the
+stationary trigger activated, the launch model was sampled rising to 24 units
+before its authored 32-unit move finished and deleted it, the target died,
+and no mine or radius trigger remained. No script errors occurred. This
+checks the source activation/bounce/damage sequence; normal player placement
+still needs the gameplay retest.
+
+## Quick Revive purchase softlock
+
+The stock solo-price rewrite matched every assignment following the Quick
+Revive case label, including the bottle weapon in both equip and cleanup,
+and the purchase jingle. In solo it replaced these strings with the price
+500, so the purchase waited forever for an invalid bottle weapon to equip.
+The converter now restricts this rewrite to the machine's `cost` local.
+A regression covers the price alongside bottle equip/removal, hint, and
+jingle cases. Converted maps need rebuilding to receive the correction.
+
+All 580 tests passed. The rebuilt Shi No Numa fastfile round-tripped 101
+compiled scripts and linked without missing assets. A controlled purchase
+after powering the machine showed the converted bottle, completed its
+weapon-change event, removed the bottle, restored the original Wunderwaffe,
+cleared drinking state, granted Quick Revive, and deducted exactly 500 points.
+The temporary observer was removed after the test.

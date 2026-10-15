@@ -533,6 +533,43 @@ waw_rope_motion()
     }
 }
 
+waw_spawn( classname, origin, flags, radius, height )
+{
+    if ( isdefined( height ) )
+        ent = spawn( classname, origin, flags, radius, height );
+    else if ( isdefined( radius ) )
+        ent = spawn( classname, origin, flags, radius );
+    else if ( isdefined( flags ) )
+        ent = spawn( classname, origin, flags );
+    else
+        ent = spawn( classname, origin );
+    // T6's spawned radius volumes can overlap live AI without dispatching
+    // the WaW AI trigger event. Keep native geometry and player contacts.
+    if ( isdefined( ent ) && classname == "trigger_radius" && isdefined( flags ) && ( int( flags ) & 7 ) )
+        ent thread waw_radius_ai_contacts( int( flags ) );
+    return ent;
+}
+
+waw_radius_ai_contacts( flags )
+{
+    self endon( "death" );
+    for ( ;; )
+    {
+        // Allow the source caller to begin its waittill after spawn returns.
+        wait 0.05;
+        candidates = [];
+        if ( flags & 1 )
+            candidates = arraycombine( candidates, getaiarray( "axis" ), 0, 0 );
+        if ( flags & 2 )
+            candidates = arraycombine( candidates, getaiarray( "allies" ), 0, 0 );
+        if ( flags & 4 )
+            candidates = arraycombine( candidates, getaiarray( "neutral" ), 0, 0 );
+        foreach ( actor in candidates )
+            if ( isdefined( actor ) && isalive( actor ) && actor istouching( self ) )
+                self notify( "trigger", actor );
+    }
+}
+
 waw_playfxontag( fx, ent, tag )
 {
     if ( !isdefined( fx ) || !isdefined( ent ) )
@@ -1703,6 +1740,41 @@ waw_hud_material( name )
     if ( isdefined( name ) && isdefined( level.waw2bo2_hud_materials[name] ) )
         return level.waw2bo2_hud_materials[name];
     return name;
+}
+
+// ---- WaW dog rounds (gsc_api zombie_runtime dog_rounds) ----
+
+// BO2's _zm_ai_dogs runs the rounds; the source keeps spawn selection and health.
+waw_dog_rounds( spawn_logic, source_health, enable_rounds )
+{
+    if ( isdefined( spawn_logic ) )
+    {
+        level.waw_dog_spawn_logic = spawn_logic;
+        level.dog_spawn_func = ::waw_dog_spawn_location;
+    }
+    if ( isdefined( source_health ) && isdefined( level.dog_spawners ) )
+    {
+        level.waw_dog_source_health = source_health;
+        // after BO2's dog_init, which set the native table's health
+        array_thread( level.dog_spawners, maps\mp\zombies\_zm_utility::add_spawn_function, ::waw_dog_source_health );
+    }
+    [[ enable_rounds ]]();
+}
+
+// WaW picks among the dog spawners the map has opened (add_area_dog_spawners
+// fills level.enemy_dog_spawns as areas unlock), not every dog spawner.
+waw_dog_spawn_location( spawners, favorite_enemy )
+{
+    if ( isdefined( level.enemy_dog_spawns ) && level.enemy_dog_spawns.size > 0 )
+        spawners = level.enemy_dog_spawns;
+    return [[ level.waw_dog_spawn_logic ]]( spawners, favorite_enemy );
+}
+
+waw_dog_source_health()
+{
+    [[ level.waw_dog_source_health ]]();
+    self.maxhealth = level.dog_health;
+    self.health = level.dog_health;
 }
 
 // ---- WaW framework calls with WaW semantics ----
