@@ -69,6 +69,33 @@ def _port(root: Path, stock_map: bool, level: str = "testmap") -> tuple[str, str
 
 
 class StockMapPolicyTests(unittest.TestCase):
+    def test_quick_revive_policy_preserves_bottle_selection_and_cleanup(self):
+        source = '''
+        purchase(perk) { switch(perk) {
+            case "specialty_quickrevive": cost = 1500; break;
+        } }
+        bottle_begin(perk) { switch(perk) {
+            case "specialty_quickrevive": weapon = "zombie_perk_bottle_revive"; break;
+        } self GiveWeapon(weapon); self SwitchToWeapon(weapon); }
+        bottle_end(perk) { switch(perk) {
+            case "specialty_quickrevive": weapon = "zombie_perk_bottle_revive"; break;
+        } self TakeWeapon(weapon); }
+        hint(perk) { switch(perk) {
+            case "specialty_quickrevive": hint = &"ZOMBIE_PERK_QUICKREVIVE"; break;
+        } }
+        sting(perk) { switch(perk) {
+            case "specialty_quickrevive": sound = "mx_revive_sting"; break;
+        } }
+        '''
+        script = gsc.parse(source, "perks")
+        self.assertEqual(gscport.bridge_stock_perk_costs(
+            script.tokens, gscport.API["stock_map_policies"]), 1)
+        converted = gsc.emit(script.tokens)
+        self.assertEqual(converted.count("waw_stock_perk_cost("), 1)
+        self.assertEqual(converted.count('weapon = "zombie_perk_bottle_revive";'), 2)
+        self.assertIn('hint = &"ZOMBIE_PERK_QUICKREVIVE";', converted)
+        self.assertIn('sound = "mx_revive_sting";', converted)
+
     def test_source_round_count_formula_becomes_bo2_max_zombie_func(self):
         with tempfile.TemporaryDirectory() as tmp:
             core, _ = _port(Path(tmp), stock_map=False)

@@ -569,7 +569,10 @@ def bridge_stock_perk_costs(tokens: list[gsc.Token], policies: dict) -> int:
     for i in range(len(tokens) - 5):
         if tokens[i].low != "case" or tokens[i + 1].kind != gsc.STRING or tokens[i + 1].text.strip('"') not in perks:
             continue
-        if tokens[i + 2].text != ":" or tokens[i + 3].kind != gsc.IDENT or tokens[i + 4].text != "=":
+        # The same perk cases also select bottle weapons and hint strings.
+        # Only the machine's cost local is subject to pricing policy.
+        if (tokens[i + 2].text != ":" or tokens[i + 3].kind != gsc.IDENT
+                or tokens[i + 3].low != "cost" or tokens[i + 4].text != "="):
             continue
         end = next((j for j in range(i + 5, len(tokens)) if tokens[j].text == ";"), None)
         if end is None or end == i + 5:
