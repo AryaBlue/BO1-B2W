@@ -1,5 +1,31 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Map compilation and portable flame schema regressions, 2026-10-15
+
+- Reproduced McDonald's through the GUI on main 8efb636. Fresh extraction passed
+  the earlier world-dump failure, but script compilation failed after 11m40s:
+  generated `_waw2bo2_source_chase_policy.gsc` referenced `rise_struct_string`
+  without declaring it. The source obtains that local from the `risen` event.
+- Chase-policy extraction now detects the source event output local and declares
+  it as a parameter. The runtime forwards BO2's spawn-completion event value
+  through both native chase decisions. This preserves source conditions and
+  supports authored local names without hardcoding McDonald's or the variable.
+- Windows packaging omitted T6 `FlameTableFields.h`, which weapon planning reads
+  even for an empty flame-table set. Added the header to desktop.spec and made
+  the packaged self-test load the flame schema. Linux inherits this resource
+  from the Windows bundle. Verified the actual ZIP contains the correct header.
+- 601 tests pass, including event argument declaration and both native forwarding
+  sites. Freshly built portable self-test passes. Using that portable GUI with
+  bundled tools and Refresh source files enabled, McDonald's completes all eight
+  steps in 5m55s: script compilation succeeds, native map linker exits 0 with no
+  missing assets, map/mod material audits check 28,799/50,096 arguments with zero
+  violations, and all 5,598 authored bone hitboxes pass.
+- Evidence: `work/mcdonalds_gui_repro_20261015`; fixed portable and ZIP:
+  `work/map_compile_fix_portable`. Existing source compatibility warnings remain;
+  GUI's word-based error counter also misclassifies 12 sound-curve warnings that
+  contain "max error". No compiled-script errors remain. No map was installed or
+  playtested. No release was published.
+
 ## Missing world gfx.bin + hidden Setup rows, 2026-10-15 (branch codex/world-dump-setup-layout, not merged)
 
 - Symptom: user builds fail at staging with FileNotFoundError on

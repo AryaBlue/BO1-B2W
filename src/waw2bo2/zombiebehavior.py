@@ -11,6 +11,20 @@ SPEED_STATE = r'maps\_waw2bo2_source_speed_state'
 CHASE_POLICY = r'maps\_waw2bo2_source_chase_policy'
 
 
+def _rise_result(script, fn, event: str) -> str | None:
+    """Find the local receiving the shared spawn-completion event payload."""
+    results = set()
+    for i in range(fn.body_open + 1, fn.body_close - 5):
+        tokens = script.tokens[i:i + 6]
+        if ([t.low for t in tokens[:3]] == ['self', 'waittill', '('] and
+                tokens[3].text.lower() == '"' + event.lower() + '"' and
+                tokens[4].text == ',' and tokens[5].kind == gsc.IDENT):
+            results.add(tokens[5].text)
+    if len(results) > 1:
+        raise ValueError(f'{script.path}::{fn.name}: ambiguous {event} event result')
+    return next(iter(results), None)
+
+
 def source_chase_policy(sources, definition: dict) -> str | None:
     """Retain the source's ordered choice between forced goals and chasing."""
     from .gscport import top_level_statements
@@ -44,8 +58,9 @@ def source_chase_policy(sources, definition: dict) -> str | None:
             if i >= b or tokens[i].low != 'else':
                 break
         if found:
+            result = _rise_result(source, fn, contract['rise_event']) or 'rise_result'
             return '\n'.join(['// Source zombie_think chase/entrance decision.',
-                              'should_chase()', '{', *branches, 'return false;', '}'])
+                              f'should_chase( {result} )', '{', *branches, 'return false;', '}'])
     return None
 
 
@@ -351,7 +366,7 @@ def runtime_source(definition: dict, speed_function: str | None, selection_funct
     membership = definition['source_membership']
     rise_field = membership['riser_array_field']
     respawn = definition['source_respawn']
-    chase = f'return self {chase_function}();' if chase_function else 'return false;'
+    chase = f'return self {chase_function}( rise_result );' if chase_function else 'return false;'
     respawn_init = (f"level.{respawn['native_callback']} = ::source_respawn;" if respawn_function else '')
     respawn_body = (f'''source_respawn( player, return_struct )
 {{
@@ -539,7 +554,7 @@ choose_spawn_location()
     return point;
 }}
 
-source_chases()
+source_chases( rise_result )
 {{
     {chase}
 }}
@@ -559,17 +574,23 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
     if has_policy and skip is None:
         raise ValueError(f'{native}: missing chase/entrance routing predicate')
     if has_policy:
-        script.tokens[skip.body_open].text += ('\n    if ( self ' + RUNTIME + '::source_chases() )\n        return true;\n')
+        if len(skip.params) != 1:
+            raise ValueError(f'{native}: expected one chase/entrance event argument')
+        script.tokens[skip.body_open].text += ('\n    if ( self ' + RUNTIME +
+            '::source_chases( ' + skip.params[0] + ' ) )\n        return true;\n')
     # A source chaser's optional target is an intermediate path node, not a
     # forced barricade. Let the native chase branch consume that node first.
     think = script.functions.get('zombie_think')
     if has_policy and think:
+        result = _rise_result(script, think, definition['source_chase']['rise_event'])
+        if result is None:
+            raise ValueError(f'{native}: missing spawn-completion event result')
         for i in range(think.body_open + 1, think.body_close - 2):
             if script.tokens[i].low == 'if' and script.tokens[i + 1].text == '(':
                 end = gsc._match(script.tokens, i + 1, '(', ')')
                 cond = ''.join(t.low for t in script.tokens[i + 2:end])
-                if cond == '!isdefined(find_flesh_struct_string)&&isdefined(self.target)&&self.target!=""':
-                    script.tokens[end].text = ' && !self ' + RUNTIME + '::source_chases() )'
+                if cond == f'!isdefined({result.lower()})&&isdefined(self.target)&&self.target!=""':
+                    script.tokens[end].text = ' && !self ' + RUNTIME + '::source_chases( ' + result + ' ) )'
                     break
     core = out_root / 'maps/mp/waw/_waw2bo2_core.gsc'
     if core.is_file() and 'waw_tesla_init()' in core.read_text(encoding='utf-8'):

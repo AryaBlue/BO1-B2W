@@ -13,6 +13,8 @@ datas += [(str(root / 'tools/run_bridge.ps1'), 'tools'),
            'vendor/OpenAssetTools/src/ObjCommon/Game/T4/Weapon'),
           (str(root / 'vendor/OpenAssetToolsT6/src/ObjCommon/Game/T6/Weapon/WeaponFields.h'),
            'vendor/OpenAssetToolsT6/src/ObjCommon/Game/T6/Weapon'),
+          (str(root / 'vendor/OpenAssetToolsT6/src/ObjCommon/Game/T6/Weapon/FlameTableFields.h'),
+           'vendor/OpenAssetToolsT6/src/ObjCommon/Game/T6/Weapon'),
           (str(root / 'vendor/OpenAssetToolsT6/raw/t6'), 'vendor/OpenAssetToolsT6/raw/t6')]
 for folder in ['OpenAssetTools', 'OpenAssetToolsT6']:
     for name in (['Unlinker.exe'] if folder == 'OpenAssetTools' else ['Linker.exe', 'Unlinker.exe']):
