@@ -334,3 +334,16 @@ class CharacterModelTests(unittest.TestCase):
                 (raw / f"xmodel/{m}.json").write_text("{}")
             zone = "script,character/c_zombie.gsc\nscript,xmodelalias/heads.gsc\nxmodel,body\nxmodel,listed_head\n"
             self.assertEqual(modzone.character_models(zone, raw), ["head1"])
+
+
+class ModIpakRangeTests(unittest.TestCase):
+    def test_mod_ipak_range_opens_before_template_entries(self):
+        template = ("// header\n>game,T6\n>level.ipak_read,common_zm\n"
+                    "weapon,mp/m1911_zm\nxanim,a\n")
+        extra = [">level.ipak_read,map_mod", ">ipak,map_mod", "image,waw_image/side_small"]
+        lines = modzone.open_mod_ipak_first(template, extra).splitlines()
+        self.assertEqual(lines[3:6], [">level.ipak_read,map_mod", ">ipak,map_mod", "weapon,mp/m1911_zm"])
+
+    def test_zone_without_mod_ipak_is_unchanged(self):
+        template = ">game,T6\nweapon,mp/m1911_zm\n"
+        self.assertEqual(modzone.open_mod_ipak_first(template, ["stringtable,zm/mapstable.csv"]), template)

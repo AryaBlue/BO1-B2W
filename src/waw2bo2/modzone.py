@@ -334,6 +334,26 @@ def build_mod_zone(template: Path, dropped: list[str]) -> str:
     return "\n".join(out) + "\n"
 
 
+def open_mod_ipak_first(zone_text: str, extra_lines: list[str]) -> str:
+    """Start the mod ipak range right after the template header.
+
+    The ipak writer only stores images linked while inside an ``>ipak`` range,
+    yet template entries (stock weapons) pull images in as dependencies before
+    the converter's own range. Those images are linked as streamed parts keyed
+    by their re-dumped data hash, which no stock ipak holds (stock
+    ``side_small`` sits in base.ipak under another hash), so the game draws an
+    empty texture: the missing crosshair on every converted map."""
+    pack = next((l.strip().split(",", 1)[1] for l in extra_lines if l.strip().startswith(">ipak,")), None)
+    if pack is None:
+        return zone_text
+    lines = zone_text.splitlines()
+    header = 0
+    while header < len(lines) and (not lines[header].strip() or lines[header].lstrip().startswith(("//", ">"))):
+        header += 1
+    lines[header:header] = [f">level.ipak_read,{pack}", f">ipak,{pack}"]
+    return "\n".join(lines) + "\n"
+
+
 def unavailable_weapons(unavailable: list[str]) -> set[str]:
     names = set()
     for entry in unavailable:
@@ -735,7 +755,7 @@ def link_mod(bo2: Path, work: Path, unlinker: Path, extra_lines: list[str] = (),
     dropped: list[str] = []
     zone_file = work / "zone_source" / "mod.zone"
     zone_file.parent.mkdir(parents=True, exist_ok=True)
-    zone_text = build_mod_zone(template, dropped)
+    zone_text = open_mod_ipak_first(build_mod_zone(template, dropped), extra_lines)
     if asset_root is not None:
         zone_text = prune_template_weapons(zone_text, asset_root, bo2, dropped)
     closure = script_closure(zone_text, bo2 / "raw", stock_scripts(bo2, unlinker, stock_dump))

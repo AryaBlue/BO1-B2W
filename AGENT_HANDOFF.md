@@ -17,6 +17,40 @@
   Relink-only A/B recipe: edit staged json, `build-mod` into a scratch
   `--work`, then copy mod.ff/mod_load.ff/mod ipak into a temp mods folder.
 
+## No crosshair on converted maps, 2026-10-15 (fixed, awaiting user playtest)
+
+- Symptom: no crosshair on any converted map (Bank Job 10-08, Nuketown 10-12,
+  Shi No Numa); stock maps fine. Worked 10-01, before glow.py's vision overlay
+  (bf1d248, 10-02).
+- Cause: the WaW vision overlay (glow.py, full-screen hudelem from
+  _waw2bo2_compat vision_overlay_player) sampled code texture 9 (frame resolved
+  before the 2D pass) and wrote film(scene) opaquely. The engine queues the
+  crosshair (sub_4487E0 -> render cmds 15/11) after that resolve and right
+  before the first hudelem, so the overlay painted over it. Measured by walking
+  the render command buffer (dword_33ED204) at runtime: 4 white reticle quads at
+  the screen centre, then the type-11 `waw/vision_overlay/zombie_sumpf` quad.
+- Fix: overlay blends src + dst*src.a (glow.OVERLAY_BLEND); the shader outputs
+  keep_2d(x, y): a = min(y/x) clamped, src = y - a*x. Scene pixels (dst == x)
+  get exactly the WaW grade as before; earlier 2D shows through, slightly graded.
+  Tests in tests/test_glow.py. Verified on the installed Shi No Numa build: m1911
+  ticks, Thompson ticks, Waffe circle (work/flogger_qr_rounds/xfinal).
+- Also kept (correct, but not the crosshair cause): modzone.open_mod_ipak_first
+  opens the mod ipak range right after the template header, so images that
+  template weapons pull in get real ipak data (stock-keyed copies otherwise hit
+  no ipak; the mod ipak grows ~35 -> 165 MB).
+- Ruled out along the way: every sub_4487E0 gate, visionSetLerpRatio (ps+0x5DC),
+  ADS frac, screen placement, reticle materials/techniques (identical to stock;
+  they render as GSC hudelems).
+- Tools: work/flogger_qr_rounds/xhair_mem.py (ReadProcessMemory dump incl. cmd
+  buffer walk) via run_mem.ps1 / run_mem_stock.ps1 (stock: developer_script 0;
+  stock maps can't load our mod.ff: zmcore_magicbox override ERR_DROP).
+  Rebuild log work/shi_no_numa_dlc2/build_crosshair.log, installed 16:02;
+  previous install in build/installed_backup_20261015_crosshair. 595 tests pass.
+- Other converted maps need a rebuild to pick the fix up.
+- Also open: comm room barricade report (deferred by user); dog rounds branch
+  codex/dog-rounds not pushed. waw2bo2_kickprobe.gsc parked in
+  work/flogger_qr_rounds/parked_scripts.
+
 ## Stock map policies, round count, flogger, 2026-10-14
 
 - Branch `codex/flogger-qr-rounds`; details/limits `docs/STOCK_MAP_POLICIES.md`,

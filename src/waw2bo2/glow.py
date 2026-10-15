@@ -48,6 +48,11 @@ SCENE_CODE_TEXTURE = 9
 GLOW_ENABLED = False
 LUMA = (0.299, 0.587, 0.114)
 MAX_SINGLE_PASS_RADIUS = 6.4977503
+# src + dst * src.a with destination alpha kept. The engine draws the crosshair
+# after resolving code texture 9 and before the first HUD element, so an opaque
+# overlay erased it on every converted map (pixel_hlsl keep_2d).
+OVERLAY_BLEND = {'blendOpRgb': 'add', 'srcBlendRgb': 'one', 'dstBlendRgb': 'srcalpha',
+                 'blendOpAlpha': 'add', 'srcBlendAlpha': 'zero', 'dstBlendAlpha': 'one'}
 
 
 def _num(fields, key, default):
@@ -109,11 +114,21 @@ def pixel_hlsl(film: dict, glow: dict | None) -> str:
                   f' + {_f(film["bias"])};']
     else:
         lines += ['    return x;']
-    lines += ['}', '']
+    lines += ['}', '',
+              # Blended as src + dst * a (OVERLAY_BLEND). Where the frame still
+              # holds the resolved scene x this is exactly y; 2D drawn after the
+              # resolve and before the HUD (the crosshair) shows through.
+              'float4 keep_2d(float3 x, float3 y)',
+              '{',
+              '    float3 r = x > 0.0 ? y / max(x, 1e-6) : 1.0;',
+              '    float a = saturate(min(r.x, min(r.y, r.z)));',
+              '    return float4(saturate(y - a * x), a);',
+              '}', '']
     if glow is None:
         lines += ['float4 main(float4 pos : SV_Position) : SV_Target0',
                   '{',
-                  '    return float4(saturate(film(scene.Load(int3(int2(pos.xy), 0)).rgb)), 1.0);',
+                  '    float3 x = scene.Load(int3(int2(pos.xy), 0)).rgb;',
+                  '    return keep_2d(x, saturate(film(x)));',
                   '}']
         return '\n'.join(lines) + '\n'
     lines += [
@@ -235,8 +250,9 @@ def pixel_hlsl(film: dict, glow: dict | None) -> str:
         '            float wgt = (a4 ? f.x : 1.0 - f.x) * (b4 ? f.y : 1.0 - f.y);',
         '            top += wgt * v;',
         '        }',
-        '    float3 frame = saturate(film(scene.Load(int3(int2(pos.xy), 0)).rgb));',
-        f'    return float4(saturate(frame + {_f(glow["intensity"])} * top), 1.0);',
+        '    float3 x = scene.Load(int3(int2(pos.xy), 0)).rgb;',
+        '    float3 frame = saturate(film(x));',
+        f'    return keep_2d(x, saturate(frame + {_f(glow["intensity"])} * top));',
         '}',
     ]
     return '\n'.join(lines) + '\n'
@@ -307,8 +323,7 @@ def stage(project_root: Path, visions: dict[str, dict], techset_dump: Path) -> d
         for texture in material.get('textures', []):
             texture['image'] = techsets.as_reference(texture.get('image', '').removeprefix(','))
         for state in material.get('stateBits', []):
-            state.update(blendOpRgb='disabled', srcBlendRgb='one', dstBlendRgb='zero', alphaTest='disabled',
-                         blendOpAlpha='disabled', srcBlendAlpha='one', dstBlendAlpha='zero')
+            state.update(alphaTest='disabled', **OVERLAY_BLEND)
         name = overlay_name(vision)
         out = project_root / techsets.oat_material_path(name)
         out.parent.mkdir(parents=True, exist_ok=True)
