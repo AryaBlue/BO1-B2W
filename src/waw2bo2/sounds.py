@@ -48,6 +48,198 @@ def default_reverb_mix(project: Path) -> dict:
             "source": patch, **({"dry": 1, "wet": 0} if silent else {})}
 
 
+# BO2 plays room reverb through RAD radverbs, not I3DL2, so a WaW patch can only
+# select the stock radverb of its room class (always loaded via
+# zmb_code_post_gfx). These are the standard EAX/I3DL2 preset names every WaW
+# driver carries; custom patches use the nearest standard patch by parameters.
+EAX_RADVERB = {
+    "GENERIC": "gen_mediumroom", "PADDEDCELL": "gen_cockpit", "ROOM": "gen_smallroom",
+    "BATHROOM": "gen_stoneroom", "LIVINGROOM": "gen_smallroom", "STONEROOM": "gen_stoneroom",
+    "AUDITORIUM": "gen_largeroom", "CONCERTHALL": "gen_largeroom", "CAVE": "gen_cave",
+    "ARENA": "gen_hangar", "HANGAR": "gen_hangar", "CARPETEDHALLWAY": "gen_hallway",
+    "HALLWAY": "gen_hallway", "STONECORRIDOR": "gen_stoneroom", "ALLEY": "gen_city",
+    "FOREST": "gen_outdoor", "CITY": "gen_city", "MOUNTAINS": "gen_hills", "QUARRY": "gen_hills",
+    "PLAIN": "gen_outdoor", "PARKINGLOT": "gen_city", "SEWERPIPE": "gen_sewerpipe",
+    "UNDERWATER": "gen_underwater", "SMALLROOM": "gen_smallroom", "MEDIUMROOM": "gen_mediumroom",
+    "LARGEROOM": "gen_largeroom", "MEDIUMHALL": "gen_mediumroom", "LARGEHALL": "gen_largeroom",
+    "PLATE": "gen_stoneroom"}
+
+
+def _patch_silent(patch: dict) -> bool:
+    return patch["room"] <= -10000 or (patch["reflections"] <= -10000 and patch["reverb"] <= -10000)
+
+
+def _patch_features(patch: dict) -> tuple:
+    return (math.log(max(patch["decayTime"], .1)), patch["reflectionsDelay"] * 10,
+            patch["roomHF"] / 1000, (patch["room"] + patch["reverb"]) / 1000)
+
+
+def radverb_for(preset: str, globals_data: dict) -> dict:
+    """The stock BO2 radverb for a WaW reverb patch name (WaW matches names
+    without case). Silent patches keep the room dry instead of picking one."""
+    patches = {p["name"].casefold(): p for p in globals_data.get("reverbPatches", []) if p.get("name")}
+    patch = patches.get(preset.casefold())
+    if patch is None:
+        return {"status": "unknown_source_preset", "source": preset}
+    if _patch_silent(patch):
+        return {"status": "silent_source_preset", "source": patch["name"], "radverb": "default", "wet": 0}
+    name = patch["name"].upper()
+    if name in EAX_RADVERB:
+        return {"status": "bo2_equivalent", "source": patch["name"], "radverb": EAX_RADVERB[name]}
+    standard = [p for p in patches.values() if p["name"].upper() in EAX_RADVERB]
+    if not standard:
+        return {"status": "unknown_source_preset", "source": preset}
+    feature = _patch_features(patch)
+    nearest = min(standard, key=lambda p: (sum((a - b) ** 2 for a, b in zip(feature, _patch_features(p))), p["name"]))
+    return {"status": "bo2_equivalent_nearest", "source": patch["name"], "nearest": nearest["name"],
+            "radverb": EAX_RADVERB[nearest["name"].upper()]}
+
+
+AMBIENT_CALLS = {"declareambientpackage", "addambientelement", "declareambientroom", "setambientroomreverb",
+                 "setambientroomtone", "activateambientpackage", "activateambientroom"}
+
+
+def ambient_calls(source: str) -> list[tuple[str, list]]:
+    """Literal-argument ambient package/room calls of a WaW _amb main(), in order.
+    Strings keep their text, numbers become floats; other arguments are None."""
+    script = gsc.parse(source, "<source amb>")
+    main = script.functions.get("main")
+    if main is None:
+        return []
+    tokens, calls = script.tokens, []
+    i = main.body_open
+    while i < main.body_close:
+        token = tokens[i]
+        if token.kind == gsc.IDENT and token.low in AMBIENT_CALLS and tokens[i + 1].text == "(" \
+                and tokens[i - 1].text not in (".", "::"):
+            args, current, depth, j = [], [], 0, i + 2
+            while depth or tokens[j].text != ")":
+                if tokens[j].kind == gsc.EOF:
+                    raise SoundError(f"line {token.line}: unterminated {token.text} call")
+                if tokens[j].text in ("(", "["):
+                    depth += 1
+                elif tokens[j].text in (")", "]"):
+                    depth -= 1
+                if not depth and tokens[j].text == ",":
+                    args.append(current)
+                    current = []
+                else:
+                    current.append(tokens[j])
+                j += 1
+            if current:
+                args.append(current)
+            values = []
+            for arg in args:
+                text = "".join(t.text for t in arg)
+                if len(arg) == 1 and arg[0].kind == gsc.STRING:
+                    values.append(arg[0].text[1:-1])
+                else:
+                    try:
+                        values.append(float(text))
+                    except ValueError:
+                        values.append(None)
+            calls.append((token.low, values))
+            i = j
+        i += 1
+    return calls
+
+
+def ambient_aliases(source: str) -> set[str]:
+    """Aliases the source ambient packages and room tones play."""
+    out = set()
+    for name, args in ambient_calls(source):
+        if name == "addambientelement" and len(args) > 1 and isinstance(args[1], str):
+            out.add(args[1])
+        elif name == "setambientroomtone" and len(args) > 1 and isinstance(args[1], str):
+            out.add(args[1])
+    return out
+
+
+def _csc_args(values: list) -> str:
+    return ", ".join(f'"{v}"' if isinstance(v, str) else _num(v) for v in values)
+
+
+def port_ambient(source: str, globals_data: dict, aliases: set[str], trigger_rooms: set[str]) -> dict:
+    """BO2 _amb main() statements for the source ambient rooms and packages.
+
+    BO2's _ambientpackage has the same API. Its code triggers pick the room
+    and package flagged as default whenever no trigger applies, which is what
+    a WaW activateAmbientRoom/Package at startup does. Room trigger names that
+    no source room declares would deactivate BO2 reverb (an audible stock
+    preset), so they get the default room's settings, as WaW kept its room.
+    """
+    calls = ambient_calls(source)
+    report = {"rooms": {}, "packages": [], "dropped": [], "undeclared_trigger_rooms": []}
+
+    def lowest(kind):
+        hits = [a for n, a in calls if n == kind and len(a) >= 2 and isinstance(a[1], str)]
+        hits.sort(key=lambda a: a[2] if len(a) > 2 and isinstance(a[2], float) else 0)
+        return hits[0][1] if hits else None
+
+    default_room, default_package = lowest("activateambientroom"), lowest("activateambientpackage")
+    rooms, packages, lines = {}, set(), []
+    for name, args in calls:
+        if name in ("activateambientroom", "activateambientpackage"):
+            continue  # the default flags above
+        if not args or not isinstance(args[0], str):
+            report["dropped"].append({"call": name, "reason": "non-literal arguments"})
+            continue
+        key = args[0]
+        if name == "declareambientpackage":
+            packages.add(key)
+            lines.append(f'declareambientpackage( "{key}"' + (", 1" if key == default_package else "") + " );")
+            report["packages"].append(key)
+        elif name == "declareambientroom":
+            rooms.setdefault(key, None)
+            lines.append(f'declareambientroom( "{key}"' + (", 1" if key == default_room else "") + " );")
+        elif name == "addambientelement":
+            if key not in packages or len(args) < 4 or not isinstance(args[1], str) or None in args[2:]:
+                report["dropped"].append({"call": name, "package": key, "reason": "undeclared package or arguments"})
+            elif args[1] not in aliases:
+                report["dropped"].append({"call": name, "package": key, "alias": args[1],
+                                          "reason": "alias not converted"})
+            else:
+                lines.append(f"addambientelement( {_csc_args([key, 'waw/' + args[1], *args[2:]])} );")
+        elif name == "setambientroomtone":
+            if key not in rooms or len(args) < 2 or not isinstance(args[1], str) or None in args[2:]:
+                report["dropped"].append({"call": name, "room": key, "reason": "undeclared room or arguments"})
+            elif args[1] not in aliases:
+                report["dropped"].append({"call": name, "room": key, "alias": args[1], "reason": "alias not converted"})
+            else:
+                lines.append(f"setambientroomtone( {_csc_args([key, 'waw/' + args[1], *args[2:]])} );")
+        elif name == "setambientroomreverb":
+            if key not in rooms or len(args) < 4 or not isinstance(args[1], str) or None in args[2:]:
+                report["dropped"].append({"call": name, "room": key, "reason": "undeclared room or arguments"})
+                continue
+            mapping = radverb_for(args[1], globals_data)
+            if "radverb" not in mapping:
+                mapping.update(radverb="default", wet=0)
+            dry, wet = args[2], args[3] if mapping.get("wet") is None else 0.0
+            fade = args[4] if len(args) > 4 else 2.0
+            rooms[key] = (mapping["radverb"], dry, wet, fade)
+            report["rooms"][key] = {**mapping, "dry": dry, "wet": wet}
+            lines.append(f'setambientroomreverb( {_csc_args([key, mapping["radverb"], dry, wet, fade])} );')
+    for key in [r for r, v in rooms.items() if v is None]:
+        # WaW deactivates reverb for a room without one: its DEFAULT is silent.
+        rooms[key] = ("default", 1.0, 0.0, 2.0)
+        report["rooms"][key] = {"status": "no_source_reverb", "radverb": "default", "dry": 1, "wet": 0}
+        lines.append(f'setambientroomreverb( "{key}", "default", 1, 0 );')
+    if default_room not in rooms:
+        default_room = "waw_default"
+        rooms[default_room] = ("default", 1.0, 0.0, 0.0)
+        lines.insert(0, 'declareambientroom( "waw_default", 1 );\nsetambientroomreverb( "waw_default", "default", 1, 0, 0 );')
+    for key in sorted(trigger_rooms - rooms.keys()):
+        rooms[key] = rooms[default_room]
+        report["undeclared_trigger_rooms"].append(key)
+        lines.append(f'declareambientroom( "{key}" );')
+        lines.append(f"setambientroomreverb( {_csc_args([key, *rooms[default_room]])} );")
+    radverb, dry, wet, _ = rooms[default_room]
+    lines.append(f"setreverb( {_csc_args(['snd_enveffectsprio_level', radverb, dry, wet, 0.0])} );")
+    report["default_room"] = default_room
+    report["lines"] = lines
+    return report
+
+
 _WORD_SPLIT = re.compile(r"[^a-z0-9]+")
 
 
@@ -404,6 +596,9 @@ def bind_pcm(project: Path, pcm_root: Path) -> dict:
 T6_DRIVER_MAGIC = b"W2BSDG1\0"
 T6_DRIVER_STRIDES = (80, 100, 60, 36, 36, 240, 60, 100)  # groups, curves, pans, ...
 CURVE_TOLERANCE = 1e-5
+# RMS loudness error over distance above which an approximated curve is named
+# in the build warnings (about the smallest level change a listener notices).
+AUDIBLE_CURVE_DB = 3.0
 CURVE_KEYS = ("volumeFalloffCurve", "volumeMinFalloffCurve", "reverbFalloffCurve", "reverbMinFalloffCurve")
 T6_CURVE_FIELDS = {"volumeFalloffCurve": "DryMaxCurve", "volumeMinFalloffCurve": "DryMinCurve",
                    "reverbFalloffCurve": "WetMaxCurve", "reverbMinFalloffCurve": "WetMinCurve"}
@@ -616,10 +811,18 @@ T6_ALIAS_COLUMNS = [
 T6_STORAGE = {1: "loaded", 2: "streamed", 3: "primed"}
 # Fields WaW has and this playback mapping does not carry (yet). Reported, not silent.
 PLAYBACK_NOT_TRANSLATED = ["driver routing/ducking (stock BO2 groups; original bus gain baked into alias)", "speaker map (stock pan)",
-                           "explicit WaW room reverb presets (I3DL2 to RAD DSP)",
+                           "WaW room reverb presets (I3DL2; stock BO2 radverb of the same room class used)",
+                           "reverb send level (calibrated to BO2 send convention, REVERB_SEND_DB)",
                            "softest voice limit (approximated with priority)", "chain alias",
                            "team/cylinder/move/slave/master fields",
                            "falloff curve shape where no stock BO2 curve matches (nearest loudness used)"]
+# WaW sends feed I3DL2 patches that are themselves 5-30 dB down (room +
+# reverb millibels); BO2 radverbs return near unity, so its designers send far
+# less. Measured on every stock zombies bank against WaW's own aliases, nonzero
+# sends of comparable roles sit 24-26 dB lower in BO2 (weapons -30 vs -6 dB,
+# voice -28 vs -2 dB). Sending WaW levels unchanged made every room echo.
+REVERB_SEND_DB = -24.0
+REVERB_SEND_SCALE = 10 ** (REVERB_SEND_DB / 20)
 T6_LIMIT_TYPES = {0: "none", 1: "oldest", 2: "reject", 3: "priority", 4: "priority"}
 
 
@@ -685,7 +888,8 @@ def t6_alias_rows(document: dict, weapon_aliases: set[str] | None = None) -> tup
         rows.append({
             "Name": document["name"], "FileSource": binding["output"], "Secondary": secondary,
             "Storage": T6_STORAGE.get(flags["loadType"], "loaded"), "Bus": bus, "VolumeGroup": group,
-            "DuckGroup": duck_group, "Duck": "", "ReverbSend": _dbspl(source["reverbSend"]),
+            "DuckGroup": duck_group, "Duck": "",
+            "ReverbSend": _dbspl(0 if flags["noWetLevel"] else source["reverbSend"] * REVERB_SEND_SCALE),
             "CenterSend": _dbspl(source["centerPercentage"]),
             "VolMin": _dbspl(source["volMin"] * gain), "VolMax": _dbspl(source["volMax"] * gain),
             "DistMin": _num(source["distMin"]), "DistMaxDry": _num(source["distMax"]),

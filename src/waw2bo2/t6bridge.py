@@ -34,7 +34,7 @@ from pathlib import Path
 from .resources import resource_root
 from . import clientport, progress, viewmodels, zombiebehavior
 
-from . import assetresolve, audio, entities, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, materialisolation, oneway, paths, projectilecollision, scorebehavior, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones
+from . import assetresolve, audio, entities, wawtext, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, materialisolation, oneway, paths, projectilecollision, scorebehavior, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones
 from .fbx import collision_material_slots, collision_slot_models, write_collision_fbx, write_world_fbx
 from .world import layer_formats_from_strides, read_collision, read_gfx_world
 
@@ -1016,12 +1016,49 @@ main()
 """
 
 
-def write_amb_csc(report: StageReport, project: str, project_root: Path) -> None:
+def source_amb_script(roots: list[Path], map_name: str) -> Path | None:
+    """The WaW map's clientscripts/<map>_amb.csc (rooms, packages, music)."""
+    return next((root / 'clientscripts' / f'{map_name}_amb.csc' for root in roots
+                 if (root / 'clientscripts' / f'{map_name}_amb.csc').is_file()), None)
+
+
+def write_amb_csc(report: StageReport, project: str, project_root: Path,
+                  source_amb: Path | None = None, ents: Path | None = None) -> None:
     dst = project_root / "clientscripts" / "mp" / f"{project}_amb.csc"
     dst.parent.mkdir(parents=True, exist_ok=True)
-    mix = sounds.default_reverb_mix(project_root / "content_source")
+    content = project_root / "content_source"
+    mix = sounds.default_reverb_mix(content)
     text = AMB_CSC
-    if mix["status"] == "silent_source_default":
+    globals_path = content / "sound_ir/driver_globals.json"
+    if source_amb is not None and globals_path.is_file():
+        bank = next((project_root / "soundbank").glob("*.aliases.csv"), None)
+        aliases = set()
+        if bank is not None:
+            with bank.open(encoding="utf-8", newline="") as f:
+                aliases = {row["Name"].removeprefix("waw/") for row in csv.DictReader(f)}
+        trigger_rooms = set()
+        if ents is not None and ents.is_file():
+            trigger_rooms = {e["script_ambientroom"] for e in entities.parse_entities(wawtext.read(ents))
+                             if e.get("targetname") == "ambient_package" and e.get("script_ambientroom")}
+        ambient = sounds.port_ambient(wawtext.read(source_amb),
+                                      json.loads(globals_path.read_text(encoding="utf-8")), aliases, trigger_rooms)
+        body = "".join(f"    {line}\n" for block in ambient.pop("lines") for line in block.split("\n"))
+        text = text.replace('    declaremusicstate( "WAVE" );',
+                            f'    // WaW rooms and packages of {source_amb.name}.\n{body}    declaremusicstate( "WAVE" );', 1)
+        report.content["ambient"] = {"source": str(source_amb), **ambient}
+        for room, entry in ambient["rooms"].items():
+            if entry["status"].startswith("bo2_equivalent"):
+                report.warnings.append(f"SOUND_ROOM_REVERB {room}: WaW I3DL2 {entry['source']} -> stock BO2 "
+                                       f"radverb {entry['radverb']}" + (f" (nearest {entry['nearest']})"
+                                                                        if "nearest" in entry else ""))
+            elif entry["status"] == "unknown_source_preset":
+                report.warnings.append(f"SOUND_ROOM_REVERB {room}: unknown WaW preset {entry['source']}; room kept dry")
+        for item in ambient["dropped"]:
+            report.warnings.append(f"SOUND_AMBIENT_DROPPED {item}")
+        if ambient["undeclared_trigger_rooms"]:
+            report.warnings.append("SOUND_ROOM_UNDECLARED " + ", ".join(ambient["undeclared_trigger_rooms"]) +
+                                   f": map triggers name no source room; given default room {ambient['default_room']}")
+    elif mix["status"] == "silent_source_default":
         text = text.replace('    declaremusicstate( "WAVE" );',
             '    // WaW DEFAULT is silent; the BO2 DEFAULT radverb has reflections.\n'
             '    declareambientroom( "waw_default", 1 );\n'
@@ -1706,6 +1743,12 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
     defined_sounds = zone_sound_names | compiled_sound_names | ({n for kinds in stock_waw.index.values()
         for n in kinds.get('sound', [])} if stock_waw else set())
     script_sounds = sounds.script_aliases(project_root, defined_sounds, zone_sound_names)
+    source_amb = None
+    if waw_map_script is not None:
+        source_amb = source_amb_script([*(waw_patch_script_roots or []), waw_map_script.parent.parent,
+                                        *(waw_script_roots or []), *roots], waw_map_script.stem)
+    if source_amb is not None:
+        script_sounds |= sounds.ambient_aliases(wawtext.read(source_amb)) & defined_sounds
     entity_sounds = sounds.entity_aliases(ents_file, defined_sounds)
     compiled_sound_names.update(script_sounds, entity_sounds)
     report.content['script_sound_dependencies'] = sorted(script_sounds)
@@ -1730,7 +1773,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
     budget = sounds.loaded_budget(bo2_root, bo2_root / "mods" / "zm_test" / "soundbank" / "zmb_test.all.aliases.csv") \
         if bo2_root is not None else None
     bank_report = progress.timed('Build sound bank', sounds.write_t6_bank, project_root / "content_source", bank, project_root / "soundbank", budget)
-    write_amb_csc(report, project, project_root)
+    write_amb_csc(report, project, project_root, source_amb, ents_file)
     if budget is not None:
         report.warnings.append(
             f"SOUND_LOADED_TO_STREAMED {budget['streamed_files']} WaW loaded sounds streamed: loaded-bank budget "
@@ -1762,11 +1805,23 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
                                       "complete_variants": curve_report["complete_variants"],
                                       "incomplete_variants": curve_report["incomplete_variants"],
                                       "errors": curve_report["errors"], "report": "content_source/sounds.curves.json"}
-    for entry in curve_report["curves"].values():
-        if entry["status"] != "exact_shape":
+    # BO2 cannot load WaW's curves, so nearly every map approximates most of
+    # them. Report the set once; name a curve only when the loudness error is
+    # audible (sounds.curves.json has every binding).
+    approximated = [e for e in curve_report["curves"].values() if e["status"] != "exact_shape"]
+    if approximated:
+        worst = max(approximated, key=lambda e: e["nearest"]["rmsDbError"])
+        report.warnings.append(
+            f"SOUND_CURVES {len(approximated)} of {len(curve_report['curves'])} WaW falloff curves have no exact "
+            f"stock BO2 curve ({sum(e['uses'] for e in approximated)} alias slots); worst "
+            f"{worst['source']} -> {worst['nearest']['t6']} at {worst['nearest']['rmsDbError']:.1f} dB RMS. "
+            "List: content_source/sounds.curves.json")
+    for entry in approximated:
+        if entry["nearest"]["rmsDbError"] > sounds.AUDIBLE_CURVE_DB or entry["status"] == "UNSUPPORTED_SOUND_CURVE":
             report.warnings.append(f"{entry['status']} {entry['source']}: {entry['uses']} alias curve slot(s); "
                                    f"nearest stock T6 curve {entry['nearest']['t6']} "
-                                   f"(max error {entry['nearest']['maxError']:.4f})")
+                                   f"({entry['nearest']['rmsDbError']:.1f} dB RMS, "
+                                   f"max gain error {entry['nearest']['maxError']:.3f})")
     lighting_base = str(gfx_bin).removesuffix(".gfx.bin")
     grid_file = Path(lighting_base + ".lightgrid.bin")
     if grid_file.exists():
