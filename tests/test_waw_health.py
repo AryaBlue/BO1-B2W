@@ -33,5 +33,21 @@ class MaxHealthLoweringTests(unittest.TestCase):
         self.assertEqual(lower(source), (0, source))
 
 
+class HudFieldLoweringTests(unittest.TestCase):
+    def test_edge_anchors_use_safe_area_and_hud_hides_in_menus(self):
+        source = ('f()\n{\n\thud.alignX = "left";\n\thud.horzAlign = "left";\n\thud.vertAlign = "bottom";\n'
+                  '\thud.horzAlign = "center";\n\thud.vertAlign = "middle";\n\thud.hidewheninmenu = false;\n'
+                  '\tif ( hud.horzAlign == "left" ) x = 1;\n}\n')
+        tokens = gsc.tokenize(source)
+        self.assertEqual(gscport.lower_hud_fields(tokens), 3)
+        text = gsc.emit(tokens)
+        self.assertIn('hud.alignX = "left";', text)          # element alignment is unchanged
+        self.assertIn('hud.horzAlign = "user_left";', text)
+        self.assertIn('hud.vertAlign = "user_bottom";', text)
+        self.assertIn('hud.horzAlign = "center";', text)
+        self.assertIn('hud.hidewheninmenu = true;', text)
+        self.assertIn('if ( hud.horzAlign == "left" )', text)
+
+
 if __name__ == "__main__":
     unittest.main()

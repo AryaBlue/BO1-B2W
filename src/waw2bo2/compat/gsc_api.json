@@ -168,7 +168,8 @@
     "add_zombie_weapon": "maps\\mp\\waw\\_waw2bo2_compat::waw_add_zombie_weapon",
     "manage_zones": "maps\\mp\\waw\\_waw2bo2_compat::waw_manage_zones",
     "player_damage_override": "maps\\mp\\waw\\_waw2bo2_compat::waw_player_damage_override",
-    "powerup_drop": "maps\\mp\\waw\\_waw2bo2_compat::waw_powerup_drop"
+    "powerup_drop": "maps\\mp\\waw\\_waw2bo2_compat::waw_powerup_drop",
+    "create_simple_hud": "maps\\mp\\waw\\_waw2bo2_compat::waw_create_simple_hud"
   },
   "hud_cleanup_wrappers": {
     "maps\\mp\\gametypes_zm\\_hud_util::destroyelem": "waw_destroy_hud_elem",
@@ -176,6 +177,8 @@
   },
   "compat_wrappers": [
     "clientnotify",
+    "newhudelem",
+    "newclienthudelem",
     "physicslaunch",
     "spawn",
     "oktospawn",

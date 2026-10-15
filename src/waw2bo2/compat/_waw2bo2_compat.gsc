@@ -1194,6 +1194,30 @@ waw_add_zombie_weapon( name, hint, cost, weaponvo, variation_count, ammo_cost )
     }
 }
 
+// WaW's opaque pause menu covered script HUD; T6's draws under it. WaW HUD
+// elements therefore hide in menus (gscport lower_hud_fields does the same
+// for explicit hidewheninmenu assignments).
+waw_create_simple_hud( client )
+{
+    hud = maps\mp\zombies\_zm_utility::create_simple_hud( client );
+    hud.hidewheninmenu = 1;
+    return hud;
+}
+
+waw_newhudelem()
+{
+    hud = newhudelem();
+    hud.hidewheninmenu = 1;
+    return hud;
+}
+
+waw_newclienthudelem( client )
+{
+    hud = newclienthudelem( client );
+    hud.hidewheninmenu = 1;
+    return hud;
+}
+
 // The map's effect-only client listeners run on the server (gscport
 // client_fx_listeners) and wait for "waw_client_" + msg, a server notify the
 // native clientnotify never raises.

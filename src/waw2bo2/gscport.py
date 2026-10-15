@@ -872,6 +872,36 @@ def lower_maxhealth_assignments(tokens: list[gsc.Token]) -> int:
     return changed
 
 
+# T6's plain "left"/"right"/"top"/"bottom" anchor to the 4:3 region; BO2's
+# own corner HUD uses the safe-area "user_*" anchors, where WaW drew its
+# HUD (the round chalk sat inward on 16:9 screens). Centre stays centre.
+HUD_ALIGNMENTS = {"horzalign": {"left": "user_left", "right": "user_right"},
+                  "vertalign": {"top": "user_top", "bottom": "user_bottom"}}
+
+
+def lower_hud_fields(tokens: list[gsc.Token]) -> int:
+    """WaW HUD element field assignments, translated for T6.
+
+    Edge alignments use the safe-area anchors (HUD_ALIGNMENTS). WaW's opaque
+    pause menu covered script HUD whatever hidewheninmenu said; T6's pause
+    menu draws under it, so WaW HUD hides in menus (the round chalk showed
+    on pause)."""
+    changed = 0
+    for i in range(1, len(tokens) - 3):
+        if tokens[i - 1].text != "." or tokens[i + 1].text != "=" or tokens[i + 2].text == "=":
+            continue
+        field, value = tokens[i].low, tokens[i + 2]
+        if field in HUD_ALIGNMENTS and value.kind == gsc.STRING and tokens[i + 3].text == ";":
+            target = HUD_ALIGNMENTS[field].get(value.text[1:-1].lower())
+            if target:
+                value.text = f'"{target}"'
+                changed += 1
+        elif field == "hidewheninmenu" and tokens[i + 3].text == ";" and value.low in ("false", "0"):
+            value.text = "true"
+            changed += 1
+    return changed
+
+
 def lower_zombie_weapon_keys(tokens: list[gsc.Token]) -> int:
     """`GetArrayKeys( level.zombie_weapons )` -> the WaW-registered keys only
     (compat waw_zombie_weapon_keys): the WaW box chooser offers every key, and
@@ -1121,8 +1151,7 @@ class Translator:
                 self.animation_requirements[fn.animtree.lower()].update(
                     animation_names(tokens[fn.start:fn.body_close + 1]))
         self.report.rewrites["stationary FX carriers lowered to authored-position FX"] += lower_stationary_fx_carriers(tokens)
-        self.report.rewrites["maxhealth assignments through setmaxhealth for players"] += lower_maxhealth_assignments(tokens)
-        self.report.rewrites["zombie_weapons key lists without BO2-only entries"] += lower_zombie_weapon_keys(tokens)
+        self.source_lowerings(tokens)
         self.report.rewrites["launch volume includes its activation trigger"] += bridge_launch_triggers(tokens)
         where_file = self.sources.origin.get(norm(path) + ".gsc", path)
         included_bo2: set[str] = set()
@@ -1751,6 +1780,12 @@ class Translator:
         tokens[0].pre += f'#using_animtree( "{animation_tree_name(tree)}" );\n'
         self.rewrite_animation_refs(tokens, tree, where)
 
+    def source_lowerings(self, tokens: list[gsc.Token]) -> None:
+        """WaW semantics lowered onto T6 for ported and extracted source code alike."""
+        self.report.rewrites["maxhealth assignments through setmaxhealth for players"] += lower_maxhealth_assignments(tokens)
+        self.report.rewrites["zombie_weapons key lists without BO2-only entries"] += lower_zombie_weapon_keys(tokens)
+        self.report.rewrites["HUD fields (safe-area anchors, hidden in menus)"] += lower_hud_fields(tokens)
+
     def translate_extracted(self, core: str, name: str) -> str:
         script = self.sources.get(core)
         fn = script.functions[name]
@@ -1776,6 +1811,7 @@ class Translator:
                 neutralize_animations(tokens, fn.animtree or "")
         where = self.sources.origin.get(core + ".gsc", core)
         self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
+        self.source_lowerings(tokens)
         self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
         self.report.rewrites["WaW deathanim assignments kept BO2's (ASD state)"] += keep_bo2_deathanims(tokens)
         self.resolve_refs(tokens, script, where, set(CORE_INCLUDES), {0}, extracting=core)
