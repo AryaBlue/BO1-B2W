@@ -2034,14 +2034,16 @@ class Translator:
         return made
 
     def framework_zombie_vars(self) -> str | None:
-        """WaW framework zombie_vars defaults for BO2's init_zombie_vars.
+        """WaW framework zombie_vars defaults for BO2's init_levelvars.
 
-        BO2's _zm replaces _zombiemode::init_zombie_vars and starts from its own
-        values (zombie_spawn_delay 2.0 instead of WaW's 3: zombies spawned 50%
-        faster). The owned _zm init asks waw2bo2_zombie_var for every variable
-        it sets; the map's mp/zombiemode.csv still wins. Only literal values."""
+        BO2's _zm replaces _zombiemode::init_levelvars (where WaW sets its
+        zombie_vars) and starts from its own values (zombie_spawn_delay 2.0
+        instead of WaW's 3: zombies spawned 50% faster). The owned _zm asks
+        waw2bo2_set_zombie_var for every variable it sets; the map's own WaW
+        mp/zombiemode.csv still wins. Only literal values."""
         script = self.sources.get(ZOMBIEMODE)
-        fn = script.functions.get("init_zombie_vars") if script is not None else None
+        functions = script.functions if script is not None else {}
+        fn = functions.get("init_levelvars") or functions.get("init_zombie_vars")
         if fn is None:
             return None
         toks, values = script.tokens, {}

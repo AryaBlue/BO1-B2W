@@ -224,10 +224,10 @@ class FrameworkHookTests(unittest.TestCase):
         self.assertIn("waw2bo2_client_fx_0();", core)
 
     def test_framework_zombie_var_defaults_reach_bo2_init(self):
-        # WaW's _zombiemode::init_zombie_vars: zombie_spawn_delay 3 (BO2 2.0)
+        # WaW's _zombiemode::init_levelvars: zombie_spawn_delay 3 (BO2 2.0)
         _, _, report = self.port({
             "maps/testmap.gsc": "main()\n{\n\tmaps\\_zombiemode::main();\n}\n",
-            "maps/_zombiemode.gsc": "main() {}\ninit_zombie_vars()\n{\n"
+            "maps/_zombiemode.gsc": "main() {}\ninit_levelvars()\n{\n"
                                     "\tset_zombie_var( \"zombie_spawn_delay\", 3 );\n"
                                     "\tset_zombie_var( \"below_world_check\", -1000 );\n"
                                     "\tset_zombie_var( \"zombie_use_failsafe\", true );\n"
