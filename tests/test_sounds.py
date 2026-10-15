@@ -73,6 +73,45 @@ AMB_PATCHES = {"reverbPatches": [
      "reflectionsDelay": .006, "reverb": 450}]}
 
 
+class ReverbSendMeasurementTests(unittest.TestCase):
+    def test_per_role_offsets_and_weighted_overall(self):
+        n = sounds.REVERB_MIN_SAMPLES
+        bo2 = {"grp_weapon": [-30.0] * 200, "grp_voice": [-28.0] * 100, "grp_ambience": [-40.0] * 50,
+               "grp_foley": [-60.0] * 500}
+        waw = {"grp_weapon": [-6.0] * 100, "grp_voice": [-2.0] * 100, "grp_ambience": [-6.0] * n,
+               "grp_foley": [-6.0] * 500, "grp_music": [-2.0] * (n - 1)}
+        result = sounds.measure_reverb_send(bo2, waw)
+        self.assertEqual(result["status"], "measured")
+        self.assertEqual(sorted(result["roles"]), ["grp_ambience", "grp_voice", "grp_weapon"])
+        self.assertAlmostEqual(result["roles"]["grp_ambience"]["offset_db"], -34)
+        # Weights 100 (weapon -24), 100 (voice -26), 20 (ambience -34): the
+        # weighted median is the voice offset; foley (a fallback) never counts.
+        self.assertAlmostEqual(result["db"], -26)
+
+    def test_without_shared_roles_the_last_measurement_is_used(self):
+        result = sounds.measure_reverb_send({"grp_weapon": [-30.0] * 50}, {})
+        self.assertEqual((result["status"], result["db"]), ("unmeasured_default", sounds.REVERB_SEND_DB))
+
+    def test_bo2_and_waw_levels_are_read_from_stock_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "zmb_x.all.aliases.csv").write_text(
+                "Name,VolumeGroup,ReverbSend\na,grp_weapon,70\nb,grp_weapon,0\nc,grp_voice,72\n")
+            (root / "mpl_x.all.aliases.csv").write_text("Name,VolumeGroup,ReverbSend\nd,grp_weapon,90\n")
+            self.assertEqual(sounds.bo2_send_levels(root), {"grp_weapon": [-30.0], "grp_voice": [-28.0]})
+            source, driver = fixture()
+            alias = root / "zone/soundaliases/custom_fire.w2bsnd.json"
+            alias.parent.mkdir(parents=True)
+            alias.write_text(json.dumps({**source, "name": "custom_fire",
+                                         "aliases": [{**source["aliases"][0], "reverbSend": .5}]}))
+            levels = sounds.waw_send_levels([root / "zone", root / "zone"], driver)
+        group = sounds._category({"bus": sounds._indexed(driver, "buses", sounds.decode_flags(
+            source["aliases"][0]["flags"])["busIndex"])})[1]
+        self.assertEqual(list(levels), [group])
+        self.assertEqual(len(levels[group]), 1)
+        self.assertAlmostEqual(levels[group][0], 20 * math.log10(.5))
+
+
 class AmbientPortTests(unittest.TestCase):
     def port(self, trigger_rooms=frozenset()):
         return sounds.port_ambient(AMB_SOURCE, AMB_PATCHES, {"amb_wind", "amb_hum"}, set(trigger_rooms))
@@ -520,8 +559,17 @@ class PlaybackBankTests(unittest.TestCase):
             for column in ("VolMin", "VolMax", "ReverbSend", "CenterSend", "EnvelopPercent"):
                 # Same conversion and quantization as the native T6 loader.
                 native = int(10 ** ((float(rows[0][column]) - 100) / 20) * 65535) / 65535
-                expected = gain * sounds.REVERB_SEND_SCALE if column == "ReverbSend" else gain
+                expected = gain * 10 ** (sounds.REVERB_SEND_DB / 20) if column == "ReverbSend" else gain
                 self.assertAlmostEqual(native, expected, delta=2 / 65535)
+
+    def test_measured_role_offset_applies_to_its_group(self):
+        measured = {"status": "measured", "db": -26.0, "roles": {"grp_voice": {"offset_db": -30.0}}}
+        rows, _ = sounds.t6_alias_rows(self.bound(), None, measured)
+        # The fixture's bus has no identified role: the overall offset applies.
+        self.assertAlmostEqual(float(rows[0]["ReverbSend"]), 100 + 20 * math.log10(.5) - 26, places=4)
+        rows, _ = sounds.t6_alias_rows(self.bound(), {"custom_fire"},
+                                       {**measured, "roles": {"grp_weapon": {"offset_db": -20.0}}})
+        self.assertAlmostEqual(float(rows[0]["ReverbSend"]), 100 + 20 * math.log10(.5) - 20, places=4)
 
     def test_no_wet_level_flag_sends_nothing(self):
         document = self.bound()

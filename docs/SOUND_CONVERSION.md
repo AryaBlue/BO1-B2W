@@ -22,13 +22,22 @@ delay, HF level and late level. Silent patches and rooms without reverb stay
 dry. Every mapping is a `SOUND_ROOM_REVERB` warning and in the bridge report's
 `ambient` entry. Room dry/wet values are the source values.
 
-Alias sends are calibrated to BO2's convention: `REVERB_SEND_DB` (-24 dB) is
-applied to every WaW send. Across all stock zombies banks, nonzero BO2 sends
-of comparable roles sit 24-26 dB below WaW's own (weapons about -30 vs -6 dB,
-voice -28 vs -2 dB): WaW sends feed I3DL2 patches that are already 5-30 dB
-down, while radverbs return near unity. Uncalibrated WaW sends, with the
-map's rooms undeclared, made weapons and voices echo in every room. Aliases
-with WaW's `noWetLevel` flag send nothing. Dry gains are unchanged.
+Alias sends are calibrated to BO2's convention, measured on every build
+(`t6bridge.measure_reverb_send`). WaW sends feed I3DL2 patches that are
+already 5-30 dB down, while radverbs return near unity, so BO2 designers send
+far less. The converter compares nonzero sends of the stock BO2 zombies banks
+(mod tools `raw/soundbank/zmb_*.all.aliases.csv`) with those of the stock WaW
+`nazi_zombie*` zones (extracted once into the shared asset cache), per BO2
+volume group the converter assigns from an identified WaW bus role (weapon,
+voice, ambience, music, UI; at least `REVERB_MIN_SAMPLES` on each side). Each
+alias gets its group's offset; other groups get the median of those offsets
+weighted by sample count. On the stock games (2026-10-15): weapon -24.0 dB,
+voice -26.1 dB, ambience -34.0 dB, overall -26.1 dB. Without either side's
+data the last measurement `REVERB_SEND_DB` (-24 dB) is used and reported as
+`SOUND_REVERB_SEND unmeasured`. The result is in the bridge report
+(`reverb_send`) and `sounds.bank.json`. Uncalibrated WaW sends, with the map's
+rooms undeclared, made weapons and voices echo in every room. Aliases with
+WaW's `noWetLevel` flag send nothing. Dry gains are unchanged.
 
 Falloff curves: BO2 build output names an approximated curve only when its
 loudness error exceeds `AUDIBLE_CURVE_DB` (3 dB RMS); the rest are summarized

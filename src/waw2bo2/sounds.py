@@ -812,17 +812,19 @@ T6_STORAGE = {1: "loaded", 2: "streamed", 3: "primed"}
 # Fields WaW has and this playback mapping does not carry (yet). Reported, not silent.
 PLAYBACK_NOT_TRANSLATED = ["driver routing/ducking (stock BO2 groups; original bus gain baked into alias)", "speaker map (stock pan)",
                            "WaW room reverb presets (I3DL2; stock BO2 radverb of the same room class used)",
-                           "reverb send level (calibrated to BO2 send convention, REVERB_SEND_DB)",
+                           "reverb send level (offset measured from stock BO2 and WaW sends)",
                            "softest voice limit (approximated with priority)", "chain alias",
                            "team/cylinder/move/slave/master fields",
                            "falloff curve shape where no stock BO2 curve matches (nearest loudness used)"]
 # WaW sends feed I3DL2 patches that are themselves 5-30 dB down (room +
 # reverb millibels); BO2 radverbs return near unity, so its designers send far
-# less. Measured on every stock zombies bank against WaW's own aliases, nonzero
-# sends of comparable roles sit 24-26 dB lower in BO2 (weapons -30 vs -6 dB,
-# voice -28 vs -2 dB). Sending WaW levels unchanged made every room echo.
+# less. Sending WaW levels unchanged made every room echo. measure_reverb_send
+# derives the offset on each build from stock BO2 and stock WaW aliases; this
+# is only its result on the stock games (2026-10-15), used when either side's
+# data is unavailable, and reported as such.
 REVERB_SEND_DB = -24.0
-REVERB_SEND_SCALE = 10 ** (REVERB_SEND_DB / 20)
+# Fewest nonzero sends per role and side for a role to count.
+REVERB_MIN_SAMPLES = 20
 T6_LIMIT_TYPES = {0: "none", 1: "oldest", 2: "reject", 3: "priority", 4: "priority"}
 
 
@@ -843,6 +845,78 @@ def _category(row: dict) -> tuple[str, str, str, str]:
     return "bus_fx", "grp_foley", "snp_foley", "no"
 
 
+# BO2 groups the converter assigns from an identified WaW bus role. The
+# grp_foley fallback is excluded: it is not a role match.
+REVERB_ROLES = ("grp_weapon", "grp_voice", "grp_ambience", "grp_music", "grp_menu")
+
+
+def _median(values: list[float]) -> float:
+    values = sorted(values)
+    middle = len(values) // 2
+    return values[middle] if len(values) % 2 else (values[middle - 1] + values[middle]) / 2
+
+
+def bo2_send_levels(soundbank: Path) -> dict[str, list[float]]:
+    """Nonzero alias sends (dB) per volume group of stock BO2 zombies banks."""
+    levels: dict[str, list[float]] = {}
+    for path in sorted(soundbank.glob("zmb_*.all.aliases.csv")):
+        with path.open(encoding="utf-8", errors="replace", newline="") as f:
+            for row in csv.DictReader(f):
+                try:
+                    send = float(row.get("ReverbSend") or 0)
+                except ValueError:
+                    continue
+                if send > 0:
+                    levels.setdefault(row.get("VolumeGroup", ""), []).append(send - 100)
+    return levels
+
+
+def waw_send_levels(alias_roots: list[Path], globals_data: dict) -> dict[str, list[float]]:
+    """Nonzero alias sends (dB) of WaW aliases per BO2 group the converter
+    assigns them; an alias in several zones counts once."""
+    levels: dict[str, list[float]] = {}
+    seen = set()
+    for root in alias_roots:
+        for path in sorted((root / "soundaliases").rglob("*.w2bsnd.json")):
+            document = json.loads(path.read_text(encoding="utf-8"))
+            for index, alias in enumerate(document.get("aliases", [])):
+                key = (document.get("name"), index)
+                if key in seen:
+                    continue
+                seen.add(key)
+                flags = decode_flags(alias["flags"])
+                try:
+                    bus = _indexed(globals_data, "buses", flags["busIndex"])
+                except SoundError:
+                    continue
+                if alias.get("reverbSend", 0) > 0 and not flags["noWetLevel"]:
+                    group = _category({"bus": bus})[1]
+                    levels.setdefault(group, []).append(20 * math.log10(alias["reverbSend"]))
+    return levels
+
+
+def measure_reverb_send(bo2: dict[str, list[float]], waw: dict[str, list[float]]) -> dict:
+    """Offset (dB) from WaW's send convention to BO2's per role (difference of
+    median sends) and overall (their median weighted by the smaller sample
+    count), for roles without enough samples."""
+    roles = {}
+    for group in REVERB_ROLES:
+        a, b = waw.get(group, []), bo2.get(group, [])
+        if min(len(a), len(b)) >= REVERB_MIN_SAMPLES:
+            roles[group] = {"waw_db": _median(a), "bo2_db": _median(b), "offset_db": _median(b) - _median(a),
+                            "waw_samples": len(a), "bo2_samples": len(b)}
+    if not roles:
+        return {"status": "unmeasured_default", "db": REVERB_SEND_DB, "roles": roles,
+                "reason": "no role has enough stock sends on both sides"}
+    weighted = sorted((r["offset_db"], min(r["waw_samples"], r["bo2_samples"])) for r in roles.values())
+    half, total = sum(w for _, w in weighted) / 2, 0
+    for offset, weight in weighted:
+        total += weight
+        if total >= half:
+            break
+    return {"status": "measured", "db": round(offset, 2), "roles": roles}
+
+
 def _num(value: float) -> str:
     return f"{value:.6g}"
 
@@ -858,7 +932,16 @@ def _dbspl(gain: float) -> str:
     return _num(max(0, 100 + 20 * math.log10(gain))) if gain else "0"
 
 
-def t6_alias_rows(document: dict, weapon_aliases: set[str] | None = None) -> tuple[list[dict], list[dict]]:
+def send_offset(reverb_send: dict | None, group: str) -> float:
+    """Measured offset of the alias's BO2 group, else the overall one."""
+    if not reverb_send:
+        return REVERB_SEND_DB
+    role = reverb_send.get("roles", {}).get(group)
+    return role["offset_db"] if role else reverb_send["db"]
+
+
+def t6_alias_rows(document: dict, weapon_aliases: set[str] | None = None,
+                  reverb_send: dict | None = None) -> tuple[list[dict], list[dict]]:
     """Rows of the official BO2 alias CSV for one bound alias list."""
     rows, errors = [], []
     for index, row in enumerate(document["aliases"]):
@@ -889,7 +972,7 @@ def t6_alias_rows(document: dict, weapon_aliases: set[str] | None = None) -> tup
             "Name": document["name"], "FileSource": binding["output"], "Secondary": secondary,
             "Storage": T6_STORAGE.get(flags["loadType"], "loaded"), "Bus": bus, "VolumeGroup": group,
             "DuckGroup": duck_group, "Duck": "",
-            "ReverbSend": _dbspl(0 if flags["noWetLevel"] else source["reverbSend"] * REVERB_SEND_SCALE),
+            "ReverbSend": _dbspl(0 if flags["noWetLevel"] else min(source["reverbSend"] * 10 ** (send_offset(reverb_send, group) / 20), 1)),
             "CenterSend": _dbspl(source["centerPercentage"]),
             "VolMin": _dbspl(source["volMin"] * gain), "VolMax": _dbspl(source["volMax"] * gain),
             "DistMin": _num(source["distMin"]), "DistMaxDry": _num(source["distMax"]),
@@ -1007,7 +1090,8 @@ def fit_loaded_budget(rows: list[dict], pcm_root: Path, budget: dict,
     return streamed
 
 
-def write_t6_bank(project: Path, bank: str, destination: Path, budget: dict | None = None) -> dict:
+def write_t6_bank(project: Path, bank: str, destination: Path, budget: dict | None = None,
+                  reverb_send: dict | None = None) -> dict:
     """Official BO2 alias CSV for every PCM- and curve-bound alias.
 
     Plays the original WaW audio through BO2's own sound engine. Categories,
@@ -1024,11 +1108,13 @@ def write_t6_bank(project: Path, bank: str, destination: Path, budget: dict | No
               "not_translated": PLAYBACK_NOT_TRANSLATED, "volume_encoding": "linear gain to T6 dB SPL",
               "source_bus_gain_applied": True,
               "default_reverb": default_reverb_mix(project),
+              "reverb_send": reverb_send or {"status": "unmeasured_default", "db": REVERB_SEND_DB,
+                                             "reason": "no stock data supplied"},
               "voice_limit_approximations": [], "errors": []}
     rows = []
     for item in bindings["aliases"]:
         document = json.loads((project / item["output"]).read_text())
-        new, errors = t6_alias_rows(document, weapon_aliases)
+        new, errors = t6_alias_rows(document, weapon_aliases, report["reverb_send"])
         for index, row in enumerate(document["aliases"]):
             for field in ("limitType", "entityLimitType"):
                 if row["source"].get(field) == 4:

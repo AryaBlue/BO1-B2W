@@ -1016,6 +1016,28 @@ main()
 """
 
 
+def measure_reverb_send(bo2_root: Path | None, stock_waw) -> dict:
+    """WaW-to-BO2 reverb send offset from both games' stock zombies aliases:
+    the mod tools' raw/soundbank zmb_* banks and the stock WaW nazi_zombie*
+    zones (extracted once into the shared asset cache)."""
+    soundbank = bo2_root / "raw/soundbank" if bo2_root is not None else None
+    if soundbank is None or not soundbank.is_dir():
+        return {"status": "unmeasured_default", "db": sounds.REVERB_SEND_DB,
+                "reason": "no BO2 mod tools raw/soundbank"}
+    driver = stock_waw.root_for("snddriverglobals", "singleton") if stock_waw is not None else None
+    zones = sorted(z for z in (stock_waw.index if stock_waw is not None else {})
+                   if z.startswith("nazi_zombie") and not z.endswith(("_load", "_patch")))
+    if driver is None or not zones:
+        return {"status": "unmeasured_default", "db": sounds.REVERB_SEND_DB,
+                "reason": "no stock WaW zombies zones or sound driver"}
+    globals_data = json.loads((driver[1] / "soundglobals/singleton.w2bsndglobals.json").read_text(encoding="utf-8"))
+    waw = sounds.waw_send_levels([stock_waw.dump(zone, "sound") for zone in zones], globals_data)
+    result = sounds.measure_reverb_send(sounds.bo2_send_levels(soundbank), waw)
+    if result["status"] != "measured":
+        return result
+    return {**result, "waw_zones": zones, "bo2_soundbank": str(soundbank)}
+
+
 def source_amb_script(roots: list[Path], map_name: str) -> Path | None:
     """The WaW map's clientscripts/<map>_amb.csc (rooms, packages, music)."""
     return next((root / 'clientscripts' / f'{map_name}_amb.csc' for root in roots
@@ -1772,7 +1794,13 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
     bank = f"waw_{project}.all"
     budget = sounds.loaded_budget(bo2_root, bo2_root / "mods" / "zm_test" / "soundbank" / "zmb_test.all.aliases.csv") \
         if bo2_root is not None else None
-    bank_report = progress.timed('Build sound bank', sounds.write_t6_bank, project_root / "content_source", bank, project_root / "soundbank", budget)
+    reverb_send = progress.timed('Measure reverb send convention', measure_reverb_send, bo2_root, stock_waw)
+    if reverb_send["status"] != "measured":
+        report.warnings.append(f"SOUND_REVERB_SEND unmeasured: {reverb_send['reason']}; "
+                               f"using the last stock measurement {reverb_send['db']} dB")
+    bank_report = progress.timed('Build sound bank', sounds.write_t6_bank, project_root / "content_source", bank,
+                                 project_root / "soundbank", budget, reverb_send)
+    report.content["reverb_send"] = reverb_send
     write_amb_csc(report, project, project_root, source_amb, ents_file)
     if budget is not None:
         report.warnings.append(
