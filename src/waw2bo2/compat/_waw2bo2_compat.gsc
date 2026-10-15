@@ -292,6 +292,7 @@ waw_startragdoll( arg )
             self.waw_ragdoll_pending = 1;
             self setplayercollision( 0 );
             self thread waw_ragdoll_after_death();
+            self thread waw_ragdoll_doomed();
         }
         return;
     }
@@ -314,6 +315,42 @@ waw_launchragdoll( force, bone )
         self launchragdoll( force, bone );
     else
         self launchragdoll( force );
+}
+
+// A WaW ragdolled live actor is out of play at once: a limp body thrown by
+// the launch until its script kills it (flogger and KF2 0.75 s, bridge 1 s,
+// zipline and shield/baby-gun kicks in the same frame; the delayed kills all
+// pass no attacker). T6 cannot ragdoll a living actor, so a zombie its script
+// did not kill within the frame dies at frame end without an attacker, and
+// its body takes the launch. A same-frame kill keeps its own attribution.
+waw_ragdoll_doomed()
+{
+    self endon( "death" );
+    waittillframeend;
+    if ( isdefined( self ) && isalive( self ) )
+        self dodamage( self.health + 666, self.origin );
+}
+
+// WaW scripts damage their ragdolled actor again after a wait; T6 has
+// already removed it at the earlier death (see waw_ragdoll_doomed).
+waw_dodamage( amount, origin, attacker, inflictor, hitloc, mod, flags, weapon )
+{
+    if ( !isdefined( self ) )
+        return;
+    if ( isdefined( weapon ) )
+        self dodamage( amount, origin, attacker, inflictor, hitloc, mod, flags, weapon );
+    else if ( isdefined( flags ) )
+        self dodamage( amount, origin, attacker, inflictor, hitloc, mod, flags );
+    else if ( isdefined( mod ) )
+        self dodamage( amount, origin, attacker, inflictor, hitloc, mod );
+    else if ( isdefined( hitloc ) )
+        self dodamage( amount, origin, attacker, inflictor, hitloc );
+    else if ( isdefined( inflictor ) )
+        self dodamage( amount, origin, attacker, inflictor );
+    else if ( isdefined( attacker ) )
+        self dodamage( amount, origin, attacker );
+    else
+        self dodamage( amount, origin );
 }
 
 waw_ragdoll_after_death()
@@ -1439,12 +1476,12 @@ waw_setperk( perk )
     if ( !waw_perk_emulated( perk ) )
     {
         self setperk( perk );
-        // WaW's native perk only speeds up reviving another player. Register
-        // the life BO2's last-stand/game-over logic requires for self revive.
-        // The source map still owns its machine, purchase limit and perk HUD.
-        if ( perk == "specialty_quickrevive" && getnumconnectedplayers() == 1
-            && !( isdefined( level.waw2bo2_stock_perks ) && level.waw2bo2_stock_perks ) )
-            self.lives = 1;
+        // WaW's native perk only speeds up reviving another player; a custom
+        // map's own solo revive (if any) stays in its scripts. Only retail
+        // maps get the BO-style solo life (stock_map_policies).
+        if ( isdefined( level.waw2bo2_solo_revive ) && perk == level.waw2bo2_solo_revive["perk"]
+            && flag( "solo_game" ) && !( isdefined( level.waw2bo2_stock_perks ) && level.waw2bo2_stock_perks ) )
+            self waw_stock_solo_revive_bought();
         return;
     }
     if ( !isdefined( self.waw2bo2_perks ) )
@@ -1473,6 +1510,233 @@ waw_hasperk( perk )
     if ( !waw_perk_emulated( perk ) )
         return self hasperk( perk );
     return isdefined( self.waw2bo2_perks ) && isdefined( self.waw2bo2_perks[perk] );
+}
+
+// ---- linked trigger volumes ----
+
+waw_linkto( parent, tag, origin, angles )
+{
+    if ( isdefined( angles ) )
+        self linkto( parent, tag, origin, angles );
+    else if ( isdefined( origin ) )
+        self linkto( parent, tag, origin );
+    else if ( isdefined( tag ) )
+        self linkto( parent, tag );
+    else
+        self linkto( parent );
+    if ( isdefined( self.classname ) && self.classname == "trigger_multiple" )
+        self thread waw_linked_trigger_contacts( parent );
+}
+
+// WaW tests a linked brush trigger against each entity box with the brush
+// rotated by its parent. T6 carries the rotated volume (its absolute bounds
+// follow the parent), but a fast-spinning one (Shi No Numa's flogger log,
+// ~470 deg/s) misses most contacts its oriented box has with an actor's
+// live bounds. While the parent rotates, entities the authored spawnflags
+// admit (1 axis, 2 allies, 4 neutral AI, 8 no players) that the engine
+// reports as not touching are tested against the oriented box; a contact
+// sends the trigger notify WaW would have sent. A still volume is the engine's.
+waw_linked_trigger_contacts( parent )
+{
+    self notify( "waw_linked_trigger_contacts" );
+    self endon( "waw_linked_trigger_contacts" );
+    self endon( "death" );
+    parent endon( "death" );
+    mins = self getmins();
+    maxs = self getmaxs();
+    offset = distance( self.origin, parent.origin );
+    flags = 0;
+    if ( isdefined( self.spawnflags ) )
+        flags = int( self.spawnflags );
+    last = self.angles;
+    for ( ;; )
+    {
+        wait 0.05;
+        angles = self.angles;
+        if ( angles == last )
+            continue;
+        last = angles;
+        // trigger_off parks the volume far from its parent
+        if ( abs( distance( self.origin, parent.origin ) - offset ) > 1000 )
+            continue;
+        forward = anglestoforward( angles );
+        right = anglestoright( angles );
+        up = anglestoup( angles );
+        candidates = [];
+        if ( flags & 1 )
+            candidates = arraycombine( candidates, getaiarray( "axis" ), 0, 0 );
+        if ( flags & 2 )
+            candidates = arraycombine( candidates, getaiarray( "allies" ), 0, 0 );
+        if ( flags & 4 )
+            candidates = arraycombine( candidates, getaiarray( "neutral" ), 0, 0 );
+        if ( !( flags & 8 ) )
+            candidates = arraycombine( candidates, getplayers(), 0, 0 );
+        foreach ( ent in candidates )
+        {
+            if ( !isdefined( ent ) || !isalive( ent ) || ent istouching( self ) )
+                continue;
+            if ( waw_box_touches_oriented( ent getabsmins(), ent getabsmaxs(), self.origin, forward, right, up, mins, maxs ) )
+                self notify( "trigger", ent );
+        }
+    }
+}
+
+waw_box_touches_oriented( lo, hi, origin, forward, right, up, mins, maxs )
+{
+    // A cheap reject on the oriented box's radius, then 27 samples of the
+    // entity box (corners, edge/face midpoints, centre).
+    centre = ( lo + hi ) * 0.5;
+    reach = length( maxs - mins ) * 0.5 + length( hi - lo ) * 0.5;
+    if ( distance( centre, origin + forward * ( ( mins[0] + maxs[0] ) * 0.5 )
+        - right * ( ( mins[1] + maxs[1] ) * 0.5 ) + up * ( ( mins[2] + maxs[2] ) * 0.5 ) ) > reach )
+        return false;
+    for ( i = 0; i < 3; i++ )
+    {
+        for ( j = 0; j < 3; j++ )
+        {
+            for ( k = 0; k < 3; k++ )
+            {
+                point = ( lo[0] + ( hi[0] - lo[0] ) * i * 0.5, lo[1] + ( hi[1] - lo[1] ) * j * 0.5,
+                    lo[2] + ( hi[2] - lo[2] ) * k * 0.5 );
+                delta = point - origin;
+                x = vectordot( delta, forward );
+                y = 0 - vectordot( delta, right );
+                z = vectordot( delta, up );
+                if ( x >= mins[0] && x <= maxs[0] && y >= mins[1] && y <= maxs[1] && z >= mins[2] && z <= maxs[2] )
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
+// A HUD material name built at run time ("hud_chalk_" + n): converted
+// materials renamed out of BO2's names resolve through the generated table.
+waw_hud_material( name )
+{
+    if ( !isdefined( level.waw2bo2_hud_materials ) )
+        level.waw2bo2_hud_materials = maps\mp\waw\_waw2bo2_hud_materials::table();
+    if ( isdefined( name ) && isdefined( level.waw2bo2_hud_materials[name] ) )
+        return level.waw2bo2_hud_materials[name];
+    return name;
+}
+
+// ---- WaW framework calls with WaW semantics ----
+
+// A script calling WaW's _zombiemode::player_damage_override directly (Shi
+// No Numa's flogger in solo) asks "does this hit down the player?". WaW's
+// stock body never takes health: a hit below current health only marks the
+// attacker and returns; otherwise the player goes down. BO2's function of
+// that name is its damage callback (it needs a weapon name and returns the
+// damage to apply), so a downing hit goes through native damage instead,
+// letting BO2's last stand, solo revive and game over decide the rest.
+waw_player_damage_override( einflictor, eattacker, idamage, idflags, smeansofdeath, sweapon, vpoint, vdir, shitloc, modelindex, psoffsettime )
+{
+    if ( !isdefined( idamage ) || idamage < self.health )
+    {
+        if ( isdefined( eattacker ) )
+            eattacker.sound_damage_player = self;
+        return;
+    }
+    if ( self maps\mp\zombies\_zm_laststand::player_is_in_laststand() )
+        return;
+    origin = self.origin;
+    if ( isdefined( vpoint ) )
+        origin = vpoint;
+    self dodamage( self.health + 100, origin );
+}
+
+// ---- stock WaW map policies (gscport stock_map_policies; never custom maps) ----
+
+waw_stock_perk_cost( perk, cost )
+{
+    policy = level.waw2bo2_solo_revive;
+    if ( isdefined( policy ) && perk == policy["perk"] && flag( "solo_game" ) )
+        return policy["cost"];
+    return cost;
+}
+
+// BO-style solo Quick Revive on retail WaW maps: the machine's hint shows
+// the solo price, each purchase registers the one life BO2's last stand
+// spends on a self revive, and after the limit the machine stops selling.
+waw_stock_solo_revive()
+{
+    policy = level.waw2bo2_solo_revive;
+    flag_wait( "initial_players_connected" );
+    if ( !flag( "solo_game" ) )
+        return;
+    if ( !isdefined( level.solo_lives_given ) )
+        level.solo_lives_given = 0;
+    machines = getentarray( "zombie_vending", "targetname" );
+    foreach ( machine in machines )
+        if ( isdefined( machine.script_noteworthy ) && machine.script_noteworthy == policy["perk"] )
+            machine thread waw_stock_solo_revive_machine( policy );
+}
+
+waw_stock_solo_revive_machine( policy )
+{
+    self endon( "death" );
+    level endon( "waw2bo2_solo_revive_spent" );
+    self thread waw_stock_solo_revive_spent();
+    for ( ;; )
+    {
+        // after the source's own power-on hint
+        level waittill( policy["perk"] + "_power_on" );
+        waittillframeend;
+        if ( level.solo_lives_given < policy["limit"] )
+            self sethintstring( policy["hint"], policy["cost"] );
+    }
+}
+
+waw_stock_solo_revive_spent()
+{
+    self endon( "death" );
+    level waittill( "waw2bo2_solo_revive_spent" );
+    self sethintstring( "" );
+    self trigger_off();
+}
+
+waw_stock_solo_revive_bought()
+{
+    self.lives = 1;
+    level.solo_lives_given++;
+    if ( level.solo_lives_given >= level.waw2bo2_solo_revive["limit"] )
+        level notify( "waw2bo2_solo_revive_spent" );
+}
+
+// WaW's ai_calculate_health grows level.zombie_health once per round (+increase
+// before round 10, then +int(health * percent)) with no guard, so the 32-bit
+// value wraps; an overflowed round spawns zombies at round-1 health (the
+// retail "insta-kill rounds"). BO2's recomputation keeps the last value
+// instead. After BO2 sets the round's health (zombie_total_set, before the
+// first spawn) the WaW sequence replaces it.
+waw_stock_health_overflow()
+{
+    level endon( "end_game" );
+    for ( ;; )
+    {
+        level waittill( "zombie_total_set" );
+        level.zombie_health = waw_round_health( level.round_number );
+    }
+}
+
+waw_round_health( round )
+{
+    start = level.zombie_vars["zombie_health_start"];
+    percent = level.zombie_vars["zombie_health_increase_multiplier"];
+    if ( isdefined( level.zombie_vars["zombie_health_increase_percent"] ) )
+        percent = level.zombie_vars["zombie_health_increase_percent"];
+    health = start;
+    for ( i = 2; i <= round; i++ )
+    {
+        if ( i >= 10 )
+            health = health + int( health * percent );
+        else
+            health = int( health + level.zombie_vars["zombie_health_increase"] );
+    }
+    if ( health <= 0 )
+        return start;
+    return health;
 }
 
 // ---- miscellaneous WaW builtins ----

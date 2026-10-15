@@ -227,7 +227,8 @@ class CustomIntermissionTests(unittest.TestCase):
         self.assertIn("rocket hide();", prelude)
         self.assertNotIn("waittill", prelude[:prelude.index("}")])
         fn = core[core.index("zombiemode__player_intermission()"):]
-        self.assertIn("rocket linkTo( org );", fn)
+        # linkto runs through compat (linked trigger volumes keep WaW contacts)
+        self.assertIn("rocket maps\mp\waw\_waw2bo2_compat::waw_linkto( org );", fn)
         # BO2 views intermissions through the script camera on a networked model
         self.assertIn("self.waw_intermission_cam linkto( org );", fn)
         self.assertIn("self camerasetposition( self.waw_intermission_cam );", fn)

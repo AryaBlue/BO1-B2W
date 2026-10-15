@@ -1351,7 +1351,8 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
                  waw_source_dumps: Path | None = None, wavelet_binary: Path | None = None,
                  audio_decoder: Path | None = None, xwma_decoder: Path | None = None,
                  t6_sound_driver: Path | None = None, approximate_sound_curves: bool = False,
-                 bo2_stock_perks: bool = False, remaster_bo2_materials: bool = False) -> StageReport:
+                 bo2_stock_perks: bool = False, remaster_bo2_materials: bool = False,
+                 waw_stock_map: bool = False) -> StageReport:
     """Stage everything the bridge links. ``extra_roots`` are unlinker dumps of
     the zones WaW loads with the map (mod.ff, common.ff): references the map
     zone does not define resolve there, in that order."""
@@ -1460,6 +1461,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
         script_models |= port_scripts(report, stage, project_root, waw_map_script, bo2_root, waw_script_roots or [],
                                       iwd_dirs or [], waw_stock_scripts, t6_unlinker, roots, clip,
                                       stock_waw, source_waw, bo2_stock_perks=bo2_stock_perks,
+                                      waw_stock_map=waw_stock_map,
                                       stock_variant_roots=[r / "raw" for r in (waw_mod_tools, waw_root) if r is not None])
         fx_names = list(report.scripts.get("fx", [])) if report.scripts else []
         # Weapons first: their resolution widens the roots (stock WaW dumps for
@@ -2384,7 +2386,7 @@ def recover_script_models(report: StageReport, wanted: set[str], roots: list[Pat
 def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_script: Path, bo2_root: Path,
                  roots: list[Path], iwd_dirs: list[Path], stock: Path | None,
                  t6_unlinker: Path | None, model_roots: list[Path], clip=None,
-                 stock_waw=None, source_waw=None, *, bo2_stock_perks: bool = False,
+                 stock_waw=None, source_waw=None, *, bo2_stock_perks: bool = False, waw_stock_map: bool = False,
                  stock_variant_roots: list[Path] | None = None) -> set[str]:
     """Translate the WaW map's gameplay scripts (gscport). Returns the WaW
     models the scripts use that the map zone must carry."""
@@ -2414,7 +2416,7 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
                                            api=api, map_name=map_name, stock_waw=stock_waw, actor_types=actor_types)
     port = gscport.port_map(sources, api, map_name, project_root, animtrees=animtrees, core_animtrees=core_trees,
                             bo2_stock_perks=bo2_stock_perks, actor_types=actor_types,
-                            actor_template=actor_template)
+                            actor_template=actor_template, stock_map=waw_stock_map)
     if actor_types:
         gscport.zombieappearance.bind_actor_types(project_root, actor_types)
     report.scripts = port.to_json()
@@ -2517,8 +2519,11 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
         shaders |= {m for b, m in ENGINE_BUILTIN_MATERIALS.items() if re.search(rf"\b{b}\s*\(", text, re.I)}
     stock_materials = api.stock_assets.get("material", set())
     hud = []
+    # a stock policy's WaW HUD (round counter chalk) is converted even when
+    # BO2 ships a material of that name; materialisolation renames it
+    waw_hud = set(port.waw_hud_materials)
     for name in sorted(shaders):
-        if name.lower() in stock_materials:
+        if name.lower() in stock_materials and name not in waw_hud:
             continue
         if any((r / techsets.oat_material_path(name)).exists() for r in model_roots):
             hud.append(name)

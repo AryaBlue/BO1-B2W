@@ -70,7 +70,8 @@ class ContactKillTranslationTests(unittest.TestCase):
         translated = gsc.emit(script.tokens)
         self.assertIn('::waw_oktospawn()', translated)
         self.assertIn('wait .75;', translated)
-        self.assertIn('self DoDamage(self.health+600,self.origin)', translated)
+        # the source's delayed kill is guarded: T6 may already have removed the actor
+        self.assertIn(r'self maps\mp\waw\_waw2bo2_compat::waw_dodamage(self.health+600,self.origin)', translated)
 
     def test_ordinary_attacks_and_exploding_enemies_are_unchanged(self):
         for text in (self.source.replace('self.health + 666', '10'),

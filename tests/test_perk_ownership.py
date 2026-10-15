@@ -82,7 +82,11 @@ class PerkOwnershipTests(unittest.TestCase):
                 '#include maps\\mp\\zombies\\_zm_perks;\n'
                 'init() { maps\\mp\\zombies\\_zm_perks::init(); '
                 'maps\\mp\\zombies\\_zm_score::init();\n'
-                '    level.gamedifficulty = getgametypesetting( "zmDifficulty" );\n}\n')
+                '    level.gamedifficulty = getgametypesetting( "zmDifficulty" );\n}\n'
+                'round_think()\n{\n    setroundsplayed( level.round_number );\n'
+                '    for (;;)\n    {\n        level.round_number++;\n\n'
+                '        if ( 255 < level.round_number )\n            level.round_number = 255;\n\n'
+                '        setroundsplayed( level.round_number );\n    }\n}\n')
             out = root / 'out'
             client_stock = self.write_client_stock(root)
             gscport.stage_bo2_perk_support(out, root / 'bo2')
@@ -128,6 +132,12 @@ class PerkOwnershipTests(unittest.TestCase):
             # WaW zombie speed whatever the lobby difficulty
             self.assertIn('level.gamedifficulty = 1;', bootstrap_server.read_text())
             self.assertNotIn('zmDifficulty', bootstrap_server.read_text())
+            # stock maps draw WaW's round counter: no 8-bit display, no 255 clamp
+            server_text = bootstrap_server.read_text()
+            self.assertEqual(server_text.count('waw2bo2_setroundsplayed( level.round_number );'), 2)
+            self.assertIn('if ( 255 < level.round_number && !( isdefined( level.waw2bo2_waw_round_counter )',
+                          server_text)
+            self.assertIn('waw2bo2_setroundsplayed( round )', server_text)
             server_main = out / 'maps/mp/any_project.gsc'
             server_main.write_text('main() { maps\\mp\\zombies\\_zm::init(); '
                                    'level thread maps\\mp\\zombies\\_zm_perks::perk_unpause_all_perks(); }')

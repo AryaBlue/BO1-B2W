@@ -23,8 +23,23 @@
     "  below remain valid if a caller deliberately disables full template extraction.",
     "zombie_runtime: source speed selector contract and native spawn callback/location adaptation; preserve source bodies, not map-name speed presets.",
     "library_functions: functions of third-party WaW map libraries -> compat waw_<value>, where BO2 has the native",
-    "  feature the library worked around (e.g. treminaor's trem_hintstrings drew hints through a WaW menu)."
+    "  feature the library worked around (e.g. treminaor's trem_hintstrings drew hints through a WaW menu).",
+    "stock_map_policies: behaviour applied ONLY when the source is a retail WaW level (its fastfile is in the WaW",
+    "  install's zone folder; --waw-stock-map). Custom maps keep their own logic. solo_quick_revive (user request",
+    "  2026-10-14): BO-style solo Quick Revive (solo_cost, one self-revive life per purchase, solo_purchase_limit",
+    "  purchases, BO2's own solo_hint key). waw_health_overflow (user request 2026-10-14): WaW's incremental zombie",
+    "  health wraps at 32 bits and an overflowed round spawns at round-1 health ('insta-kill rounds'); BO2 clamps it.",
+    "  The source health code gives no exclusion signal: excluded_levels is the user's explicit list (Der Riese).",
+    "  waw_round_counter (user request 2026-10-14): the source round display functions replace BO2's 8-bit",
+    "  setroundsplayed counter and its 255 round clamp; their HUD materials stay WaW (isolated from BO2's names)."
   ],
+  "stock_map_policies": {
+    "solo_quick_revive": {"perk": "specialty_quickrevive", "solo_cost": 500, "solo_purchase_limit": 3,
+                          "solo_hint": "ZOMBIE_PERK_QUICKREVIVE_SOLO"},
+    "waw_health_overflow": {"excluded_levels": ["nazi_zombie_factory"]},
+    "waw_round_counter": {"round_start": "chalk_one_up", "round_end": "chalk_round_hint",
+                          "state_init": "round_start", "precache_functions": ["precache_shaders", "init", "main"]}
+  },
   "tesla_runtime": {
     "source_script": "maps\\_zombiemode_tesla",
     "initialize": "init",
@@ -118,7 +133,8 @@
     "set_hint_string": "maps\\mp\\waw\\_waw2bo2_compat::waw_set_hint_string",
     "include_weapon": "maps\\mp\\waw\\_waw2bo2_compat::waw_include_weapon",
     "add_zombie_weapon": "maps\\mp\\waw\\_waw2bo2_compat::waw_add_zombie_weapon",
-    "manage_zones": "maps\\mp\\waw\\_waw2bo2_compat::waw_manage_zones"
+    "manage_zones": "maps\\mp\\waw\\_waw2bo2_compat::waw_manage_zones",
+    "player_damage_override": "maps\\mp\\waw\\_waw2bo2_compat::waw_player_damage_override"
   },
   "hud_cleanup_wrappers": {
     "maps\\mp\\gametypes_zm\\_hud_util::destroyelem": "waw_destroy_hud_elem",
@@ -166,7 +182,9 @@
     "setperk",
     "unsetperk",
     "hasperk",
-    "precachemodel"
+    "precachemodel",
+    "linkto",
+    "dodamage"
   ],
   "no_extract": [
     "maps\\_zombiemode",

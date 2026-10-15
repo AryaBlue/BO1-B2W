@@ -136,16 +136,20 @@ class ZombieAppearanceAndHudTests(unittest.TestCase):
         self.assertIn('::waw_fontscale( base + offset )', result)
         self.assertIn('label = "fontscale = 8.0";', result)
 
-    def test_quick_revive_registers_a_solo_life_without_duplicate_stock_grant(self):
+    def test_solo_quick_revive_life_is_a_stock_map_policy_only(self):
         source = (gscport.COMPAT_DIR / '_waw2bo2_compat.gsc').read_text()
         script = gsc.parse(source, 'compat')
         fn = script.functions['waw_setperk']
         body = gsc.emit(script.tokens[fn.body_open:fn.body_close + 1])
-        self.assertIn('getnumconnectedplayers() == 1', body)
-        self.assertIn('perk == "specialty_quickrevive"', body)
-        self.assertIn('self.lives = 1;', body)
+        # custom maps keep their own solo revive logic: the life is only
+        # registered when the stock map policy is present
+        self.assertIn('isdefined( level.waw2bo2_solo_revive )', body)
+        self.assertIn('waw_stock_solo_revive_bought()', body)
+        self.assertNotIn('self.lives = 1;', body)
         self.assertLess(body.index('::give_perk'), body.index('self setperk'))
         self.assertIn('return;', body[body.index('::give_perk'):body.index('self setperk')])
+        bought = script.functions['waw_stock_solo_revive_bought']
+        self.assertIn('self.lives = 1;', gsc.emit(script.tokens[bought.body_open:bought.body_close + 1]))
 
     def test_actor_scripts_can_resolve_stock_mod_tools_sources_after_map_overrides(self):
         with tempfile.TemporaryDirectory() as tmp:
