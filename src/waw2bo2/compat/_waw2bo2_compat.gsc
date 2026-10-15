@@ -292,6 +292,7 @@ waw_startragdoll( arg )
             self.waw_ragdoll_pending = 1;
             self setplayercollision( 0 );
             self thread waw_ragdoll_after_death();
+            self thread waw_ragdoll_doomed();
         }
         return;
     }
@@ -314,6 +315,42 @@ waw_launchragdoll( force, bone )
         self launchragdoll( force, bone );
     else
         self launchragdoll( force );
+}
+
+// A WaW ragdolled live actor is out of play at once: a limp body thrown by
+// the launch until its script kills it (flogger and KF2 0.75 s, bridge 1 s,
+// zipline and shield/baby-gun kicks in the same frame; the delayed kills all
+// pass no attacker). T6 cannot ragdoll a living actor, so a zombie its script
+// did not kill within the frame dies at frame end without an attacker, and
+// its body takes the launch. A same-frame kill keeps its own attribution.
+waw_ragdoll_doomed()
+{
+    self endon( "death" );
+    waittillframeend;
+    if ( isdefined( self ) && isalive( self ) )
+        self dodamage( self.health + 666, self.origin );
+}
+
+// WaW scripts damage their ragdolled actor again after a wait; T6 has
+// already removed it at the earlier death (see waw_ragdoll_doomed).
+waw_dodamage( amount, origin, attacker, inflictor, hitloc, mod, flags, weapon )
+{
+    if ( !isdefined( self ) )
+        return;
+    if ( isdefined( weapon ) )
+        self dodamage( amount, origin, attacker, inflictor, hitloc, mod, flags, weapon );
+    else if ( isdefined( flags ) )
+        self dodamage( amount, origin, attacker, inflictor, hitloc, mod, flags );
+    else if ( isdefined( mod ) )
+        self dodamage( amount, origin, attacker, inflictor, hitloc, mod );
+    else if ( isdefined( hitloc ) )
+        self dodamage( amount, origin, attacker, inflictor, hitloc );
+    else if ( isdefined( inflictor ) )
+        self dodamage( amount, origin, attacker, inflictor );
+    else if ( isdefined( attacker ) )
+        self dodamage( amount, origin, attacker );
+    else
+        self dodamage( amount, origin );
 }
 
 waw_ragdoll_after_death()

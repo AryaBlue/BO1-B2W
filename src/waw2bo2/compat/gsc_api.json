@@ -183,7 +183,8 @@
     "unsetperk",
     "hasperk",
     "precachemodel",
-    "linkto"
+    "linkto",
+    "dodamage"
   ],
   "no_extract": [
     "maps\\_zombiemode",

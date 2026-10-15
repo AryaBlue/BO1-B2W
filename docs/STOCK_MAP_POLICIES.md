@@ -106,3 +106,20 @@ volume) dies 3.35 s after activation; a floating zombie took ~6 s before.
   floor under the log is z -681). Probe artifact: a player held 1 unit inside
   the floor takes fall damage, which sets BO2's `self.intermission` and makes
   the player immune for the rest of the test.
+
+## Live ragdolls die at frame end (all maps)
+
+User report: the flogger needed two hits. Measured: one hit killed, but
+0.75 s later (the source's delayed `dodamage`); WaW throws the zombie as a
+live ragdoll at once, while T6 cannot ragdoll a living actor, so the zombie
+kept walking about one log revolution. Every WaW use found ragdolls a doomed
+actor: flogger and KF2 zeds kill it 0.75 s later, the bridge 1 s later (all
+without an attacker); zipline, shield and baby-gun kicks kill it in the same
+frame, with the player credited. `waw_startragdoll` now kills a live actor
+its script did not kill within that frame at frame end (no attacker) and the
+body takes the launch; same-frame kills keep their attribution. `dodamage`
+goes through `waw_dodamage`, which ignores an actor T6 already removed (the
+source's later kill). Live: hit and death at the same server time
+(26200 ms; before: death 750 ms after the hit), zero script runtime errors.
+A source branch that ragdolls without ever killing now ends in that frame-end
+death instead of a permanent live ragdoll.

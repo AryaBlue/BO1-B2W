@@ -330,7 +330,7 @@ def bridge_contact_kill_attacks(tokens: list[gsc.Token], script: gsc.Script) -> 
                 and re.search(r"distance\(self\.origin,[a-z_]\w*\[[^]]+\]\.origin\)<=\d", code)
                 and re.search(r"self(?:\S*::waw_)?startragdoll\(\)", code)
                 and re.search(r"self(?:\S*::waw_)?launchragdoll\(", code)
-                and re.search(r"selfdodamage\(self\.health\+\d", code)
+                and re.search(r"self(?:\S*::waw_)?dodamage\(self\.health\+\d", code)
                 and "wait" in code):
             continue
         # A source function returning a value is not this monitor pattern.

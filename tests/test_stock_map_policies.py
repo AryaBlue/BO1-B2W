@@ -177,6 +177,18 @@ class StockMapPolicyTests(unittest.TestCase):
         self.assertIn('materials["h" + "ud_chalk_1"] = "waw_world/hud_chalk_1";', source)
         self.assertNotIn('"hud_chalk_1"', source)
 
+    def test_live_ragdoll_dies_at_frame_end_unless_its_script_killed_it(self):
+        script = gsc.parse((gscport.COMPAT_DIR / "_waw2bo2_compat.gsc").read_text(), "compat")
+        start = script.functions["waw_startragdoll"]
+        self.assertIn("waw_ragdoll_doomed", gsc.emit(script.tokens[start.body_open:start.body_close + 1]))
+        doomed = script.functions["waw_ragdoll_doomed"]
+        body = gsc.emit(script.tokens[doomed.body_open:doomed.body_close + 1])
+        self.assertLess(body.index("waittillframeend"), body.index("dodamage"))
+        self.assertIn("isalive( self )", body)
+        guard = script.functions["waw_dodamage"]
+        self.assertIn("if ( !isdefined( self ) )", gsc.emit(script.tokens[guard.body_open:guard.body_close + 1]))
+        self.assertIn("dodamage", gscport.API["compat_wrappers"])
+
     def test_explicit_waw_damage_override_call_keeps_waw_semantics(self):
         self.assertEqual(gscport.API["function_renames"]["player_damage_override"],
                          "maps\\mp\\waw\\_waw2bo2_compat::waw_player_damage_override")
