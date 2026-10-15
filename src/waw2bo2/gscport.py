@@ -1939,6 +1939,10 @@ class Translator:
         if dogs['health'] in script.functions:
             health = f"{CORE}::{self.extract_entry(source, dogs['health'])}"
         fog = self.client_fog_monitors(dogs['client_notifies'])
+        # The owned BO2 dog runtime loads its effects through waw_loadfx_native:
+        # convert the source's (same paths: spawn lightning, eyes, trails, gib).
+        self.report.fx += re.findall(r'\bloadfx\s*\(\s*"([^"]+)"', self.sources.text.get(source + ".gsc", ""),
+                                     re.IGNORECASE)
         self.report.rewrites[f"WaW dog rounds -> {native} (source spawn selection/health)"] += 1
         guard = f"level.{dogs['guard']}"
         threads = "".join(f" level thread {CORE}::{name}();" for name in fog)
@@ -3224,7 +3228,10 @@ def owned_dogs_source(bo2_root: Path) -> str:
         if old not in text:
             raise ValueError(f'{native}: dog music state "{state}" not found')
         text = text.replace(old, f'level thread maps\\mp\\zombies\\_zm_utility::play_sound_2d( "waw/{waw}" );')
-    return ('// waw2bo2: BO2 dog rounds playing the source WaW dog sounds (generated).\n' +
+    # Effects: WaW's dog script loads the same paths (spawn lightning, eyes,
+    # trails, gib); prefer its converted effects (dog_rounds_hook queues them).
+    text = re.sub(r'\bloadfx\s*\(', lambda _: f'{COMPAT}::waw_loadfx_native(', text, flags=re.IGNORECASE)
+    return ('// waw2bo2: BO2 dog rounds playing the source WaW dog sounds and effects (generated).\n' +
             text.replace(native + '::', owned + '::'))
 
 

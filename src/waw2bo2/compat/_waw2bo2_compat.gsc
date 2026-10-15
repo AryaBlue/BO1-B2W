@@ -392,6 +392,15 @@ waw_loadfx( name )
     return undefined;
 }
 
+// BO2 runtime copies (dog rounds) load the same paths WaW's scripts did; the
+// map zone carries WaW's converted effect, not BO2's (a Tranzit asset).
+waw_loadfx_native( name )
+{
+    if ( isdefined( level.waw2bo2_fx ) && isdefined( level.waw2bo2_fx[name] ) )
+        return waw_loadfx( name );
+    return loadfx( name );
+}
+
 waw_playfx( fx, origin, forward, up )
 {
     if ( !isdefined( fx ) || !isdefined( origin ) )

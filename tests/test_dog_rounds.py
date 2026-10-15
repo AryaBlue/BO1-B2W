@@ -1,3 +1,4 @@
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -46,6 +47,7 @@ precache( ai_index )
 DOGS = '''init()
 {
 	if ( !IsDefined( level.dogs_enabled ) ) return;
+	level._effect[ "lightning_dog_spawn" ] = Loadfx( "maps/zombie/fx_zombie_dog_lightning_buildup" );
 	level thread dog_round_tracker();
 }
 dog_round_spawning()
@@ -119,6 +121,8 @@ class DogRoundTests(unittest.TestCase):
             self.assertIn('level waittill( "last_dog_down" );\n\t\twait 2;', fog)
             self.assertIn("waw_setvolfog( 404.39, 1543.52, 460.33, -244.014, 0.65, 0.84, 0.79, 6 );", fog)
             self.assertNotIn("VisionSetNaked", fog)
+            # the source dog effects are converted for the owned BO2 dog runtime
+            self.assertIn("maps/zombie/fx_zombie_dog_lightning_buildup", tr.report.fx)
 
     def test_owned_dog_runtime_plays_the_source_dog_sounds(self):
         bo2 = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Call of Duty Black Ops II")
@@ -131,6 +135,10 @@ class DogRoundTests(unittest.TestCase):
         self.assertIn('play_sound_2d( "waw/bright_sting" )', text)
         self.assertNotIn('"zmb_hellhound_prespawn"', text)
         self.assertNotIn("maps\\mp\\zombies\\_zm_ai_dogs::", text)
+        # the spawn lightning and other dog effects prefer WaW's converted ones
+        self.assertIn('level._effect["lightning_dog_spawn"] = maps\\mp\\waw\\_waw2bo2_compat::waw_loadfx_native( '
+                      '"maps/zombie/fx_zombie_dog_lightning_buildup" );', text)
+        self.assertNotIn(" loadfx(", text)
 
     def test_owned_dog_tree_restarts_attacks_and_jumps_windows(self):
         bo2 = Path(r"C:\Program Files (x86)\Steam\steamapps\common\Call of Duty Black Ops II")
