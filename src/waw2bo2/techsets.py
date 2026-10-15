@@ -381,6 +381,15 @@ def build_material(t4: dict, donor: dict, notes: list[str]) -> dict:
             c["literal"] = [1.0, 1.0, 1.0, 1.0]
         consts.append(c)
     out["constants"] = consts
+    # Two-sided source materials (wires, foliage cards, the flogger's wire)
+    # draw both faces; the donor's states cull back faces, so only one side
+    # showed. Keep the source's cull mode on every converted pass.
+    source_states = t4.get('stateBits', [])
+    color = [s for s in source_states if s.get('colorWriteRgb')]
+    if color and all(s.get('cullFace') == 'none' for s in color):
+        for state in out.get('stateBits', []):
+            if 'cullFace' in state:
+                state['cullFace'] = 'none'
     source = parse(t4.get('techniqueSet', ''))
     if source.family == 'world' and source.unlit_kind in ('unlit', 'unlit_blend', 'unlit_distfalloff', 'unlit_falloff_add'):
         entries = t4.get('stateBitsEntry', [])

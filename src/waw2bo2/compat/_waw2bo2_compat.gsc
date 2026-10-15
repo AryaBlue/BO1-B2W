@@ -1797,13 +1797,11 @@ waw_linked_trigger_contacts( parent )
         angles = self.angles;
         if ( angles == last )
             continue;
+        previous = last;
         last = angles;
         // trigger_off parks the volume far from its parent
         if ( abs( distance( self.origin, parent.origin ) - offset ) > 1000 )
             continue;
-        forward = anglestoforward( angles );
-        right = anglestoright( angles );
-        up = anglestoup( angles );
         candidates = [];
         if ( flags & 1 )
             candidates = arraycombine( candidates, getaiarray( "axis" ), 0, 0 );
@@ -1813,14 +1811,50 @@ waw_linked_trigger_contacts( parent )
             candidates = arraycombine( candidates, getaiarray( "neutral" ), 0, 0 );
         if ( !( flags & 8 ) )
             candidates = arraycombine( candidates, getplayers(), 0, 0 );
+        // A fast rotor (the flogger, ~23 degrees a frame) can pass over an
+        // actor between frames: test the angles swept since the last frame.
+        steps = [];
+        for ( s = 1; s <= 4; s++ )
+            steps[steps.size] = waw_lerp_angles( previous, angles, s / 4 );
         foreach ( ent in candidates )
         {
             if ( !isdefined( ent ) || !isalive( ent ) || ent istouching( self ) )
                 continue;
-            if ( waw_box_touches_oriented( ent getabsmins(), ent getabsmaxs(), self.origin, forward, right, up, mins, maxs ) )
-                self notify( "trigger", ent );
+            lo = ent getabsmins();
+            hi = ent getabsmaxs();
+            if ( isai( ent ) )
+            {
+                // WaW actors are 72 units tall and 15 in radius; T6's zombie
+                // bounds are 50 tall, missing hits WaW would register.
+                lo = ent.origin + ( -15, -15, 0 );
+                hi = ent.origin + ( 15, 15, 72 );
+            }
+            foreach ( step in steps )
+            {
+                if ( waw_box_touches_oriented( lo, hi, self.origin, anglestoforward( step ), anglestoright( step ),
+                    anglestoup( step ), mins, maxs ) )
+                {
+                    self notify( "trigger", ent );
+                    break;
+                }
+            }
         }
     }
+}
+
+waw_lerp_angles( from, to, t )
+{
+    out = [];
+    for ( i = 0; i < 3; i++ )
+    {
+        delta = to[i] - from[i];
+        while ( delta > 180 )
+            delta -= 360;
+        while ( delta < -180 )
+            delta += 360;
+        out[i] = from[i] + delta * t;
+    }
+    return ( out[0], out[1], out[2] );
 }
 
 waw_box_touches_oriented( lo, hi, origin, forward, right, up, mins, maxs )

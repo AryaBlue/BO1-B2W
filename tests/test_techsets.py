@@ -39,6 +39,19 @@ class HudTechniqueTests(unittest.TestCase):
         self.assertNotIn("thermalMaterial", out)
         self.assertEqual(out["textures"][0]["image"], "waw_body")
 
+    def test_two_sided_source_keeps_both_faces(self):
+        donor = {"techniqueSet": "mc_lit_sm_r0c0_x", "textures": [],
+                 "stateBits": [{"cullFace": "back", "colorWriteRgb": False},
+                               {"cullFace": "back", "colorWriteRgb": True}]}
+        two_sided = {"stateBits": [{"cullFace": "back", "colorWriteRgb": False},
+                                   {"cullFace": "none", "colorWriteRgb": True}]}
+        out = techsets.build_material(two_sided, donor, [])
+        self.assertEqual([s["cullFace"] for s in out["stateBits"]], ["none", "none"])
+        one_sided = {"stateBits": [{"cullFace": "back", "colorWriteRgb": True}]}
+        out = techsets.build_material(one_sided, donor, [])
+        self.assertEqual([s["cullFace"] for s in out["stateBits"]], ["back", "back"])
+        self.assertEqual(donor["stateBits"][0]["cullFace"], "back")    # the donor is not modified
+
 
 if __name__ == "__main__":
     unittest.main()
