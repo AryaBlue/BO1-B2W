@@ -514,6 +514,45 @@ def bridge_player_stat_reads(tokens: list[gsc.Token]) -> int:
     return count
 
 
+def bridge_stock_perk_costs(tokens: list[gsc.Token], policies: dict) -> int:
+    """Stock WaW maps only: a perk machine's cost assignment under its case
+    label (``case "specialty_quickrevive": cost = 1500;``) asks the stock map
+    policy, which keeps the source cost unless a policy (BO-style solo Quick
+    Revive) prices that perk differently for the current game."""
+    perks = {p["perk"] for name, p in policies.items() if not name.startswith("_") and "solo_cost" in p}
+    rewrites = 0
+    for i in range(len(tokens) - 5):
+        if tokens[i].low != "case" or tokens[i + 1].kind != gsc.STRING or tokens[i + 1].text.strip('"') not in perks:
+            continue
+        if tokens[i + 2].text != ":" or tokens[i + 3].kind != gsc.IDENT or tokens[i + 4].text != "=":
+            continue
+        end = next((j for j in range(i + 5, len(tokens)) if tokens[j].text == ";"), None)
+        if end is None or end == i + 5:
+            continue
+        tokens[i + 5].text = f"{COMPAT}::waw_stock_perk_cost( {tokens[i + 1].text}, {tokens[i + 5].text}"
+        tokens[end - 1].text += " )"
+        rewrites += 1
+    return rewrites
+
+
+def stock_map_policy(policies: dict, level: str) -> str:
+    """Level state for gsc_api.json stock_map_policies (stock WaW maps only).
+    ``level``: the source level name (WaW level.script)."""
+    revive = policies["solo_quick_revive"]
+    lines = ["", "// stock WaW map policies (gsc_api.json stock_map_policies); custom maps keep their own logic",
+             "waw2bo2_stock_map_policies()", "{",
+             "\tlevel.waw2bo2_solo_revive = [];",
+             f'\tlevel.waw2bo2_solo_revive["perk"] = "{revive["perk"]}";',
+             f'\tlevel.waw2bo2_solo_revive["cost"] = {int(revive["solo_cost"])};',
+             f'\tlevel.waw2bo2_solo_revive["limit"] = {int(revive["solo_purchase_limit"])};',
+             f'\tlevel.waw2bo2_solo_revive["hint"] = &"{revive["solo_hint"]}";',
+             f'\tprecachestring( &"{revive["solo_hint"]}" );',
+             f"\tlevel thread {COMPAT}::waw_stock_solo_revive();"]
+    if level not in policies["waw_health_overflow"]["excluded_levels"]:
+        lines.append(f"\tlevel thread {COMPAT}::waw_stock_health_overflow();")
+    return "\n".join(lines + ["}", ""])
+
+
 def bridge_font_scales(tokens: list[gsc.Token]) -> int:
     """Preserve WaW's effective networked scale, including calculated values."""
     import math
@@ -685,7 +724,8 @@ def bridge_intermission_camera(tokens: list[gsc.Token]) -> int:
     keeps the mover's path and rotation. The WaW link is kept."""
     count = 0
     for i in range(1, len(tokens) - 4):
-        if tokens[i].low != "linkto" or tokens[i - 1].low != "self" or tokens[i + 1].text != "(":
+        if tokens[i].low not in ("linkto", f"{COMPAT}::waw_linkto".lower()) or tokens[i - 1].low != "self" \
+                or tokens[i + 1].text != "(":
             continue
         close = gsc._match(tokens, i + 1, "(", ")")
         mover = tokens[i + 2]
@@ -821,6 +861,7 @@ class Translator:
         self.animation_discovery = False
         self.animation_requirements: dict[str, set[str]] = defaultdict(set)
         self.bo2_stock_perks = False
+        self.stock_map = False
         # stock-perks mode: WaW perk scripts -> functions that stay WaW's
         # (Pack-a-Punch, power relays; waw_pack_a_punch_source)
         self.waw_perk_parts: dict[str, set[str]] = {}
@@ -1019,6 +1060,8 @@ class Translator:
         self.report.rewrites["WaW being_revived reads bridged to T6 revive state"] += bridge_revive_reads(tokens)
         self.report.rewrites["WaW session stat reads bridged to T6 counters"] += bridge_player_stat_reads(tokens)
         self.report.rewrites["WaW HUD network font scales decoded"] += bridge_font_scales(tokens)
+        if self.stock_map:
+            self.report.rewrites["stock WaW map perk costs -> stock map policy"] +=                 bridge_stock_perk_costs(tokens, API["stock_map_policies"])
         header = (f"// Translated from World at War by waw2bo2 (gscport). Source: {where_file}\n")
         return header + gsc.emit(tokens)
 
@@ -1401,6 +1444,61 @@ class Translator:
                                       f"\tmaps\\mp\\zombies\\_zm::register_player_damage_callback( ::{name} );\n}}\n")
         return f"{name}_register"
 
+    def extract_round_total(self, core: str = None, function: str = None) -> str | None:
+        """WaW's round_spawning computes the round's zombie count inline
+        (solo stays at zombie_max_ai, ramped by 0.2/0.4/0.6/0.8 on rounds 1-4);
+        BO2's _zm adds its own per-player term and ramp, then asks
+        level.max_zombie_func. The source statements from the first assignment
+        of the variable stored into level.zombie_total up to that store become
+        the BO2 max function, so the map's (or stock) formula decides the count.
+        Returns the registration function's name in CORE."""
+        core = core or ZOMBIEMODE
+        function = function or ROUND_SPAWNING
+        script = self.sources.get(core)
+        fn = script.functions.get(function) if script else None
+        if fn is None:
+            return None
+        toks = script.tokens
+        where = self.sources.origin.get(core + ".gsc", core)
+        spans = top_level_statements(toks, fn.body_open, fn.body_close)
+        store = None
+        for i, (start, end) in enumerate(spans):
+            words = [t.low for t in toks[start:end]]
+            if words[:4] == ["level", ".", "zombie_total", "="] and len(words) == 6 and words[5] == ";" \
+                    and toks[start + 4].kind == gsc.IDENT:
+                store = i
+                break
+        if store is None:
+            self.report.errors.append(f"{where}: {function} sets no level.zombie_total from a local; the "
+                                      f"source round count formula is not ported")
+            return None
+        total = toks[spans[store][0] + 4].low
+        first = next((i for i, (start, end) in enumerate(spans[:store])
+                      if toks[start].low == total and toks[start + 1].text == "="), None)
+        if first is None:
+            return None
+        # Locals set before the formula (players, count) would be undefined here.
+        earlier = {toks[start].low for start, end in spans[:first]
+                   if toks[start].kind == gsc.IDENT and toks[start + 1].text == "="}
+        body = [t for start, end in spans[first:store] for t in toks[start:end]]
+        used = {t.low for i, t in enumerate(body) if t.kind == gsc.IDENT and (i == 0 or body[i - 1].text != ".")}
+        if earlier & used:
+            self.report.errors.append(f"{where}: {function} count formula reads earlier locals "
+                                      f"{', '.join(sorted(earlier & used))}; not ported")
+            return None
+        name = f"{core.split(chr(92))[-1].lstrip('_')}__{function}_total"
+        source = (f"{name}( bo2_max )\n{{\n" + gsc.emit([gsc.Token(t.kind, t.text, t.pre, t.line) for t in body])
+                  + f"\n\treturn {toks[spans[store][0] + 4].text};\n}}\n")
+        tokens = gsc.tokenize(source)
+        tokens[0].pre = f"\n// {core}::{function}: the source round count formula, as BO2's max_zombie_func\n"
+        self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
+        self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
+        self.resolve_refs(tokens, script, where, set(CORE_INCLUDES), {0}, extracting=core)
+        self.report.extracted.append(f"{core}::{function} (round count formula -> max_zombie_func)")
+        self.level_state_parts.append(gsc.emit(tokens) + f"\n{name}_register()\n{{\n"
+                                      f"\tlevel.max_zombie_func = ::{name};\n}}\n")
+        return f"{name}_register"
+
     def rewrite_animation_refs(self, tokens: list[gsc.Token], tree: str, where: str,
                                start: int = 0, end: int | None = None) -> None:
         available = self.core_animtrees[tree.lower()]
@@ -1737,11 +1835,15 @@ def discover_animation_dependencies(sources: Sources, api: T6Api, map_name: str,
 def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
              fx_table: dict[str, str] | None = None, animtrees: set[str] | None = None,
              core_animtrees: dict[str, set[str]] | None = None, bo2_stock_perks: bool = False,
-             actor_types: set[str] = frozenset(), actor_template: str | None = None) -> PortReport:
+             actor_types: set[str] = frozenset(), actor_template: str | None = None,
+             stock_map: bool = False) -> PortReport:
     """Translate the map main and everything it reaches into out_root/maps/mp/waw.
     ``animtrees``: animtree names BO2 can load (stock + converted).
     ``core_animtrees``: WaW framework-override animtrees staged for BO2 -> their
-    animations with WaW xanims (t6bridge.stage_core_animtrees)."""
+    animations with WaW xanims (t6bridge.stage_core_animtrees).
+    ``stock_map``: the source is a retail WaW level (its fastfile is in the WaW
+    install's zone folder); gsc_api.json stock_map_policies apply to it only.
+    Custom maps keep their own logic."""
     sources = copy.copy(sources)
     framework_aliases = sources.bind_zombie_framework(f'maps/{map_name}')
     if actor_types:
@@ -1774,6 +1876,7 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
         report.rewrites[f'framework startup {alias} -> {canonical}'] += 1
     tr = Translator(sources, api, report)
     tr.bo2_stock_perks = bo2_stock_perks
+    tr.stock_map = stock_map
     tr.waw_perk_parts = waw_perk_parts
     tr.animtrees = {a.lower() for a in animtrees or ()}
     tr.core_animtrees = {t.lower(): {a.lower() for a in names} for t, names in (core_animtrees or {}).items()}
@@ -1929,6 +2032,14 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
         damage_prelude = tr.extract_damage_prelude(core, function)
         if damage_prelude:
             framework_state.append(damage_prelude)
+    round_total = tr.extract_round_total()
+    if round_total:
+        framework_state.append(round_total)
+    if stock_map:
+        policy = stock_map_policy(API["stock_map_policies"], map_name.lower())
+        core_parts.append(policy)
+        framework_state.append("waw2bo2_stock_map_policies")
+        report.rewrites["stock WaW map policies (solo Quick Revive)"] += 1
     drain()
     core_parts += tr.level_state_parts
     # effects loaded by extracted framework/template functions (e.g. the DLC3
@@ -2209,6 +2320,8 @@ BOX_STATE_INIT = ("maps\\_zombiemode_weapons", "init")
 # _zombiemode::init_anims); only the fields the ported scripts read are kept
 FRAMEWORK_STATE_INITS = (("maps\\_zombiemode", "init_standard_zombie_anims"),)
 DAMAGE_OVERRIDE = "player_damage_override"
+# WaW framework function whose inline formula sets level.zombie_total
+ROUND_SPAWNING = "round_spawning"
 # WaW player damage entry points a map may override with leading rules of its own
 DAMAGE_PRELUDES = [(ZOMBIEMODE, DAMAGE_OVERRIDE), ("maps\\_callbackglobal", "callback_playerdamage")]
 # s: BO2 end_game's intermission wait while a map's own end_game wait runs

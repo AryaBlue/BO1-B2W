@@ -123,6 +123,9 @@ def _build(settings: Settings, *, redump: bool = False, root: Path | None = None
         args += ['--bo2-stock-perks']
     if settings.remaster:
         args += ['--remaster-bo2-materials']
+    if source.parent.is_relative_to((waw / 'zone').resolve()):
+        # a retail WaW level: stock_map_policies apply (never to custom maps)
+        args += ['--waw-stock-map']
     if settings.source_fx:
         args += ['--waw-mod-tools', settings.waw_tools, '--waw-source-fx',
                  '--waw-source-dumps', str(caches.waw / 'source')]

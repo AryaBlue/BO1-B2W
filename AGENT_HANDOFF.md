@@ -1,5 +1,21 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Stock map policies, round count, flogger, 2026-10-14
+
+- Branch `codex/flogger-qr-rounds`; details/limits `docs/STOCK_MAP_POLICIES.md`,
+  evidence `work/flogger_qr_rounds`. 574 tests pass. Shi No Numa rebuilt and
+  installed (backup `work/shi_no_numa_dlc2/build/installed_backup_20261014_flogger_qr`).
+- User rule: QR logic comes from the map; ONLY retail WaW maps (`--waw-stock-map`)
+  get BO-style solo QR (500, self revive, 3 buys). Custom maps lost the old
+  automatic solo life. Insta-kill rounds (WaW 32-bit health wrap -> round-1
+  health) are a stock policy except Der Riese (user's explicit list).
+- Round count = source `round_spawning` formula as `level.max_zombie_func`.
+- Earlier claim "BO2 does not rotate attached triggers" was wrong (measured).
+- NEXT (user request): WaW round counter past 255 for stock maps (BO2's
+  `setroundsplayed` HUD is 8-bit). WaW draws it with script HUD
+  (`_zombiemode::create_chalk_hud` / `chalk_one_up`, `hud_chalk_1..5`).
+- Not pushed; user playtest pending.
+
 ## Stock Shi No Numa DLC2 port, 2026-10-14
 
 - Active branch `codex/shi-no-numa-dlc2-port`; user has not requested its push

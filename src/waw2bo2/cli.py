@@ -266,6 +266,7 @@ def _stage_bridge(args: argparse.Namespace) -> int:
         t6_unlinker=args.t6_unlinker.resolve() if args.t6_unlinker else None,
         fx_fallback=args.fx_fallback,
         bo2_stock_perks=args.bo2_stock_perks,
+        waw_stock_map=args.waw_stock_map,
         remaster_bo2_materials=args.remaster_bo2_materials,
         waw_root=args.waw_root.resolve() if args.waw_root else None,
         t4_unlinker=args.t4_unlinker.resolve() if args.t4_unlinker else None,
@@ -522,6 +523,9 @@ def parser() -> argparse.ArgumentParser:
                            "(each one reported as APPROXIMATED_SOUND_CURVE)")
     sb_p.add_argument('--bo2-stock-perks', action='store_true',
                       help='Stock BO2 perk machines and perk gameplay (the WaW Pack-a-Punch stays); every machine perk needs a BO2 equivalent')
+    sb_p.add_argument('--waw-stock-map', action='store_true',
+                      help='The source is a retail WaW level (its fastfile is in the WaW install zone folder): '
+                           'apply gsc_api.json stock_map_policies; custom maps keep their own logic')
     sb_p.add_argument('--remaster-bo2-materials', action='store_true',
                       help='Draw model materials that are ports of BO2 materials with the original BO2 material '
                            '(textures, specular/gloss, shaders); each one reported as REMASTER')
