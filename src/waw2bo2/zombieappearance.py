@@ -69,11 +69,33 @@ def native_actor(template: str, source_path: str) -> str:
     return '// waw2bo2: source WaW zombie appearance, T6 actor state support.\n' + gsc.emit(tokens)
 
 
-def native_client_actor(name: str) -> str:
+def source_actor_kind(source: str) -> str:
+    """The engine AI type a WaW aitype assigns in main() (``self.type = "dog"``);
+    it selects the native T6 actor family (human zombie, dog)."""
+    script = gsc.parse(source, '<WaW actor>')
+    fn = script.functions.get('main')
+    if fn is not None:
+        toks = script.tokens
+        for i in range(fn.body_open + 1, fn.body_close - 4):
+            if toks[i].low == 'self' and toks[i + 1].text == '.' and toks[i + 2].low == 'type' \
+                    and toks[i + 3].text == '=' and toks[i + 4].kind == gsc.STRING:
+                return toks[i + 4].text.strip('"').lower()
+    return 'human'
+
+
+def template_tree(template: str) -> str:
+    """The animtree a native T6 aitype registers (#using_animtree)."""
+    match = re.search(r'#using_animtree\(\s*"([^"]+)"\s*\)', template)
+    if match is None:
+        raise ValueError('T6 actor template has no #using_animtree')
+    return match[1]
+
+
+def native_client_actor(name: str, tree: str = 'zm_nuked_basic') -> str:
     # Appearance is replicated from the server's source character scripts.
     # Register the same T6 animation state on both sides without donor skins.
     return f'''// waw2bo2: replicated WaW appearance, T6 client AI state support.
-#using_animtree("zm_nuked_basic");
+#using_animtree("{tree}");
 main()
 {{
     self._aitype = "{actor_name(name)}";
@@ -81,7 +103,7 @@ main()
 precache( ai_index )
 {{
     usefootsteptable( ai_index, "default_ai" );
-    precacheanimstatedef( ai_index, #animtree, "zm_nuked_basic" );
+    precacheanimstatedef( ai_index, #animtree, "{tree}" );
     setdemolockonvalues( ai_index, 100, 60, -15, 60, 30, -5, 60 );
 }}
 '''

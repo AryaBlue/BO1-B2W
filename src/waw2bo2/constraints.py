@@ -3,6 +3,7 @@ import json
 import math
 from pathlib import Path
 import shutil
+import re
 
 
 def stage(source: Path, project: Path) -> dict:
@@ -130,3 +131,60 @@ def stage_entities(project: Path) -> dict:
     data['entities'] = [e for e in entities if e.get('classname') != 'rope'] + generated
     path.write_text(json.dumps(data, indent=1) + '\n')
     return {'ropes': len(entries), 'endpoints': len(generated)-len(entries), 'materials': sorted(materials)}
+
+
+def stage_script_suspensions(project: Path) -> dict:
+    """Register fixed-world decorative suspensions before source PhysicsLaunch.
+
+    T6 MP's centity rope anchors follow ScriptMovers; unlike dynent anchors,
+    they do not create a rigid-body joint. Keep these models on a server-owned
+    pendulum instead of letting client physics detach them from their ropes.
+    Breakable, timed and multiply constrained bodies require a separate solver.
+    """
+    assets = project / 'maps/mp/waw/_waw2bo2_assets.gsc'
+    if not assets.is_file():
+        return {'suspensions': 0, 'unsupported': []}
+    manifest = project / 'BSP/constraints.json'
+    entries = json.loads(manifest.read_text())['constraints'] if manifest.exists() else []
+    entities = json.loads((project / 'BSP/entities.json').read_text())['entities'] if entries else []
+    owners = {}
+    for e in entries:
+        for n in (1, 2):
+            if e[f'attach_point_type{n}'] == 2:
+                owners.setdefault(e[f'target_ent{n}'], []).append(e)
+    lines = ['    // BEGIN SCRIPT SUSPENSIONS', '    level.waw_rope_suspensions = [];']
+    unsupported = []
+    count = 0
+    vec = lambda v: '(' + ', '.join(format(float(x), '.9g') for x in v) + ')'
+    for name, joints in sorted(owners.items()):
+        e = joints[0]
+        n = 1 if e['target_ent1'] == name else 2
+        other = 3 - n
+        model = next((x for x in entities if x.get('targetname') == name and x.get('classname') == 'script_model'), None)
+        if (len(joints) != 1 or e['type'] != 8 or e[f'attach_point_type{other}'] != 0
+                or any(e.get(k, 0) for k in ('flags', 'timeout', 'min_health', 'max_health'))
+                or e['distance'] <= 0 or model is None):
+            unsupported.append(name)
+            continue
+        point = e['pos' if n == 1 else 'pos2']
+        anchor = e['pos2' if n == 1 else 'pos']
+        key = json.dumps(name)
+        lines += ['    suspension = spawnstruct();',
+                  f'    suspension.anchor = {vec(anchor)};',
+                  f'    suspension.point = {vec(point)};',
+                  f'    suspension.length = {format(e["distance"], ".9g")};',
+                  f'    suspension.damp = {format(e["damp"], ".9g")};',
+                  f'    level.waw_rope_suspensions[{key}] = suspension;']
+        count += 1
+    lines.append('    // END SCRIPT SUSPENSIONS')
+    source = assets.read_text(encoding='utf-8')
+    block = '\n'.join(lines)
+    pattern = r'    // BEGIN SCRIPT SUSPENSIONS.*?    // END SCRIPT SUSPENSIONS'
+    if re.search(pattern, source, re.S):
+        source = re.sub(pattern, lambda _: block, source, flags=re.S)
+    else:
+        if 'init()\n{' not in source:
+            raise ValueError('asset initializer missing while registering rope suspensions')
+        source = source.replace('init()\n{', 'init()\n{\n' + block, 1)
+    assets.write_text(source, encoding='utf-8')
+    return {'suspensions': count, 'unsupported': unsupported}

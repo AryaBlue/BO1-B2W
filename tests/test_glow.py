@@ -72,3 +72,30 @@ class GlowTest(unittest.TestCase):
         for g in (constants, None):
             self.assertEqual(shaders.compile_hlsl(glow.pixel_hlsl(glow.film_constants(fields), g), 'ps_5_0')[:4], b'DXBC')
         self.assertIn('return x;', glow.pixel_hlsl(glow.film_constants({'r_filmenable': '0'}), None))
+
+
+def keep_2d(x, y):
+    """Python mirror of the overlay's keep_2d output."""
+    r = [b / max(a, 1e-6) if a > 0 else 1.0 for a, b in zip(x, y)]
+    a = max(0.0, min(1.0, min(r)))
+    return [max(0.0, min(1.0, b - a * c)) for b, c in zip(y, x)], a
+
+
+class OverlayBlendTests(unittest.TestCase):
+    def test_scene_pixels_are_graded_exactly_and_earlier_2d_survives(self):
+        fields = visions.parse(KNEEDEEP)
+        for x in ((0.2, 0.5, 0.8), (0.0, 0.0, 0.0), (0.9, 0.05, 0.3), (1.0, 1.0, 1.0)):
+            y = visions.film(x, fields)
+            src, a = keep_2d(x, y)
+            # blend: src + dst * a, dst = resolved scene
+            for s, c, want in zip(src, x, y):
+                self.assertAlmostEqual(s + c * a, want, places=6)
+            # a white crosshair drawn after the resolve stays well above the scene
+            crosshair = [s + 1.0 * a for s in src]
+            self.assertTrue(all(c >= w for c, w in zip(crosshair, y)))
+            self.assertGreater(min(crosshair), 0.5)
+
+    def test_overlay_material_blends_instead_of_overwriting(self):
+        self.assertEqual(glow.OVERLAY_BLEND['dstBlendRgb'], 'srcalpha')
+        self.assertEqual(glow.OVERLAY_BLEND['dstBlendAlpha'], 'one')
+        self.assertIn('keep_2d', glow.pixel_hlsl(glow.film_constants(visions.parse(KNEEDEEP)), None))

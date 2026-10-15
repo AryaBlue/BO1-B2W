@@ -449,6 +449,127 @@ waw_set_zombie_var( var, value, div, is_float )
     level.zombie_vars[var] = value;
 }
 
+// T6 MP's entity rope anchors are visual followers, not physical joints.
+// Fixed-world source suspensions use an authoritative pendulum. Other models
+// retain native physics. This does not replace general rigid-body collision.
+// The launch impulse is a linear kick; off-center torque is not simulated.
+waw_physicslaunch( point, impulse )
+{
+    definition = undefined;
+    if ( isdefined( level.waw_rope_suspensions ) && isdefined( self.targetname ) )
+        definition = level.waw_rope_suspensions[self.targetname];
+    if ( !isdefined( definition ) )
+    {
+        if ( isdefined( point ) && isdefined( impulse ) )
+            self physicslaunch( point, impulse );
+        else
+            self physicslaunch();
+        return;
+    }
+    if ( !isdefined( self.waw_rope_motion ) )
+    {
+        state = spawnstruct();
+        state.definition = definition;
+        state.forward = anglestoforward( self.angles );
+        state.up = anglestoup( self.angles );
+        state.position = self.origin + state.forward * definition.point[0]
+            - anglestoright( self.angles ) * definition.point[1] + state.up * definition.point[2];
+        state.rest = vectornormalize( state.position - definition.anchor );
+        state.velocity = ( 0, 0, 0 );
+        self.waw_rope_motion = state;
+        self thread waw_rope_motion();
+    }
+    if ( isdefined( impulse ) )
+        self.waw_rope_motion.velocity += impulse;
+}
+
+waw_rope_rotate( vector, axis, cosine )
+{
+    // Rodrigues' shortest rotation from the authored rope direction.
+    return vector + vectorcross( axis, vector )
+        + vectorcross( axis, vectorcross( axis, vector ) ) / max( 0.0001, 1 + cosine );
+}
+
+waw_rope_motion()
+{
+    self endon( "death" );
+    state = self.waw_rope_motion;
+    definition = state.definition;
+    dt = 0.0125;
+    for ( ;; )
+    {
+        for ( step = 0; step < 4; step++ )
+        {
+            gravity = getdvarfloat( "phys_gravity" );
+            state.velocity += ( 0, 0, gravity ) * dt;
+            if ( definition.damp > 0 )
+                state.velocity *= max( 0, 1 - definition.damp * dt );
+            state.position += state.velocity * dt;
+            displacement = state.position - definition.anchor;
+            distance = length( displacement );
+            if ( distance > definition.length )
+            {
+                direction = displacement / distance;
+                state.position = definition.anchor + direction * definition.length;
+                // Remove outward velocity, retaining tangential motion.
+                state.velocity -= direction * max( 0, vectordot( state.velocity, direction ) );
+            }
+        }
+        direction = vectornormalize( state.position - definition.anchor );
+        axis = vectorcross( state.rest, direction );
+        cosine = vectordot( state.rest, direction );
+        forward = waw_rope_rotate( state.forward, axis, cosine );
+        up = waw_rope_rotate( state.up, axis, cosine );
+        angles = vectortoangles( forward );
+        roll = vectortoangles( ( vectordot( up, anglestoup( angles ) ),
+            vectordot( up, anglestoright( angles ) ), 0 ) );
+        angles = ( angles[0], angles[1], angleclamp180( roll[1] ) );
+        local_point = definition.point;
+        origin = state.position - anglestoforward( angles ) * local_point[0]
+            + anglestoright( angles ) * local_point[1] - anglestoup( angles ) * local_point[2];
+        self moveto( origin, 0.05 );
+        self rotateto( angles, 0.05 );
+        wait 0.05;
+    }
+}
+
+waw_spawn( classname, origin, flags, radius, height )
+{
+    if ( isdefined( height ) )
+        ent = spawn( classname, origin, flags, radius, height );
+    else if ( isdefined( radius ) )
+        ent = spawn( classname, origin, flags, radius );
+    else if ( isdefined( flags ) )
+        ent = spawn( classname, origin, flags );
+    else
+        ent = spawn( classname, origin );
+    // T6's spawned radius volumes can overlap live AI without dispatching
+    // the WaW AI trigger event. Keep native geometry and player contacts.
+    if ( isdefined( ent ) && classname == "trigger_radius" && isdefined( flags ) && ( int( flags ) & 7 ) )
+        ent thread waw_radius_ai_contacts( int( flags ) );
+    return ent;
+}
+
+waw_radius_ai_contacts( flags )
+{
+    self endon( "death" );
+    for ( ;; )
+    {
+        // Allow the source caller to begin its waittill after spawn returns.
+        wait 0.05;
+        candidates = [];
+        if ( flags & 1 )
+            candidates = arraycombine( candidates, getaiarray( "axis" ), 0, 0 );
+        if ( flags & 2 )
+            candidates = arraycombine( candidates, getaiarray( "allies" ), 0, 0 );
+        if ( flags & 4 )
+            candidates = arraycombine( candidates, getaiarray( "neutral" ), 0, 0 );
+        foreach ( actor in candidates )
+            if ( isdefined( actor ) && isalive( actor ) && actor istouching( self ) )
+                self notify( "trigger", actor );
+    }
+}
+
 waw_playfxontag( fx, ent, tag )
 {
     if ( !isdefined( fx ) || !isdefined( ent ) )
@@ -1619,6 +1740,41 @@ waw_hud_material( name )
     if ( isdefined( name ) && isdefined( level.waw2bo2_hud_materials[name] ) )
         return level.waw2bo2_hud_materials[name];
     return name;
+}
+
+// ---- WaW dog rounds (gsc_api zombie_runtime dog_rounds) ----
+
+// BO2's _zm_ai_dogs runs the rounds; the source keeps spawn selection and health.
+waw_dog_rounds( spawn_logic, source_health, enable_rounds )
+{
+    if ( isdefined( spawn_logic ) )
+    {
+        level.waw_dog_spawn_logic = spawn_logic;
+        level.dog_spawn_func = ::waw_dog_spawn_location;
+    }
+    if ( isdefined( source_health ) && isdefined( level.dog_spawners ) )
+    {
+        level.waw_dog_source_health = source_health;
+        // after BO2's dog_init, which set the native table's health
+        array_thread( level.dog_spawners, maps\mp\zombies\_zm_utility::add_spawn_function, ::waw_dog_source_health );
+    }
+    [[ enable_rounds ]]();
+}
+
+// WaW picks among the dog spawners the map has opened (add_area_dog_spawners
+// fills level.enemy_dog_spawns as areas unlock), not every dog spawner.
+waw_dog_spawn_location( spawners, favorite_enemy )
+{
+    if ( isdefined( level.enemy_dog_spawns ) && level.enemy_dog_spawns.size > 0 )
+        spawners = level.enemy_dog_spawns;
+    return [[ level.waw_dog_spawn_logic ]]( spawners, favorite_enemy );
+}
+
+waw_dog_source_health()
+{
+    [[ level.waw_dog_source_health ]]();
+    self.maxhealth = level.dog_health;
+    self.health = level.dog_health;
 }
 
 // ---- WaW framework calls with WaW semantics ----

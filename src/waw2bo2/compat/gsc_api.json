@@ -10,6 +10,7 @@
     "template_scripts: files of the WaW mod tools' zombie map template. Maps carry them, stock zones do not.",
     "  DLC3 code and teleporter functions are extracted recursively from the map's own template copy.",
     "function_renames: WaW function (any script or builtin) -> BO2 qualified function or builtin.",
+    "source_script_functions: framework functions whose explicit script calls retain the authored WaW body, even when BO2 provides a same-named handler; native engine callbacks remain on BO2.",
     "compat_wrappers: WaW builtins routed through maps\\mp\\waw\\_waw2bo2_compat even though T6 has a builtin",
     "  of that name, because the semantics or the asset namespace differ.",
     "hud_cleanup_wrappers: resolved native HUD destructors -> guarded compatibility helpers; simple/dotted receivers become arguments so missing HUDs cannot prevent caller cleanup. Map-owned destructors remain source code.",
@@ -22,6 +23,16 @@
     "  DLC3 extraction is unrestricted except for unsupported animation functions; its legacy suffix entries",
     "  below remain valid if a caller deliberately disables full template extraction.",
     "zombie_runtime: source speed selector contract and native spawn callback/location adaptation; preserve source bodies, not map-name speed presets.",
+    "  actor_templates: native T6 actor family per WaW engine AI type (aitype self.type), appearance stays WaW's.",
+    "  The dog uses TranZit's shipped dog graph (Nuketown's unshipped one lacks restart on its attack states:",
+    "  measured, a dog bit once and froze) plus Nuketown's window barrier state, as an owned tree.",
+    "  dog_rounds: WaW _zombiemode::main calls _zombiemode_dogs::init (dogs only when the map set level.dogs_enabled);",
+    "  BO2's _zm_ai_dogs runs the rounds (same counts and first-round timing), with the source's dog spawn",
+    "  selection over the spawners the map opened (level.enemy_dog_spawns) and the source dog health table.",
+    "  client_notifies: the server moments _zm_ai_dogs (like WaW's) sends each clientnotify; the source map's",
+    "  client fog monitors (level waittill msg; SetVolFog) run on the server there (T6 CSC has no volumetric fog).",
+    "  native_sounds/native_music: BO2 dog aliases and music states -> the WaW aliases the source plays at the same",
+    "  point (an owned copy of _zm_ai_dogs plays waw/<alias>); zmb_hellhound_vocals_amb (BO2 stalking) has none.",
     "library_functions: functions of third-party WaW map libraries -> compat waw_<value>, where BO2 has the native",
     "  feature the library worked around (e.g. treminaor's trem_hintstrings drew hints through a WaW menu).",
     "stock_map_policies: behaviour applied ONLY when the source is a retail WaW level (its fastfile is in the WaW",
@@ -49,6 +60,25 @@
     "max_targets": 10
   },
   "zombie_runtime": {
+    "actor_templates": {"human": "zm_nuked_basic_01",
+                        "dog": {"aitype": "zombie_dog", "owned_tree": "waw2bo2_dog_actor",
+                                "add_states": {"zm_nuked_dog": ["zm_traverse_barrier"]}}},
+    "dog_rounds": {"source_script": "maps\\_zombiemode_dogs", "source_init": "init", "guard": "dogs_enabled",
+                   "native_script": "maps\\mp\\zombies\\_zm_ai_dogs", "native_init": "init",
+                   "source_spawning": "dog_round_spawning",
+                   "spawn_logic": ["dog_spawn_sumpf_logic"], "health": "dog_health_increase",
+                   "client_notifies": {"dog_start": [["dog_round_starting", 0]],
+                                       "dog_stop": [["last_dog_down", 2], ["dog_round_ending", 0]]},
+                   "owned_script": "maps\\mp\\waw\\_waw2bo2_ai_dogs",
+                   "native_sounds": {"zmb_hellhound_prespawn": "pre_spawn", "zmb_hellhound_bolt": "bolt",
+                                     "zmb_hellhound_spawn": "spawn", "zmb_dog_round_start": "dog_round_start",
+                                     "vox_zmba_event_dogstart_0": "ann_vox_dog_start",
+                                     "zmb_hellhound_loop_breath": "dog_trail_fire_breath",
+                                     "zmb_hellhound_loop_fire": "dog_trail_fire",
+                                     "zmb_hellhound_vocals_death": "zombie_dog_death",
+                                     "zmb_hellhound_explode": "zombie_dog_death",
+                                     "zmb_hellhound_vocals_close": "zdog_close"},
+                   "native_music": {"dog_start": "dark_sting", "dog_end": "bright_sting"}},
     "source_chase": {"script": "maps\\_zombiemode_spawner", "function": "zombie_think", "chase_function": "find_flesh", "setup_function": "zombie_setup_attack_properties"},
     "source_selection": {"script": "maps\\_zombiemode", "function": "round_spawning", "array_field": "enemy_spawns", "candidate": "spawn_point", "previous": "old_spawn"},
     "source_membership": {"initializer": "main", "riser_array_field": "zombie_rise_spawners", "riser_actor_value": "riser", "native_riser_location": "riser_location", "source_chaser_value": "zombie_chaser", "native_chaser_value": "find_flesh"},
@@ -68,6 +98,9 @@
   },
   "entity_lookup_bridges": {
     "script_linkname": {"getent": "waw_getent_linkname", "getentarray": "waw_getentarray_linkname"}
+  },
+  "source_script_functions": {
+    "maps\\_zombiemode_spawner": ["zombie_damage"]
   },
   "core_scripts": {
     "common_scripts\\utility": "common_scripts\\utility",
@@ -141,6 +174,8 @@
     "maps\\mp\\zombies\\_zm_utility::destroy_hud": "waw_destroy_hud"
   },
   "compat_wrappers": [
+    "physicslaunch",
+    "spawn",
     "oktospawn",
     "setvisibletoplayer",
     "setvelocity",

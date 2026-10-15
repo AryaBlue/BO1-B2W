@@ -323,7 +323,10 @@ def stage_actor_movement(sources, out_root: Path, bo2_root: Path, definition: di
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding='utf-8')
     for actor in (out_root / 'aitype').rglob('waw_*.?sc'):
-        text = actor.read_text(encoding='utf-8').replace('zm_nuked_basic', ACTOR_TREE)
+        text = actor.read_text(encoding='utf-8')
+        if 'zm_nuked_basic' not in text and ACTOR_TREE not in text:
+            continue    # another native family (the T6 dog AI) keeps its own tree
+        text = text.replace('zm_nuked_basic', ACTOR_TREE)
         text = re.sub(r'\n// BEGIN SOURCE MOVEMENT REFS.*?// END SOURCE MOVEMENT REFS\n', '', text, flags=re.S)
         # T6 keeps only animation-tree nodes referenced by compiled scripts.
         # ASD substate names are strings and do not pin those nodes themselves.

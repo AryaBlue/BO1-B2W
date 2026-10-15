@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Restore the crosshair on converted maps. The full-screen WaW vision overlay redrew the frame resolved before the 2D pass, so it painted over the crosshair, which the engine draws just before the first HUD element. The overlay now blends with the frame, keeping the WaW grade unchanged on scene pixels while earlier 2D shows through. Images that template weapons pull into `mod.ff` are now also written to the mod ipak rather than referencing data no ipak holds.
+
+- Keep material textures that translated programs add to a pass inside the pass's leading material-texture argument group. A texture placed after the code textures was never bound by T6, so the slot kept the previous draw's texture. This caused the Wunderwaffe's orange/black first-person bands through its detail normal map; they were not shadows.
+
 - Restore the source Tesla chain through BO2's zombie damage callback, cap standard Wunderwaffe chains at ten targets, and suppress the unintended shell impact FX while retaining the source electric projectile trail.
 
 - Extend stock WaW DLC2 conversion with source active-spawner membership, conditional movement tables and nearby-team respawns. Preserve map physics constraints and ropes, place native barricades at window-entry anchors, bind source water depth/refraction inputs, and correct translated shadow depth ordering. See [Shi No Numa validation and remaining limits](docs/SHI_NO_NUMA_DLC2_PORT.md).

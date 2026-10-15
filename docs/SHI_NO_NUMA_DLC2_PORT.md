@@ -60,10 +60,33 @@ panels at doorways and outside buildings. The helper surfaces needed both
 are gone after the range correction. Final shadow, water and barricade behavior
 still need broader visual validation.
 
-Peter's rope remains unresolved and the user explicitly deferred it. Both
-constraints round-trip, and live native tables bind the named entities and
-initialize two server/client ropes, but Peter still falls after PhysicsLaunch.
-Preserving the constraint data is not a verified hanging-body fix.
+T6 MP binds the named entities and initializes both ropes, but its centity
+anchors follow ScriptMovers without creating a physical distance joint.
+Peter therefore fell despite intact constraint records. Fixed-world,
+unbreakable script-model suspensions now register their authored anchor,
+local attachment, rope length and damping in the asset initializer. A shared
+PhysicsLaunch adapter supplies source kicks to a server-owned pendulum,
+integrated in four substeps per server frame; the mover's position and
+orientation follow that constrained attachment. Unconstrained models keep
+native PhysicsLaunch. Timed, breakable and multiply constrained bodies are
+excluded and listed in the staging report. This decorative suspension solver
+does not implement general rigid-body collisions or off-center torque.
+
+The gameplay package also explicitly links the native default `mc/rope`
+material and its image dependencies. Rope_Init requests that material even
+when another rope supplies an explicit material; it was previously absent.
+
+Validation: all 583 workspace tests pass. The final fastfiles round-trip 101
+compiled scripts and pass the material and authored-hitbox audits. In a
+three-minute LAN test with the original random-kick thread, Peter moved in
+all 180 samples and stayed near his authored height instead of falling to
+the floor. The rendered attachment measured 33.60–35.72 units from the anchor
+(34 authored; network mover interpolation/quantization affects the samples).
+An unconstrained copy used native physics and fell 112 units. Live rope
+records resolve `mc/rope` for Peter and the original `techrope_global_black`
+for the lamp. A separate controlled lamp kick exercised its 60-unit
+suspension. No script runtime errors occurred. Screenshots and probe logs
+are saved in `work/shi_no_numa_dlc2`.
 
 The Wunderwaffe's source Tesla chain is now explicitly extracted and registered
 with T6's zombie damage callback for hip fire and ADS. Previously only the
@@ -151,3 +174,47 @@ movement over ten seconds was 296, 84, and 156 units, with no script errors.
 This covers sampled risers; normal gameplay testing across the swamp remains
 useful. Temporary test points are granted by a local testing script, not by
 the converted map's gameplay code.
+
+## Scripted Bouncing Betties
+
+The source waits two seconds, spawns a radius trigger admitting axis AI,
+then waits for contact before lifting its visual model 32 units over 0.2
+seconds and applying its source blast damage. T6's spawned radius overlaps
+live AI but did not dispatch the contact notification in the reproduced case.
+Source spawn calls now use a shared adapter: AI-enabled trigger_radius volumes
+poll native istouching against the source team mask and notify their source
+listeners. Other spawned classes retain native spawn behavior and argument
+counts; player contacts remain native. Deleting the trigger ends its worker.
+
+The script also called WaW zombie_damage with MOD_ZOMBIE_BETTY, absent from
+BO2's same-named handler. Explicit source script calls now preserve the source
+zombie_damage function, including its round-scaled damage, scoring, guards,
+and power-up logic. Native actor damage dispatch remains on BO2.
+
+All 579 tests passed, and 101 compiled scripts round-tripped through the
+installed fastfile. The build linked with no missing assets and passed both
+material audits. A controlled test invoked the source grenade-fire listener
+with a model fixture at a live zombie's position. Before the fix, native
+istouching returned true but no activation event arrived. Afterward, the
+stationary trigger activated, the launch model was sampled rising to 24 units
+before its authored 32-unit move finished and deleted it, the target died,
+and no mine or radius trigger remained. No script errors occurred. This
+checks the source activation/bounce/damage sequence; normal player placement
+still needs the gameplay retest.
+
+## Quick Revive purchase softlock
+
+The stock solo-price rewrite matched every assignment following the Quick
+Revive case label, including the bottle weapon in both equip and cleanup,
+and the purchase jingle. In solo it replaced these strings with the price
+500, so the purchase waited forever for an invalid bottle weapon to equip.
+The converter now restricts this rewrite to the machine's `cost` local.
+A regression covers the price alongside bottle equip/removal, hint, and
+jingle cases. Converted maps need rebuilding to receive the correction.
+
+All 580 tests passed. The rebuilt Shi No Numa fastfile round-tripped 101
+compiled scripts and linked without missing assets. A controlled purchase
+after powering the machine showed the converted bottle, completed its
+weapon-change event, removed the bottle, restored the original Wunderwaffe,
+cleared drinking state, granted Quick Revive, and deducted exactly 500 points.
+The temporary observer was removed after the test.

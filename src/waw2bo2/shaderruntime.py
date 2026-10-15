@@ -418,6 +418,9 @@ def add_material_texture(native_pass, output_material, source_material, hash_val
     a type-2 argument joins the pass's stable group at a free texture/sampler
     slot. T6 sub_77C150 scans the texture table without an end bound from the
     previous match, so both stay ordered by name hash (as in stock data).
+    The argument also stays inside the leading type-2 group: placed after the
+    code textures it is never bound, and the slot keeps the previous draw's
+    texture (measured: the Wunderwaffe's detail map, banded first-person).
     Returns the new argument, or None when the source has no such texture."""
     texture = next((t for t in (source_material or {}).get('textures', [])
                     if t.get('image') and (waw_hash(t['name']) if t.get('name') else t.get('nameHash')) == hash_value), None)
@@ -434,7 +437,7 @@ def add_material_texture(native_pass, output_material, source_material, hash_val
     arg = {'buffer': 0, 'location': slot | (slot << 8), 'size': 1, 'type': 2, 'u': {'value': hash_value}}
     start = native_pass['perPrimArgCount'] + native_pass['perObjArgCount']
     stable = native_pass['args'][start:]
-    position = start + next((i for i, a in enumerate(stable) if a['type'] == 2 and a['u']['value'] > hash_value), len(stable))
+    position = start + next((i for i, a in enumerate(stable) if a['type'] != 2 or a['u']['value'] > hash_value), len(stable))
     native_pass['args'].insert(position, arg)
     native_pass['stableArgCount'] += 1
     return arg
