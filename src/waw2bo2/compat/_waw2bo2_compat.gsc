@@ -1573,6 +1573,17 @@ waw_box_touches_oriented( lo, hi, origin, forward, right, up, mins, maxs )
     return false;
 }
 
+// A HUD material name built at run time ("hud_chalk_" + n): converted
+// materials renamed out of BO2's names resolve through the generated table.
+waw_hud_material( name )
+{
+    if ( !isdefined( level.waw2bo2_hud_materials ) )
+        level.waw2bo2_hud_materials = maps\mp\waw\_waw2bo2_hud_materials::table();
+    if ( isdefined( name ) && isdefined( level.waw2bo2_hud_materials[name] ) )
+        return level.waw2bo2_hud_materials[name];
+    return name;
+}
+
 // ---- WaW framework calls with WaW semantics ----
 
 // A script calling WaW's _zombiemode::player_damage_override directly (Shi

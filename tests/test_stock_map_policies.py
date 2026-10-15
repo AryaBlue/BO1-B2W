@@ -50,10 +50,10 @@ vending_trigger_think()
 
 
 def _api() -> T6Api:
-    return T6Api(builtins={"int": (1, 1), "get_players": (0, 0), "getplayers": (0, 0)},
+    return T6Api(builtins={"int": (1, 1), "get_players": (0, 0), "getplayers": (0, 0), "newhudelem": (0, 0)},
                  scripts={"maps\\mp\\zombies\\_zm": {"init": 0},
                           "maps\\mp\\zombies\\_zm_utility": {"get_players": 0}},
-                 methods={"setperk": (1, 1), "waittill": (1, 3)})
+                 methods={"setperk": (1, 1), "waittill": (1, 3), "setshader": (1, 3), "setvalue": (1, 1)})
 
 
 def _port(root: Path, stock_map: bool, level: str = "testmap") -> tuple[str, str]:
@@ -128,6 +128,53 @@ class StockMapPolicyTests(unittest.TestCase):
         health = script.functions["waw_round_health"]
         body = gsc.emit(script.tokens[health.body_open:health.body_close + 1])
         self.assertIn("if ( health <= 0 )\n        return start;", body)
+
+    def test_stock_maps_draw_the_source_round_counter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "maps").mkdir()
+            (root / "maps/_zombiemode.gsc").write_text(
+                'precache_shaders() { PrecacheShader( "hud_chalk_1" ); PrecacheShader( "hud_chalk_2" ); '
+                'PrecacheShader( "hud_other" ); }\n'
+                # the HUD assignment directly follows a block statement, as in WaW
+                'round_start() { level.round_number = 1; level.first_round = true; '
+                'players = get_players(); for( i = 0; i < players.size; i++ ) { players[i].x = 0; } '
+                'level.chalk_hud1 = create_chalk_hud(); level.chalk_hud2 = create_chalk_hud( 64 ); }\n'
+                'create_chalk_hud( x ) { hud = newhudelem(); hud SetShader( "hud_chalk_1", 64, 64 ); return hud; }\n'
+                'chalk_one_up() { hud = level.chalk_hud1; if( level.first_round ) hud.alpha = 1; '
+                'hud SetShader( "hud_chalk_" + level.round_number, 64, 64 ); hud SetValue( level.round_number ); }\n'
+                'chalk_round_hint() { level.chalk_hud2.alpha = 0; }\n')
+            tr = gscport.Translator(gscport.Sources([root], [], None), _api(), gscport.PortReport())
+            name = tr.extract_round_counter()
+            self.assertEqual(name, "waw2bo2_waw_round_counter")
+            while tr.core_queue:
+                tr.level_state_parts.append(tr.translate_extracted(*tr.core_queue.pop(0)))
+            core = "\n".join(tr.level_state_parts)
+            self.assertIn("level.waw2bo2_waw_round_counter = 1;", core)
+            self.assertIn('precacheshader( "hud_chalk_1" );', core)
+            self.assertIn('precacheshader( "hud_chalk_2" );', core)
+            self.assertNotIn("hud_other", core)
+            self.assertEqual(tr.report.waw_hud_materials, ["hud_chalk_1", "hud_chalk_2"])
+            self.assertIn("level.zombie_round_change_custom = ::waw2bo2_waw_round_start;", core)
+            self.assertIn('level waittill( "end_of_round" );', core)
+            self.assertIn("zombiemode__chalk_round_hint", core)
+            # only the HUD objects of the source start-of-game, never BO2's round state
+            state = core[core.index("zombiemode__round_start_level_state()"):]
+            state = state[:state.index("}")]
+            self.assertIn("level.chalk_hud1 =", state)
+            self.assertIn("level.chalk_hud2 =", state)
+            self.assertNotIn("round_number", state)
+            self.assertNotIn("first_round", state)
+            self.assertIn("zombiemode__create_chalk_hud()", state)
+            self.assertNotIn("stub_", core)
+            # the run-time built material name goes through the converted table
+            self.assertIn('waw_hud_material( "hud_chalk_" + level.round_number )', core)
+            self.assertIn('SetShader( "hud_chalk_1", 64, 64 )', core)
+
+    def test_hud_material_table_keys_survive_the_literal_rewrite(self):
+        source = gscport.hud_material_table_source({"hud_chalk_1": "waw_world/hud_chalk_1"})
+        self.assertIn('materials["h" + "ud_chalk_1"] = "waw_world/hud_chalk_1";', source)
+        self.assertNotIn('"hud_chalk_1"', source)
 
     def test_explicit_waw_damage_override_call_keeps_waw_semantics(self):
         self.assertEqual(gscport.API["function_renames"]["player_damage_override"],

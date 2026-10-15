@@ -70,6 +70,11 @@ def rewrite_hud(project, renamed, materials):
     hud = set(materials) & renamed.keys()
     if not hud:
         return
+    # names scripts build at run time resolve through this table
+    from .gscport import hud_material_table_source
+    table = project / 'maps/mp/waw/_waw2bo2_hud_materials.gsc'
+    table.parent.mkdir(parents=True, exist_ok=True)
+    table.write_text(hud_material_table_source({name: renamed[name] for name in hud}), encoding='utf-8')
     for folder in ('maps', 'clientscripts'):
         for path in (project / folder).rglob('*'):
             if path.suffix not in ('.gsc', '.csc'):

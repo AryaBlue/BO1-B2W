@@ -2519,8 +2519,11 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
         shaders |= {m for b, m in ENGINE_BUILTIN_MATERIALS.items() if re.search(rf"\b{b}\s*\(", text, re.I)}
     stock_materials = api.stock_assets.get("material", set())
     hud = []
+    # a stock policy's WaW HUD (round counter chalk) is converted even when
+    # BO2 ships a material of that name; materialisolation renames it
+    waw_hud = set(port.waw_hud_materials)
     for name in sorted(shaders):
-        if name.lower() in stock_materials:
+        if name.lower() in stock_materials and name not in waw_hud:
             continue
         if any((r / techsets.oat_material_path(name)).exists() for r in model_roots):
             hud.append(name)
