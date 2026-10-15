@@ -156,6 +156,7 @@ class StockMapPolicyTests(unittest.TestCase):
             self.assertNotIn("hud_other", core)
             self.assertEqual(tr.report.waw_hud_materials, ["hud_chalk_1", "hud_chalk_2"])
             self.assertIn("level.zombie_round_change_custom = ::waw2bo2_waw_round_start;", core)
+            self.assertIn("level.round_think_func = maps\\mp\\waw\\_waw2bo2_zm::round_think;", core)
             self.assertIn('level waittill( "end_of_round" );', core)
             self.assertIn("zombiemode__chalk_round_hint", core)
             # only the HUD objects of the source start-of-game, never BO2's round state

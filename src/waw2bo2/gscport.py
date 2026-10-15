@@ -48,6 +48,8 @@ CORE = "maps\\mp\\waw\\_waw2bo2_core"
 PRECACHE = "maps\\mp\\waw\\_waw2bo2_precache"
 ONEWAY = "maps\\mp\\waw\\_waw2bo2_oneway"
 ZOMBIEMODE = "maps\\_zombiemode"
+# the owned copy of BO2's _zm (stage_bo2_perk_support)
+OWNED_ZM = "maps\\mp\\waw\\_waw2bo2_zm"
 CORE_INCLUDES = ("common_scripts\\utility", "maps\\mp\\_utility", "maps\\mp\\zombies\\_zm_utility")
 # BO2 scripts a unique-name lookup may resolve into (never map/other-mode scripts)
 BO2_SHARED = re.compile(r"^(common_scripts\\utility|maps\\mp\\_utility|maps\\mp\\zombies\\_zm[a-z_]*|"
@@ -1619,6 +1621,9 @@ class Translator:
                  "waw2bo2_waw_round_counter()", "{", "\tlevel.waw2bo2_waw_round_counter = 1;",
                  *[f'\tprecacheshader( "{m}" );' for m in precache],
                  "\tlevel.zombie_round_change_custom = ::waw2bo2_waw_round_start;",
+                 # BO2's gametype starts the stock round_think; only the owned
+                 # copy skips the 8-bit display and the 255 clamp
+                 f"\tlevel.round_think_func = {OWNED_ZM}::round_think;",
                  "\tlevel thread waw2bo2_waw_round_end();", "}", "",
                  "waw2bo2_waw_round_start()", "{",
                  "\tif ( !isdefined( level.waw2bo2_waw_round_hud ) )", "\t{",

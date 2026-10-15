@@ -42,7 +42,10 @@ value (`setroundsplayed(300)` draws 43), and `round_think` clamps
   create them with the framework's own functions (`create_chalk_hud`), never
   round state such as `round_number`/`first_round`;
 - patches the owned `_waw2bo2_zm.gsc` so `setroundsplayed` and the 255 clamp
-  are skipped only while `level.waw2bo2_waw_round_counter` is set;
+  are skipped only while `level.waw2bo2_waw_round_counter` is set, and points
+  `level.round_think_func` at that owned `round_think` (BO2's gametype starts
+  the stock one through this hook; the first build showed BO2's chalk on top
+  of WaW's and still capped at 255);
 - converts WaW's `hud_chalk_1..5` (precached by the source
   `precache_shaders`) although BO2 ships materials of those names; material
   isolation renames them `waw_world/hud_chalk_*`, and names built at run time
@@ -55,6 +58,11 @@ whole top-level statements (an assignment right after a `for {}` block was
 silently dropped).
 
 BO2's game-over text uses `level.round_number`, not the 8-bit value.
+
+Live check (work/flogger_qr_rounds/hud_waw2): only WaW's red chalk is drawn;
+a forced end of round 299 starts round 300. Jumping rounds by script past 11
+from 6-10 leaves WaW's second tally on screen, because the source deletes it
+only at round 11; normal play never skips it.
 
 ## Round count from source
 
