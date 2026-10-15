@@ -72,6 +72,34 @@ class DesktopUITests(unittest.TestCase):
         self.assertEqual(self.app.tabs.select(), str(self.app.reports_tab))
         self.assertIn('report', self.app.report_text.get('1.0', 'end').lower())
 
+    def test_setup_groups_never_share_a_grid_row(self):
+        # Advanced Paths and Shared Game Assets once both used row 3: the
+        # assets group covered BO2 bridge tools and Audio decoder.
+        self.app.tabs.select(self.app.setup_tab)
+        self.app._toggle_advanced()
+        self.root.geometry('1160x820')
+        self.root.update_idletasks()
+        body = self.app.setup_body
+        rows = [int(w.grid_info()['row']) for w in body.grid_slaves()]
+        self.assertEqual(len(rows), len(set(rows)), rows)
+        advanced, cache = self.app.advanced, self.app.extract_button.master
+        self.assertLessEqual(advanced.winfo_y() + advanced.winfo_height(), cache.winfo_y())
+        labels = [w.cget('text') for w in advanced.grid_slaves(column=0)]
+        self.assertEqual(sorted(labels), sorted(['WaW extractor folder', 'BO2 bridge tools folder',
+                                                 'Audio decoder', 'Build files folder']))
+
+    def test_setup_page_scrolls_instead_of_clipping(self):
+        self.app.tabs.select(self.app.setup_tab)
+        self.app._toggle_advanced()
+        self.root.geometry('1000x720')
+        self.root.update_idletasks()
+        canvas = self.app.setup_scroll
+        canvas.event_generate('<Configure>')
+        self.root.update_idletasks()
+        region = [float(v) for v in str(canvas.cget('scrollregion')).split()]
+        self.assertGreaterEqual(region[3], self.app.setup_body.winfo_reqheight())
+        self.assertGreaterEqual(self.app.setup_tree.winfo_reqheight(), 100)
+
     def test_artwork_tab_and_details_preview(self):
         self.app.tabs.select(self.app.art_tab)
         self.app.vars['menu_title'].set('My Custom Map')

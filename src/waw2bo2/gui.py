@@ -361,8 +361,48 @@ class Launcher(ttk.Frame):
         missing = [r.title() for r in SIZES if r not in images]
         self.art_status.configure(text='\n'.join(errors) if errors else ('Still needed: ' + ', '.join(missing) if missing else 'All three images match the required resolutions.'))
 
+    def _scrollable(self, page):
+        """A frame filling `page` that scrolls once its content no longer fits."""
+        page.columnconfigure(0, weight=1)
+        page.rowconfigure(0, weight=1)
+        canvas = tk.Canvas(page, bg=COLORS['bg'], highlightthickness=0, borderwidth=0)
+        canvas.grid(row=0, column=0, sticky='nsew')
+        bar = ttk.Scrollbar(page, orient='vertical', command=canvas.yview)
+        canvas.configure(yscrollcommand=bar.set)
+        body = ttk.Frame(canvas)
+        window = canvas.create_window(0, 0, anchor='nw', window=body)
+
+        def fit(_event=None):
+            height = canvas.winfo_height()
+            needed = body.winfo_reqheight()
+            # Fill the page when everything fits so stretchy rows still grow.
+            canvas.itemconfigure(window, width=canvas.winfo_width(), height=max(height, needed))
+            canvas.configure(scrollregion=(0, 0, canvas.winfo_width(), max(height, needed)))
+            if needed > height > 1:
+                bar.grid(row=0, column=1, sticky='ns')
+            else:
+                bar.grid_remove()
+                canvas.yview_moveto(0)
+
+        def wheel(event):
+            if bar.winfo_ismapped():
+                canvas.yview_scroll(-1 if event.delta > 0 else 1, 'units')
+
+        def request(_event=None):
+            # Ask for the content's size like a plain frame would; scroll only
+            # when the window cannot give it.
+            canvas.configure(width=body.winfo_reqwidth(), height=body.winfo_reqheight())
+            fit()
+
+        canvas.bind('<Configure>', fit)
+        body.bind('<Configure>', request)
+        canvas.bind('<Enter>', lambda _e: canvas.bind_all('<MouseWheel>', wheel))
+        canvas.bind('<Leave>', lambda _e: canvas.unbind_all('<MouseWheel>'))
+        self.setup_scroll = canvas
+        return body
+
     def _setup_tab(self):
-        tab = self.setup_tab
+        tab = self.setup_body = self._scrollable(self.setup_tab)
         tab.columnconfigure(0, weight=1)
         intro = ttk.Frame(tab)
         intro.grid(row=0, column=0, sticky='ew', pady=(0, 8))
@@ -385,12 +425,18 @@ class Launcher(ttk.Frame):
             self._path_row(self.advanced, row, field, title)
         self.advanced_shown = False
         self._button(options, 'Advanced Paths', self._toggle_advanced).pack(side='right')
+        # Advanced Paths shows in row 3 when toggled; every group owns a row,
+        # otherwise a later group is drawn over an earlier one.
         cache = self._group(tab, 'Shared Game Assets')
-        cache.grid(row=3, column=0, sticky='ew', pady=(0, 6))
-        ttk.Label(cache, text='Build Map prepares shared assets automatically. Extract All prepares them in advance.',
-                  style='Muted.TLabel').pack(side='left')
+        cache.grid(row=4, column=0, sticky='ew', pady=(0, 6))
+        cache.columnconfigure(0, weight=1)
+        note = ttk.Label(cache, text='Build Map prepares shared assets automatically. Extract All prepares them in advance.',
+                         style='Muted.TLabel')
+        note.grid(row=0, column=0, sticky='w')
+        # Wrap instead of pushing the button out of a narrow window.
+        note.bind('<Configure>', lambda event: note.configure(wraplength=max(120, event.width)))
         self.extract_button = self._button(cache, 'Extract All', self._extract_all)
-        self.extract_button.pack(side='right', padx=(8, 0))
+        self.extract_button.grid(row=0, column=1, sticky='e', padx=(8, 0))
         self.setup_tree = ttk.Treeview(tab, columns=('status', 'details'), show='tree headings', height=6)
         self.setup_tree.heading('#0', text='Requirement')
         self.setup_tree.heading('status', text='Status')
@@ -400,8 +446,9 @@ class Launcher(ttk.Frame):
         self.setup_tree.column('details', width=460)
         self.setup_tree.tag_configure('missing', foreground=COLORS['red'])
         self.setup_tree.tag_configure('ready', foreground=COLORS['green'])
-        self.setup_tree.grid(row=4, column=0, sticky='nsew', pady=(4, 0))
-        tab.rowconfigure(4, weight=1)
+        self.setup_tree.grid(row=5, column=0, sticky='nsew', pady=(4, 0))
+        # Keep a few requirement rows; the page scrolls instead of squashing them.
+        tab.rowconfigure(5, weight=1, minsize=130)
 
     def _path_row(self, parent, row, field, title):
         ttk.Label(parent, text=title).grid(row=row, column=0, sticky='w', padx=(0, 10), pady=3)
