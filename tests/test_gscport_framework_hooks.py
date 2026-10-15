@@ -218,6 +218,18 @@ class FrameworkHookTests(unittest.TestCase):
         self.assertNotIn("SetVolFog", core)
         self.assertIn("waw2bo2_client_fx_0();", core)
 
+    def test_framework_zombie_var_defaults_reach_bo2_init(self):
+        # WaW's _zombiemode::init_zombie_vars: zombie_spawn_delay 3 (BO2 2.0)
+        _, _, report = self.port({
+            "maps/testmap.gsc": "main()\n{\n\tmaps\\_zombiemode::main();\n}\n",
+            "maps/_zombiemode.gsc": "main() {}\ninit_zombie_vars()\n{\n"
+                                    "\tset_zombie_var( \"zombie_spawn_delay\", 3 );\n"
+                                    "\tset_zombie_var( \"below_world_check\", -1000 );\n"
+                                    "\tset_zombie_var( \"zombie_use_failsafe\", true );\n"
+                                    "\tset_zombie_var( \"computed\", level.x );\n}\n",
+        })
+        self.assertEqual(report.rewrites["WaW framework zombie_vars defaults"], 3)
+
     def test_box_chooser_keys_skip_bo2_only_weapons(self):
         tokens = gscport.gsc.tokenize("f()\n{\n\tkeys = GetArrayKeys( level.zombie_weapons );\n"
                                       "\tp = GetArrayKeys( level.zombie_powerups );\n}\n")

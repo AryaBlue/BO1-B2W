@@ -88,13 +88,16 @@ class PerkOwnershipTests(unittest.TestCase):
                 '        if ( 255 < level.round_number )\n            level.round_number = 255;\n\n'
                 '        setroundsplayed( level.round_number );\n    }\n}\n'
                 'player_damage_override()\n{\n    if ( smeansofdeath == "MOD_PROJECTILE" )\n    {\n'
-                + gscport.WAW_SELF_DAMAGE_CAP[0] + '    }\n}\n')
+                + gscport.WAW_SELF_DAMAGE_CAP[0] + '    }\n}\n'
+                'init_levelvars()\n{\n    set_zombie_var( "zombie_spawn_delay", 2.0, 1, column );\n}\n')
             out = root / 'out'
             client_stock = self.write_client_stock(root)
             gscport.stage_bo2_perk_support(out, root / 'bo2')
             text = (out / name).read_text()
             owned_zm = (out / 'maps/mp/waw/_waw2bo2_zm.gsc').read_text()
             self.assertNotIn('return 75;', owned_zm)
+            self.assertIn('waw2bo2_set_zombie_var( "zombie_spawn_delay", 2.0, 1, column );', owned_zm)
+            self.assertIn('waw2bo2_set_zombie_var( var, value, is_float, column, is_team_based )', owned_zm)
             self.assertIn('WaW applies the player', owned_zm)
             self.assertNotIn('perk_machine_spawn_init();', text)
             self.assertNotIn('array_thread(x,::buy)', text)

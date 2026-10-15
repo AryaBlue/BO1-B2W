@@ -2033,6 +2033,36 @@ class Translator:
                         self.report.rewrites[f"client {msg} fog monitor -> server"] += 1
         return made
 
+    def framework_zombie_vars(self) -> str | None:
+        """WaW framework zombie_vars defaults for BO2's init_zombie_vars.
+
+        BO2's _zm replaces _zombiemode::init_zombie_vars and starts from its own
+        values (zombie_spawn_delay 2.0 instead of WaW's 3: zombies spawned 50%
+        faster). The owned _zm init asks waw2bo2_zombie_var for every variable
+        it sets; the map's mp/zombiemode.csv still wins. Only literal values."""
+        script = self.sources.get(ZOMBIEMODE)
+        fn = script.functions.get("init_zombie_vars") if script is not None else None
+        if fn is None:
+            return None
+        toks, values = script.tokens, {}
+        for i in range(fn.body_open, fn.body_close - 5):
+            if toks[i].low == "set_zombie_var" and toks[i + 1].text == "(" and toks[i + 2].kind == gsc.STRING \
+                    and toks[i + 3].text == ",":
+                j, sign = i + 4, ""
+                if toks[j].text == "-":
+                    sign, j = "-", j + 1
+                if (toks[j].kind == gsc.NUMBER or toks[j].low in ("true", "false")) and toks[j + 1].text in (",", ")"):
+                    values[toks[i + 2].text[1:-1]] = sign + toks[j].text
+        if not values:
+            return None
+        name = "zombiemode__init_zombie_vars_defaults"
+        self.level_state_parts.append(
+            f"\n// {ZOMBIEMODE}::init_zombie_vars: WaW defaults for BO2's init_zombie_vars\n{name}()\n{{\n"
+            "\tlevel.waw2bo2_zombie_var_defaults = [];\n" +
+            "".join(f'\tlevel.waw2bo2_zombie_var_defaults["{k}"] = {v};\n' for k, v in sorted(values.items())) + "}\n")
+        self.report.rewrites["WaW framework zombie_vars defaults"] += len(values)
+        return name
+
     # Client calls an effect-only listener may make once it runs on the server.
     CLIENT_FX_CALLS = {"spawnfx", "triggerfx", "playfx", "getstructarray", "getstruct", "anglestoforward",
                        "anglestoup", "anglestoright", "getlocalplayers", "isdefined", "randomfloat",
@@ -2528,6 +2558,9 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     effect_sets = {k.lower() for t in texts
                    for k in re.findall(r'level\.waw_effect\[\s*"([^"]+)"\s*\]\s*=[^=]', t)}
     framework_state += tr.client_fx_listeners()
+    zombie_vars = tr.framework_zombie_vars()
+    if zombie_vars:
+        framework_state.append(zombie_vars)
     missing_effects = effect_reads - effect_sets
     if missing_effects:
         for core, init in FRAMEWORK_EFFECT_INITS:
@@ -3242,6 +3275,41 @@ WAW_SELF_DAMAGE_CAP = (
     "        if ( self.health > 75 && !( isdefined( self.is_zombie ) && self.is_zombie ) )\n"
     "            return 75;\n",
     "        // waw2bo2: WaW applies the player's own explosive damage in full.\n")
+WAW_ZOMBIE_VAR_HELPER = """
+waw2bo2_set_zombie_var( var, value, is_float, column, is_team_based )
+{
+    // waw2bo2: a variable WaW's framework sets keeps WaW's default and only the
+    // map's own WaW table may change it (Translator.framework_zombie_vars);
+    // BO2's stock mp/zombiemode.csv (zombie_spawn_delay 2.0) does not apply.
+    if ( isdefined( level.waw2bo2_zombie_var_defaults ) && isdefined( level.waw2bo2_zombie_var_defaults[var] ) )
+    {
+        maps\\mp\\waw\\_waw2bo2_compat::waw_set_zombie_var( var, level.waw2bo2_zombie_var_defaults[var], undefined, is_float );
+        return level.zombie_vars[var];
+    }
+
+    return set_zombie_var( var, value, is_float, column, is_team_based );
+}
+"""
+
+
+def waw_zombie_var_defaults(bootstrap: str) -> str:
+    """BO2's zombie_vars (_zm::init_levelvars, its init_zombie_vars) through
+    waw2bo2_set_zombie_var: WaW's framework value where WaW sets the variable."""
+    script = gsc.parse(bootstrap, "owned zombie bootstrap")
+    fn = script.functions.get("init_levelvars")
+    if fn is None:
+        raise ValueError("BO2 server bootstrap has no init_levelvars")
+    toks, count = script.tokens, 0
+    for i in range(fn.body_open, fn.body_close - 2):
+        if toks[i].low == "set_zombie_var" and toks[i + 1].text == "(" and toks[i + 2].kind == gsc.STRING \
+                and toks[i - 1].text not in (".", "::"):
+            toks[i].text = "waw2bo2_set_zombie_var"
+            count += 1
+    if not count:
+        raise ValueError("BO2 init_levelvars sets no zombie_vars")
+    return gsc.emit(script.tokens) + WAW_ZOMBIE_VAR_HELPER
+
+
 BO2_PERK_OVERRIDES = (
     "maps/mp/zombies/_zm_perks.gsc",
     "clientscripts/mp/zombies/_zm_perks.csc",
@@ -3363,6 +3431,7 @@ def stage_bo2_perk_support(out_root: Path, bo2_root: Path, *, bo2_stock_perks: b
     if bootstrap.count(WAW_SELF_DAMAGE_CAP[0]) != 1:
         raise ValueError("BO2 server bootstrap explosive self-damage cap changed")
     bootstrap = bootstrap.replace(*WAW_SELF_DAMAGE_CAP)
+    bootstrap = waw_zombie_var_defaults(bootstrap)
     bootstrap += WAW_ROUND_COUNTER_HELPER
     (server_dir / "_waw2bo2_zm.gsc").write_text(
         PERK_OVERRIDE_HEADER + bootstrap.replace(native, owned), encoding="utf-8")
