@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from waw2bo2 import constraints
+from waw2bo2 import constraints, modzone
 
 
 def rope():
@@ -17,6 +17,61 @@ def rope():
 
 
 class ConstraintTests(unittest.TestCase):
+    def test_rope_engine_default_material_is_an_explicit_dependency(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.assertEqual(modzone.rope_asset_lines(root), [])
+            self.stage([rope()], root)
+            self.assertEqual(modzone.rope_asset_lines(root / 'project'), ['material,mc/rope'])
+
+    def test_script_suspension_uses_authored_world_anchor_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = dict(rope(), material='', flags=0, timeout=0)
+            self.stage([entry], root)
+            project = root / 'project'
+            assets = project / 'maps/mp/waw/_waw2bo2_assets.gsc'
+            assets.parent.mkdir(parents=True)
+            assets.write_text('init()\n{\n    level.existing = 1;\n}\n')
+            entities = [{'classname': 'script_model', 'targetname': 'suspended_model',
+                         'origin': '100 200 266', 'angles': '0 90 0'}]
+            (project / 'BSP/entities.json').write_text(json.dumps({'entities': entities}))
+            report = constraints.stage_script_suspensions(project)
+            self.assertEqual(report, {'suspensions': 1, 'unsupported': []})
+            first = assets.read_text()
+            self.assertIn('suspension.anchor = (100, 200, 300);', first)
+            self.assertIn('suspension.point = (0, 0, -3);', first)
+            self.assertIn('suspension.length = 34;', first)
+            self.assertIn('level.existing = 1;', first)
+            constraints.stage_script_suspensions(project)
+            self.assertEqual(assets.read_text(), first)
+            entry['timeout'] = 1000
+            self.stage([entry], root)
+            report = constraints.stage_script_suspensions(project)
+            self.assertEqual(report, {'suspensions': 0, 'unsupported': ['suspended_model']})
+            self.assertNotIn('suspension.anchor', assets.read_text())
+
+    def test_reversed_attachment_and_multiple_joints_are_not_confused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = dict(rope(), material='', flags=0, timeout=0,
+                         attach_point_type1=0, attach_point_type2=2,
+                         target_ent1='', target_ent2='suspended_model',
+                         pos=[100, 200, 300], pos2=[0, 0, -3])
+            self.stage([entry], root)
+            project = root / 'project'
+            assets = project / 'maps/mp/waw/_waw2bo2_assets.gsc'
+            assets.parent.mkdir(parents=True)
+            assets.write_text('init()\n{\n}\n')
+            (project / 'BSP/entities.json').write_text(json.dumps({'entities': [
+                {'classname': 'script_model', 'targetname': 'suspended_model'}]}))
+            self.assertEqual(constraints.stage_script_suspensions(project)['suspensions'], 1)
+            self.assertIn('suspension.anchor = (100, 200, 300);', assets.read_text())
+            self.assertIn('suspension.point = (0, 0, -3);', assets.read_text())
+            self.stage([entry, entry], root)
+            self.assertEqual(constraints.stage_script_suspensions(project),
+                             {'suspensions': 0, 'unsupported': ['suspended_model']})
+
     def stage(self, entries, root):
         source = root / 'source.json'
         source.write_text(json.dumps(dict(version=1, constraints=entries)))

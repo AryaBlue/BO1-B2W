@@ -449,6 +449,90 @@ waw_set_zombie_var( var, value, div, is_float )
     level.zombie_vars[var] = value;
 }
 
+// T6 MP's entity rope anchors are visual followers, not physical joints.
+// Fixed-world source suspensions use an authoritative pendulum. Other models
+// retain native physics. This does not replace general rigid-body collision.
+// The launch impulse is a linear kick; off-center torque is not simulated.
+waw_physicslaunch( point, impulse )
+{
+    definition = undefined;
+    if ( isdefined( level.waw_rope_suspensions ) && isdefined( self.targetname ) )
+        definition = level.waw_rope_suspensions[self.targetname];
+    if ( !isdefined( definition ) )
+    {
+        if ( isdefined( point ) && isdefined( impulse ) )
+            self physicslaunch( point, impulse );
+        else
+            self physicslaunch();
+        return;
+    }
+    if ( !isdefined( self.waw_rope_motion ) )
+    {
+        state = spawnstruct();
+        state.definition = definition;
+        state.forward = anglestoforward( self.angles );
+        state.up = anglestoup( self.angles );
+        state.position = self.origin + state.forward * definition.point[0]
+            - anglestoright( self.angles ) * definition.point[1] + state.up * definition.point[2];
+        state.rest = vectornormalize( state.position - definition.anchor );
+        state.velocity = ( 0, 0, 0 );
+        self.waw_rope_motion = state;
+        self thread waw_rope_motion();
+    }
+    if ( isdefined( impulse ) )
+        self.waw_rope_motion.velocity += impulse;
+}
+
+waw_rope_rotate( vector, axis, cosine )
+{
+    // Rodrigues' shortest rotation from the authored rope direction.
+    return vector + vectorcross( axis, vector )
+        + vectorcross( axis, vectorcross( axis, vector ) ) / max( 0.0001, 1 + cosine );
+}
+
+waw_rope_motion()
+{
+    self endon( "death" );
+    state = self.waw_rope_motion;
+    definition = state.definition;
+    dt = 0.0125;
+    for ( ;; )
+    {
+        for ( step = 0; step < 4; step++ )
+        {
+            gravity = getdvarfloat( "phys_gravity" );
+            state.velocity += ( 0, 0, gravity ) * dt;
+            if ( definition.damp > 0 )
+                state.velocity *= max( 0, 1 - definition.damp * dt );
+            state.position += state.velocity * dt;
+            displacement = state.position - definition.anchor;
+            distance = length( displacement );
+            if ( distance > definition.length )
+            {
+                direction = displacement / distance;
+                state.position = definition.anchor + direction * definition.length;
+                // Remove outward velocity, retaining tangential motion.
+                state.velocity -= direction * max( 0, vectordot( state.velocity, direction ) );
+            }
+        }
+        direction = vectornormalize( state.position - definition.anchor );
+        axis = vectorcross( state.rest, direction );
+        cosine = vectordot( state.rest, direction );
+        forward = waw_rope_rotate( state.forward, axis, cosine );
+        up = waw_rope_rotate( state.up, axis, cosine );
+        angles = vectortoangles( forward );
+        roll = vectortoangles( ( vectordot( up, anglestoup( angles ) ),
+            vectordot( up, anglestoright( angles ) ), 0 ) );
+        angles = ( angles[0], angles[1], angleclamp180( roll[1] ) );
+        local_point = definition.point;
+        origin = state.position - anglestoforward( angles ) * local_point[0]
+            + anglestoright( angles ) * local_point[1] - anglestoup( angles ) * local_point[2];
+        self moveto( origin, 0.05 );
+        self rotateto( angles, 0.05 );
+        wait 0.05;
+    }
+}
+
 waw_playfxontag( fx, ent, tag )
 {
     if ( !isdefined( fx ) || !isdefined( ent ) )

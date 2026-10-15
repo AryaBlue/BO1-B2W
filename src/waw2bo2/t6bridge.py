@@ -1851,6 +1851,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
     material_names = materialisolation.stage(report, project_root, techset_dump) if techset_dump else {}
     report.content['material_identities'] = material_names
     rope_runtime = constraints.stage_entities(project_root)
+    rope_runtime['script_suspensions'] = constraints.stage_script_suspensions(project_root)
     report.content['physics_constraint_runtime'] = rope_runtime
     hud_materials = {material_names.get(name, name) for name in hud_materials}
     staged = {m["name"] for m in report.materials}

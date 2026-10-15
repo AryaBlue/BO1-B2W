@@ -60,10 +60,33 @@ panels at doorways and outside buildings. The helper surfaces needed both
 are gone after the range correction. Final shadow, water and barricade behavior
 still need broader visual validation.
 
-Peter's rope remains unresolved and the user explicitly deferred it. Both
-constraints round-trip, and live native tables bind the named entities and
-initialize two server/client ropes, but Peter still falls after PhysicsLaunch.
-Preserving the constraint data is not a verified hanging-body fix.
+T6 MP binds the named entities and initializes both ropes, but its centity
+anchors follow ScriptMovers without creating a physical distance joint.
+Peter therefore fell despite intact constraint records. Fixed-world,
+unbreakable script-model suspensions now register their authored anchor,
+local attachment, rope length and damping in the asset initializer. A shared
+PhysicsLaunch adapter supplies source kicks to a server-owned pendulum,
+integrated in four substeps per server frame; the mover's position and
+orientation follow that constrained attachment. Unconstrained models keep
+native PhysicsLaunch. Timed, breakable and multiply constrained bodies are
+excluded and listed in the staging report. This decorative suspension solver
+does not implement general rigid-body collisions or off-center torque.
+
+The gameplay package also explicitly links the native default `mc/rope`
+material and its image dependencies. Rope_Init requests that material even
+when another rope supplies an explicit material; it was previously absent.
+
+Validation: all 583 workspace tests pass. The final fastfiles round-trip 101
+compiled scripts and pass the material and authored-hitbox audits. In a
+three-minute LAN test with the original random-kick thread, Peter moved in
+all 180 samples and stayed near his authored height instead of falling to
+the floor. The rendered attachment measured 33.60â€“35.72 units from the anchor
+(34 authored; network mover interpolation/quantization affects the samples).
+An unconstrained copy used native physics and fell 112 units. Live rope
+records resolve `mc/rope` for Peter and the original `techrope_global_black`
+for the lamp. A separate controlled lamp kick exercised its 60-unit
+suspension. No script runtime errors occurred. Screenshots and probe logs
+are saved in `work/shi_no_numa_dlc2`.
 
 The Wunderwaffe's source Tesla chain is now explicitly extracted and registered
 with T6's zombie damage callback for hip fire and ADS. Previously only the

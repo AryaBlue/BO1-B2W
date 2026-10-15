@@ -714,12 +714,22 @@ def recover_ipak_images(log: str, roots: list[Path], output: Path,
     return recovered
 
 
+def rope_asset_lines(asset_root: Path | None) -> list[str]:
+    """Rope_Init requests its default material even for named rope materials."""
+    manifest = asset_root / 'BSP/constraints.json' if asset_root is not None else None
+    if manifest is None or not manifest.is_file():
+        return []
+    data = json.loads(manifest.read_text(encoding='utf-8'))
+    return ['material,mc/rope'] if any(c['type'] == 8 for c in data['constraints']) else []
+
+
 def link_mod(bo2: Path, work: Path, unlinker: Path, extra_lines: list[str] = (),
              asset_root: Path | None = None, extra_asset_roots: list[Path] = (),
              linker: Path | None = None, stock_dump: Path | None = None) -> tuple[Path, list[str]]:
     """Link mod.ff. Template entries whose raw assets are not on disk (DLC
     weapons etc. that All2Raw did not produce) are dropped one at a time and
     returned, so the caller can report exactly what the build lacks."""
+    extra_lines = list(dict.fromkeys([*extra_lines, *rope_asset_lines(asset_root)]))
     work = work.resolve()  # the linker runs from bo2\bin
     template = bo2 / "mods" / TEMPLATE_MAP / f"{TEMPLATE_MAP}.zone"
     dropped: list[str] = []
