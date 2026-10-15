@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+
+from test_zombiebehavior import BO2_DEATH_POINTS
 from pathlib import Path
 from waw2bo2 import gsc, gscport, zombiebehavior
 
@@ -16,7 +18,8 @@ class SourceChaseTests(unittest.TestCase):
                 'do_zombie_spawn(){spot=random(spots);}'
                 'should_skip_teardown(native_result){return false;}'
                 'zombie_think(){native_result=undefined; self waittill("risen",native_result);'
-                'if(!isdefined(native_result)&&isdefined(self.target)&&self.target!=""){go_window();}}')
+                'if(!isdefined(native_result)&&isdefined(self.target)&&self.target!=""){go_window();}}\n'
+                + BO2_DEATH_POINTS)
             movement = root / 'bo2/raw/maps/mp/animscripts/zm_run.gsc'
             movement.parent.mkdir(parents=True)
             movement.write_text('setanimstatefromspeed(){self [[self.setanimstatefromspeed]]();}')

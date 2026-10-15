@@ -1185,6 +1185,28 @@ waw_add_zombie_weapon( name, hint, cost, weaponvo, variation_count, ammo_cost )
     }
 }
 
+// WaW drops a power-up only where it lands inside a "playable_area" trigger
+// (_zombiemode_powerups::powerup_drop). BO2 checks its zone volumes instead,
+// which converted maps synthesize around spawner groups, reaching outside.
+waw_powerup_drop( drop_point )
+{
+    areas = getentarray( "playable_area", "targetname" );
+    if ( areas.size )
+    {
+        probe = spawn( "script_model", drop_point + ( 0, 0, 40 ) );
+        valid = 0;
+        for ( i = 0; i < areas.size; i++ )
+        {
+            if ( probe istouching( areas[i] ) )
+                valid = 1;
+        }
+        probe delete();
+        if ( !valid )
+            return;
+    }
+    maps\mp\zombies\_zm_powerups::powerup_drop( drop_point );
+}
+
 // level.zombie_weapons also holds entries only BO2 needs (its framework
 // last-stand pistol, native tactical helpers). WaW scripts never registered
 // them, so their key lists (the mystery box chooser) must not see them.

@@ -562,6 +562,41 @@ source_chases( rise_result )
 '''
 
 
+# WaW _zombiemode_spawner::zombie_death_points rolls a power-up for every
+# death (score-gated by zombie_drop_item) before it looks at the attacker, so
+# kills without one (the flogger) can drop; only zombies marked for death
+# (electric traps) never do. BO2 also requires a player attacker and its own
+# "emerged into the playable area" flag. Drops then keep WaW's playable_area
+# check (compat waw_powerup_drop).
+_DROP_GATE = ('    if ( !isdefined( attacker ) || !isplayer( attacker ) )\n        return;\n\n'
+              '    if ( zombie_can_drop_powerups( zombie ) )')
+_KILL_VOX = ('    level thread maps\\mp\\zombies\\_zm_audio::player_zombie_kill_vox( hit_location, attacker, mod, zombie );')
+_DROP_CALL = '    level thread maps\\mp\\zombies\\_zm_powerups::powerup_drop( origin );'
+_WAW_DROP_CHECK = '''
+waw_zombie_can_drop_powerups( zombie )
+{
+    if ( is_tactical_grenade( zombie.damageweapon ) || !flag( "zombie_drop_powerups" ) )
+        return false;
+
+    // waw2bo2: WaW gives no points or power-ups for zombies marked for death
+    if ( isdefined( zombie.marked_for_death ) && zombie.marked_for_death )
+        return false;
+
+    return true;
+}
+'''
+
+
+def waw_drop_rules(text: str, native: str) -> str:
+    for anchor in (_DROP_GATE, _KILL_VOX, _DROP_CALL):
+        if text.count(anchor) != 1:
+            raise ValueError(f'{native}: power-up drop contract changed near {anchor.strip()[:40]!r}')
+    text = text.replace(_DROP_GATE, '    if ( waw_zombie_can_drop_powerups( zombie ) )')
+    text = text.replace(_KILL_VOX, '    if ( !isdefined( attacker ) || !isplayer( attacker ) )\n        return;\n\n' + _KILL_VOX)
+    text = text.replace(_DROP_CALL, '    level thread maps\\mp\\waw\\_waw2bo2_compat::waw_powerup_drop( origin );')
+    return text + _WAW_DROP_CHECK
+
+
 def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> None:
     """Own the registered spawn callback so cached stock scripts cannot mask it."""
     if not (out_root / (RUNTIME.replace('\\', '/') + '.gsc')).is_file():
@@ -644,7 +679,7 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
         match = gsc.INCLUDE_RE.match(token.text) if token.kind == gsc.DIRECTIVE else None
         if match and match[1] == native:
             token.text = f'#include {owned};'
-    text = gsc.emit(script.tokens)
+    text = waw_drop_rules(gsc.emit(script.tokens), native)
     dest = out_root / (owned.replace('\\', '/') + '.gsc')
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text('// waw2bo2: native AI with source spawn/speed adapters.\n' + text, encoding='utf-8')

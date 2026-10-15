@@ -6,6 +6,13 @@ from waw2bo2 import entities, gsc, gscport, zombiebehavior
 from waw2bo2.t6api import T6Api
 
 
+
+# BO2 _zm_spawner's power-up drop contract (zombiebehavior.waw_drop_rules).
+BO2_DEATH_POINTS = (
+    'zombie_death_points( origin, mod, hit_location, attacker, zombie, team )\n{\n'
+    + zombiebehavior._DROP_GATE + '\n    {\n' + zombiebehavior._DROP_CALL + '\n    }\n\n'
+    + zombiebehavior._KILL_VOX + '\n    award();\n}\n')
+
 class ZombieBehaviorTests(unittest.TestCase):
     def make_movement_callback(self, root):
         path = root / 'bo2/raw/maps/mp/animscripts/zm_run.gsc'
@@ -236,7 +243,7 @@ class ZombieBehaviorTests(unittest.TestCase):
             native = root / 'bo2/raw/maps/mp/zombies/_zm_spawner.gsc'
             native.parent.mkdir(parents=True)
             native.write_text('zombie_spawn_init(){ self init_zombie_run_cycle(); self thread zombie_think(); } '
-                              'do_zombie_spawn(){spot=random(spots);} zombie_think(){}')
+                              'do_zombie_spawn(){spot=random(spots);} zombie_think(){}\n' + BO2_DEATH_POINTS)
             out = root / 'out/maps/mp/waw'
             out.mkdir(parents=True)
             (out / '_waw2bo2_zombie_behavior.gsc').write_text('init(){}')
@@ -267,8 +274,7 @@ class ZombieBehaviorTests(unittest.TestCase):
             native = root / 'bo2/raw/maps/mp/zombies/_zm_spawner.gsc'
             native.parent.mkdir(parents=True)
             native.write_text('zombie_spawn_init(){ self init_zombie_run_cycle(); self thread zombie_think(); } '
-                              'do_zombie_spawn(){spot=random(spots);} zombie_think(){} '
-                              'zombie_death_points(origin, mod, loc, attacker, zombie, team){ award(); }')
+                              'do_zombie_spawn(){spot=random(spots);} zombie_think(){}\n' + BO2_DEATH_POINTS)
             out = root / 'out/maps/mp/waw'
             out.mkdir(parents=True)
             (out / '_waw2bo2_zombie_behavior.gsc').write_text('init(){}')
@@ -280,6 +286,11 @@ class ZombieBehaviorTests(unittest.TestCase):
             body = gsc.emit(script.tokens[fn.body_open:fn.body_close])
             self.assertLess(body.index('zombie.tesla_death'), body.index('award()'))
             self.assertIn('return;', body)
+            # WaW drop rule: roll before the attacker check, WaW playable_area
+            self.assertLess(body.index('waw_zombie_can_drop_powerups( zombie )'), body.index('isplayer( attacker )'))
+            self.assertIn('_waw2bo2_compat::waw_powerup_drop( origin )', body)
+            self.assertNotIn('_zm_powerups::powerup_drop', body)
+            self.assertIn('zombie.marked_for_death', text)
 
     def test_chosen_active_spawn_location_is_bound_before_deferred_native_callbacks(self):
         runtime = zombiebehavior.runtime_source(gscport.API['zombie_runtime'], None)
@@ -334,7 +345,7 @@ class ZombieBehaviorTests(unittest.TestCase):
             native.write_text('#include maps\\mp\\zombies\\_zm_spawner;\n'
                 'zombie_spawn_init(animname_set){ self init_zombie_run_cycle(); self thread zombie_think(); }\n'
                 'do_zombie_spawn(){ spot=random(spots); self.spawn_point = spot; }\n'
-                'zombie_think(){ wait 1; }')
+                'zombie_think(){ wait 1; }\n' + BO2_DEATH_POINTS)
             runtime = root / 'out/maps/mp/waw/_waw2bo2_zombie_behavior.gsc'
             runtime.parent.mkdir(parents=True)
             runtime.write_text(zombiebehavior.runtime_source(gscport.API['zombie_runtime'], None))
