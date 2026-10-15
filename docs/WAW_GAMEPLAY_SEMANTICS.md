@@ -35,8 +35,11 @@ keyed on WaW source data, never on a map name.
   `waw_powerup_drop`). BO2 checked its zone volumes, which the converter
   synthesizes around spawner groups and which reach outside the playable area.
 - Tesla kills skip the ordinary drop in WaW; the Waffe's only drop needs
-  `tesla_kills_for_powerup` (15) hits in one chain of `tesla_max_enemies_killed`
-  (20). Under the 10-target cap the threshold scales to 8.
+  `tesla_kills_for_powerup` hits in one chain. Every shipped WaW copy of
+  `_zombiemode_tesla.gsc` (Shi No Numa, its patch, Der Riese's patch) sets
+  `tesla_max_enemies_killed` 20 and `tesla_kills_for_powerup` 15, and no
+  `mp/zombiemode.csv` row overrides them. At the user's request the port caps
+  chains at 10 (`tesla_runtime.max_targets`) and drops when a shot reaches it.
 
 ## Mystery box
 

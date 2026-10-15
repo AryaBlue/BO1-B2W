@@ -2960,18 +2960,14 @@ def tesla_callback_source(entries: dict[str, str]) -> str:
 waw_tesla_init()
 {{
     {entries['initialize']}();
-    // Standard Wunderwaffe limit requested for the converted runtime.
+    // Wunderwaffe limit requested by the user (WaW's script says 20).
     if ( isdefined( level.zombie_vars["tesla_max_enemies_killed"] ) )
-    {{
-        source_max = level.zombie_vars["tesla_max_enemies_killed"];
-        level.zombie_vars["tesla_max_enemies_killed"] = min( {definition['max_targets']}, source_max );
-        // A Tesla kill never drops through the ordinary path; WaW's only
-        // Wunderwaffe drop needs tesla_kills_for_powerup hits in one chain
-        // (15 of 20). Keep it reachable under the cap, at the source ratio.
-        cap = level.zombie_vars["tesla_max_enemies_killed"];
-        if ( isdefined( level.zombie_vars["tesla_kills_for_powerup"] ) && source_max > cap )
-            level.zombie_vars["tesla_kills_for_powerup"] = int( level.zombie_vars["tesla_kills_for_powerup"] * cap / source_max + 0.999 );
-    }}
+        level.zombie_vars["tesla_max_enemies_killed"] = min( {definition['max_targets']}, level.zombie_vars["tesla_max_enemies_killed"] );
+    // A Tesla kill never drops through the ordinary path; WaW's only Waffe
+    // drop needs tesla_kills_for_powerup hits in one chain. At the user's
+    // request it drops when a shot reaches the cap (WaW's 15 is unreachable).
+    if ( isdefined( level.zombie_vars["tesla_kills_for_powerup"] ) && isdefined( level.zombie_vars["tesla_max_enemies_killed"] ) )
+        level.zombie_vars["tesla_kills_for_powerup"] = min( level.zombie_vars["tesla_kills_for_powerup"], level.zombie_vars["tesla_max_enemies_killed"] );
     {definition['native_register']}( ::waw_tesla_damage );
 }}
 
