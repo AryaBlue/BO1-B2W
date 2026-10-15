@@ -178,6 +178,46 @@ class FrameworkHookTests(unittest.TestCase):
         self.assertNotIn("eye_glow", core)          # never read
         self.assertIn("zombiemode__init_fx_level_state();", core)
 
+    def test_effect_only_client_listeners_run_on_the_server(self):
+        # Shi No Numa: the trap's clientnotify drives arcs spawned by its client script
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                "maps/testmap.gsc": "main()\n{\n\tmaps\\_zombiemode::main();\n\tclientnotify( \"trap_a\" );\n}\n",
+                "clientscripts/testmap_fx.csc":
+                    "main()\n{\n\tprecache();\n\tlevel thread monitor( \"trap_a\", \"side_a\" );\n"
+                    "\tlevel thread fog();\n}\n"
+                    "precache()\n{\n\tlevel._effect[\"zapper\"] = loadfx( \"misc/fx_zombie_electric_trap\" );\n}\n"
+                    "monitor( name, side )\n{\n\twhile ( 1 )\n\t{\n\t\tlevel waittill( name );\n"
+                    "\t\tpoints = getstructarray( name, \"targetname\" );\n"
+                    "\t\tfor ( i = 0; i < points.size; i++ )\n\t\t\tpoints[i] thread arc( side );\n\t}\n}\n"
+                    "arc( side )\n{\n\tforward = anglestoforward( self.angles );\n\tup = anglestoup( self.angles );\n"
+                    "\tplayers = getlocalplayers();\n\tself.fx = [];\n"
+                    "\tfor ( i = 0; i < players.size; i++ )\n\t{\n"
+                    "\t\tself.fx[i] = SpawnFx( i, level._effect[\"zapper\"], self.origin, 0, forward, up );\n"
+                    "\t\ttriggerfx( self.fx[i] );\n\t}\n\tlevel waittill( side + \"off\" );\n"
+                    "\tfor ( i = 0; i < self.fx.size; i++ )\n\t\tself.fx[i] delete();\n}\n"
+                    "fog()\n{\n\tlevel waittill( \"dog_start\" );\n\tSetVolFog( 1, 2, 3, 4, 0.5, 0.5, 0.5, 7 );\n}\n",
+            }
+            for name, text in files.items():
+                (root / "src" / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / "src" / name).write_text(text, encoding="utf-8")
+            api = _api()
+            api.builtins.update({"clientnotify": (1, 1)})
+            report = gscport.port_map(gscport.Sources([root / "src"], [], None), api, "testmap", root / "out")
+            core = (root / "out/maps/mp/waw/_waw2bo2_core.gsc").read_text(encoding="utf-8")
+            main = (root / "out/maps/mp/waw/testmap.gsc").read_text(encoding="utf-8")
+        self.assertIn(f'{gscport.COMPAT}::waw_clientnotify( "trap_a" )', main)
+        self.assertIn('level thread waw2bo2_testmap_fx__monitor( "trap_a", "side_a" );', core)
+        self.assertIn('level waittill( "waw_client_" + name )', core)
+        self.assertIn('level waittill( "waw_client_" + side + "off" )', core)
+        self.assertIn('SpawnFx( level.waw_effect["zapper"], self.origin, forward, up )', core)
+        self.assertIn(f'{gscport.COMPAT}::waw_server_local_players()', core)
+        self.assertIn(f'level.waw_effect["zapper"] = {gscport.COMPAT}::waw_loadfx( "misc/fx_zombie_electric_trap" )', core)
+        self.assertIn("misc/fx_zombie_electric_trap", report.fx)
+        self.assertNotIn("SetVolFog", core)
+        self.assertIn("waw2bo2_client_fx_0();", core)
+
     def test_box_chooser_keys_skip_bo2_only_weapons(self):
         tokens = gscport.gsc.tokenize("f()\n{\n\tkeys = GetArrayKeys( level.zombie_weapons );\n"
                                       "\tp = GetArrayKeys( level.zombie_powerups );\n}\n")

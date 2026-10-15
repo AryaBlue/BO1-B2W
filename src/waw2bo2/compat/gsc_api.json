@@ -175,6 +175,7 @@
     "maps\\mp\\zombies\\_zm_utility::destroy_hud": "waw_destroy_hud"
   },
   "compat_wrappers": [
+    "clientnotify",
     "physicslaunch",
     "spawn",
     "oktospawn",

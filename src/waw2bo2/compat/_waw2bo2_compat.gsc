@@ -236,7 +236,7 @@ power_bridge()
     if ( isdefined( level.flag["power_on"] ) && flag( "power_on" ) )
         return;
     level notify( "electric_door" );
-    clientnotify( "power_on" );
+    waw_clientnotify( "power_on" );
     if ( isdefined( level.flag["power_on"] ) )
         flag_set( "power_on" );
     level notify( "power_on" );
@@ -1183,6 +1183,23 @@ waw_add_zombie_weapon( name, hint, cost, weaponvo, variation_count, ammo_cost )
         maps\mp\zombies\_zm_weapons::add_zombie_weapon( level.waw2bo2_runtime_weapons[name], undefined, hint, cost, weaponvo, "", ammo_cost );
         waw_native_only_weapon( level.waw2bo2_runtime_weapons[name] );
     }
+}
+
+// The map's effect-only client listeners run on the server (gscport
+// client_fx_listeners) and wait for "waw_client_" + msg, a server notify the
+// native clientnotify never raises.
+waw_clientnotify( msg )
+{
+    clientnotify( msg );
+    level notify( "waw_client_" + msg );
+}
+
+// A server copy of a client listener spawns its effect once, for everyone.
+waw_server_local_players()
+{
+    players = [];
+    players[0] = level;
+    return players;
 }
 
 // WaW drops a power-up only where it lands inside a "playable_area" trigger

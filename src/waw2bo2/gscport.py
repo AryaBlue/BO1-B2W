@@ -1993,6 +1993,127 @@ class Translator:
                         self.report.rewrites[f"client {msg} fog monitor -> server"] += 1
         return made
 
+    # Client calls an effect-only listener may make once it runs on the server.
+    CLIENT_FX_CALLS = {"spawnfx", "triggerfx", "playfx", "getstructarray", "getstruct", "anglestoforward",
+                       "anglestoup", "anglestoright", "getlocalplayers", "isdefined", "randomfloat",
+                       "randomfloatrange", "randomint", "randomintrange", "delete", "realwait", "wait"}
+
+    def client_fx_listeners(self) -> list[str]:
+        """Effect-only client listeners of the map's client scripts, run on the server.
+
+        WaW maps answer a server clientnotify in their client scripts, e.g. Shi
+        No Numa's trap_fx_monitor waits for the trap's notify and spawns the
+        electric arcs on its structs. The port does not run the source client
+        scripts, so those effects never appeared. A listener main() threads
+        whose functions only spawn/trigger/delete effects becomes a server
+        thread: SpawnFx/PlayFx drop the local client argument, getlocalplayers
+        yields one entry, and level waittill( msg ) waits for the
+        "waw_client_" + msg notify that compat waw_clientnotify adds. The
+        client effects it reads are registered on the server."""
+        made: list[str] = []
+        for key in sorted(k for k in self.sources.text if k.endswith(".csc")):
+            script = self.sources.get(key[:-4], ".csc")
+            main = script.functions.get("main") if script is not None else None
+            if main is None:
+                continue
+            toks = script.tokens
+            effects = {}
+            for i in range(len(toks) - 8):
+                if [t.low for t in toks[i:i + 4]] == ["level", ".", "_effect", "["] and toks[i + 4].kind == gsc.STRING \
+                        and toks[i + 5].text == "]" and toks[i + 6].text == "=" and toks[i + 7].low == "loadfx" \
+                        and toks[i + 9].kind == gsc.STRING:
+                    effects[toks[i + 4].text[1:-1].lower()] = toks[i + 9].text
+            for ref in gsc.references(toks, main.body_open, main.body_close):
+                if ref.qualifier is not None or ref.pointer or ref.method or ref.name.lower() not in script.functions:
+                    continue
+                if not (toks[ref.index - 1].low == "thread" and toks[ref.index - 2].low == "level"):
+                    continue
+                listener = self.client_fx_listener(key, script, ref.name.lower(), effects)
+                if listener is None:
+                    continue
+                end = gsc._match(toks, ref.index + 1, "(", ")")
+                args = gsc.emit(toks[ref.index + 1:end + 1]).strip()
+                name = f"waw2bo2_client_fx_{len(made)}"
+                self.level_state_parts.append(
+                    f"{name}()\n{{\n\t// {key}::main: client effect listener, on the server\n"
+                    f"{listener['effects']}\tlevel thread {listener['entry']}{args};\n}}\n")
+                made.append(name)
+                self.report.rewrites["client effect listeners -> server"] += 1
+        return made
+
+    def client_fx_listener(self, key: str, script, entry: str, effects: dict[str, str]) -> dict | None:
+        """Server copies of ``entry`` and its local callees, or None if any
+        call is not effect-only (that listener stays unported and reported)."""
+        names, pending = [], [entry]
+        while pending:
+            name = pending.pop()
+            if name in names:
+                continue
+            names.append(name)
+            fn = script.functions[name]
+            for ref in gsc.references(script.tokens, fn.body_open, fn.body_close):
+                low = ref.name.lower()
+                if ref.qualifier is None and low in script.functions:
+                    pending.append(low)
+                elif ref.qualifier is not None or low not in self.CLIENT_FX_CALLS:
+                    self.report.unsupported.setdefault(
+                        f"CSC {ref.name} in client listener {entry} (client-only)", []).append(key)
+                    return None
+        waits = any(script.tokens[i].low == "level" and script.tokens[i + 1].low == "waittill"
+                    for n in names for i in range(script.functions[n].body_open, script.functions[n].body_close))
+        if not waits:
+            return None
+        prefix = f"waw2bo2_{key.split(chr(92))[-1].removesuffix('.csc')}__"
+        parts, used = [], set()
+        for name in names:
+            fn = script.functions[name]
+            toks = [gsc.Token(t.kind, t.text, t.pre, t.line) for t in script.tokens[fn.start:fn.body_close + 1]]
+            i = 0
+            while i < len(toks) - 1:
+                t = toks[i]
+                low = t.low
+                if t.kind == gsc.IDENT and low in names and toks[i + 1].text == "(":
+                    t.text = prefix + low
+                elif low in ("spawnfx", "playfx") and toks[i + 1].text == "(":
+                    # drop the local client number argument
+                    j, depth = i + 2, 0
+                    while depth or toks[j].text != ",":
+                        depth += toks[j].text in ("(", "[")
+                        depth -= toks[j].text in (")", "]")
+                        j += 1
+                    for k in range(i + 2, j + 1):
+                        toks[k].text = toks[k].pre = ""
+                    if low == "spawnfx":
+                        # server spawnfx( fx, origin, forward, up ): no delay argument
+                        close = gsc._match(toks, i + 1, "(", ")")
+                        commas = [k for k in range(i + 2, close) if toks[k].text == "," and
+                                  sum((x.text in ("(", "[")) - (x.text in (")", "]")) for x in toks[i + 2:k]) == 0]
+                        if len(commas) >= 3:
+                            for k in range(commas[1], commas[2]):
+                                toks[k].text = toks[k].pre = ""
+                elif low == "getlocalplayers" and toks[i + 1].text == "(":
+                    t.text = COMPAT + "::waw_server_local_players"
+                elif low == "realwait":
+                    t.text = "wait"
+                elif low == "level" and toks[i + 1].text == "." and toks[i + 2].low == "_effect" \
+                        and toks[i + 3].text == "[" and toks[i + 4].kind == gsc.STRING:
+                    used.add(toks[i + 4].text[1:-1].lower())
+                    toks[i + 2].text = "waw_effect"
+                elif low == "level" and toks[i + 1].low == "waittill" and toks[i + 2].text == "(":
+                    toks[i + 3].pre = " \"waw_client_\" + " + toks[i + 3].pre.lstrip()
+                i += 1
+            parts.append(gsc.emit(toks))
+        missing = sorted(used - effects.keys())
+        if missing:
+            self.report.unsupported.setdefault(
+                f"CSC client effects {', '.join(missing)} in listener {entry} (no client registration)", []).append(key)
+            return None
+        self.level_state_parts.append(f"\n// {key}: client effect listener {entry} (server copy)\n" + "\n".join(parts) + "\n")
+        registrations = "".join(
+            f'\tif ( !isdefined( level.waw_effect["{k}"] ) )\n'
+            f'\t\tlevel.waw_effect["{k}"] = {COMPAT}::waw_loadfx( {effects[k]} );\n' for k in sorted(used))
+        return {"entry": prefix + entry, "effects": registrations}
+
     def framework_hooks(self) -> list[str]:
         """Calls WaW's _zombiemode::main (usually the map's override) makes
         into scripts that are not framework, e.g. a custom perk pack's init().
@@ -2366,6 +2487,7 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     effect_reads = {k.lower() for t in texts for k in re.findall(r'level\.waw_effect\[\s*"([^"]+)"\s*\]', t)}
     effect_sets = {k.lower() for t in texts
                    for k in re.findall(r'level\.waw_effect\[\s*"([^"]+)"\s*\]\s*=[^=]', t)}
+    framework_state += tr.client_fx_listeners()
     missing_effects = effect_reads - effect_sets
     if missing_effects:
         for core, init in FRAMEWORK_EFFECT_INITS:
