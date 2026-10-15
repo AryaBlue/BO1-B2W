@@ -1626,6 +1626,16 @@ waw_unsetperk( perk )
         self.waw2bo2_perks[perk] = undefined;
 }
 
+// WaW assigns .maxhealth (Jugg: 160). A T6 player's cap lives in its player
+// state and only setmaxhealth changes it; AI keep the field.
+waw_set_maxhealth( value )
+{
+    if ( isplayer( self ) )
+        self setmaxhealth( value );
+    else
+        self.maxhealth = value;
+}
+
 waw_hasperk( perk )
 {
     if ( !waw_perk_emulated( perk ) )

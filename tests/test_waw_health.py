@@ -1,0 +1,37 @@
+import unittest
+
+from waw2bo2 import gsc, gscport
+
+
+def lower(source: str) -> tuple[int, str]:
+    tokens = gsc.tokenize(source)
+    count = gscport.lower_maxhealth_assignments(tokens)
+    return count, gsc.emit(tokens)
+
+
+class MaxHealthLoweringTests(unittest.TestCase):
+    SET = gscport.COMPAT + "::waw_set_maxhealth("
+
+    def test_player_jugg_assignment_uses_setmaxhealth_helper(self):
+        count, text = lower('f()\n{\n    if ( perk == "x" )\n    {\n        player.maxhealth = 160;\n'
+                            '        player.health = 160;\n    }\n}\n')
+        self.assertEqual(count, 1)
+        self.assertIn(f"player {self.SET} 160 );", text)
+        self.assertIn("player.health = 160;", text)
+
+    def test_consecutive_indexed_and_else_receivers(self):
+        count, text = lower('f()\n{\n    self.maxhealth = 100;\n    level.players[i].maxhealth = int( a * ( b + 1 ) );\n'
+                            '    if ( x ) y = 1;\n    else self.maxhealth = 5;\n}\n')
+        self.assertEqual(count, 3)
+        self.assertIn(f"self {self.SET} 100 );", text)
+        self.assertIn(f"level.players[i] {self.SET} int( a * ( b + 1 ) ) );", text)
+        self.assertIn(f"else self {self.SET} 5 );", text)
+        gsc.parse(text, "<lowered>")
+
+    def test_reads_and_comparisons_are_untouched(self):
+        source = 'f()\n{\n    if ( self.maxhealth == 100 ) x = 1;\n    z = self.maxhealth;\n    a = b.maxhealth * 2;\n}\n'
+        self.assertEqual(lower(source), (0, source))
+
+
+if __name__ == "__main__":
+    unittest.main()

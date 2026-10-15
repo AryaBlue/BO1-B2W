@@ -821,6 +821,57 @@ def bridge_launch_triggers(tokens: list[gsc.Token]) -> int:
     return fixes
 
 
+def lower_maxhealth_assignments(tokens: list[gsc.Token]) -> int:
+    """`<ent>.maxhealth = <expr>;` -> `<ent> waw_set_maxhealth( <expr> );`.
+
+    WaW scripts raise a player's maximum health by assigning the field (Jugg:
+    `player.maxhealth = 160`). T6 keeps the player's cap in its player state,
+    which only setmaxhealth changes (BO2's own scripts never assign the field),
+    so health stayed clamped to 100 and regenerated only that far. The
+    helper uses setmaxhealth for players and keeps the field for AI.
+    """
+    changed = 0
+    for i in range(2, len(tokens) - 2):
+        if tokens[i].low != 'maxhealth' or tokens[i - 1].text != '.' or tokens[i + 1].text != '=':
+            continue
+        start = i - 2  # receiver: identifiers joined by '.' and [index] groups
+        while True:
+            if tokens[start].text == ']':
+                depth = 0
+                while True:
+                    depth += {']': 1, '[': -1}.get(tokens[start].text, 0)
+                    if depth == 0:
+                        break
+                    start -= 1
+                start -= 1
+            if tokens[start].kind not in (gsc.IDENT, gsc.PATH) and tokens[start].low not in ('self', 'level'):
+                break
+            if tokens[start - 1].text != '.':
+                break
+            start -= 2
+        # Statement start (an earlier rewrite may have widened a ';').
+        if tokens[start].kind != gsc.IDENT or tokens[start - 1].text.strip()[-1:] not in (';', '{', '}', ')') \
+                and tokens[start - 1].low != 'else':
+            continue
+        end, depth = i + 2, 0
+        while depth or tokens[end].text != ';':
+            if tokens[end].kind == gsc.EOF:
+                break
+            depth += tokens[end].text in ('(', '[', '{')
+            depth -= tokens[end].text in (')', ']', '}')
+            end += 1
+        if tokens[end].text != ';':
+            continue
+        tokens[i - 1].text = ''
+        tokens[i].text = ' ' + COMPAT + '::waw_set_maxhealth('
+        tokens[i].pre = ''
+        tokens[i + 1].text = tokens[i + 1].pre = ''
+        tokens[i + 2].pre = ' '
+        tokens[end].text = ' );'
+        changed += 1
+    return changed
+
+
 def lower_stationary_fx_carriers(tokens: list[gsc.Token]) -> int:
     """Play effects on inert tag_origin carriers at their authored transform.
 
@@ -1053,6 +1104,7 @@ class Translator:
                 self.animation_requirements[fn.animtree.lower()].update(
                     animation_names(tokens[fn.start:fn.body_close + 1]))
         self.report.rewrites["stationary FX carriers lowered to authored-position FX"] += lower_stationary_fx_carriers(tokens)
+        self.report.rewrites["maxhealth assignments through setmaxhealth for players"] += lower_maxhealth_assignments(tokens)
         self.report.rewrites["launch volume includes its activation trigger"] += bridge_launch_triggers(tokens)
         where_file = self.sources.origin.get(norm(path) + ".gsc", path)
         included_bo2: set[str] = set()
@@ -2969,6 +3021,16 @@ waw2bo2_setroundsplayed( round )
     setroundsplayed( round );
 }}
 """
+# WaW's Callback_PlayerDamage passes the player's own explosive/projectile
+# damage through in full (a point-blank Wunderwaffe or grenade can down you).
+# BO2's player_damage_override caps it at 75 above 75 health. Zombie and dog
+# hits already match: WaW's weaponless zombies melee with defaultweapon
+# (meleeDamage 150) and dogs with dog_MeleeDamage 100, both times
+# player_meleeDamageMultiplier 0.4 (60 and 40, BO2's values).
+WAW_SELF_DAMAGE_CAP = (
+    "        if ( self.health > 75 && !( isdefined( self.is_zombie ) && self.is_zombie ) )\n"
+    "            return 75;\n",
+    "        // waw2bo2: WaW applies the player's own explosive damage in full.\n")
 BO2_PERK_OVERRIDES = (
     "maps/mp/zombies/_zm_perks.gsc",
     "clientscripts/mp/zombies/_zm_perks.csc",
@@ -3084,6 +3146,9 @@ def stage_bo2_perk_support(out_root: Path, bo2_root: Path, *, bo2_stock_perks: b
         if bootstrap.count(old) != count:
             raise ValueError(f"BO2 server bootstrap round counter changed: {old}")
         bootstrap = bootstrap.replace(old, new)
+    if bootstrap.count(WAW_SELF_DAMAGE_CAP[0]) != 1:
+        raise ValueError("BO2 server bootstrap explosive self-damage cap changed")
+    bootstrap = bootstrap.replace(*WAW_SELF_DAMAGE_CAP)
     bootstrap += WAW_ROUND_COUNTER_HELPER
     (server_dir / "_waw2bo2_zm.gsc").write_text(
         PERK_OVERRIDE_HEADER + bootstrap.replace(native, owned), encoding="utf-8")
