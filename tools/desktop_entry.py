@@ -62,6 +62,7 @@ def main():
             if list(ordered_map(abs, [-2, -3], label='Worker smoke test', processes=True)) != [2, 3]:
                 raise RuntimeError('Spawned conversion workers failed')
             plan, report = weapons.plan([], Path(temp) / 'schema_test')
+            weapons.stage_flame_tables([], Path(temp) / 'schema_test', set())
             native = {c.name: c.ready for c in preflight(settings, include_map=False)
                       if c.name in ('WaW extractor', 'BO2 bridge tools', 'Audio decoder')}
             if not all(native.values()):
