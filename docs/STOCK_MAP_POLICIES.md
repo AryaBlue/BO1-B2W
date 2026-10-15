@@ -28,6 +28,34 @@ Only then does `gscport.port_map(stock_map=True)` apply
 Custom maps used to get a solo self-revive life from any WaW Quick Revive
 purchase (`waw_setperk`). That is now registered only by the stock policy.
 
+## WaW round counter (stock maps)
+
+Measured: BO2 draws rounds from `setroundsplayed` in its Lua HUD, an 8-bit
+value (`setroundsplayed(300)` draws 43), and `round_think` clamps
+`level.round_number` at 255. `setroundsplayed(0)` does not reliably hide it
+(the previous tally stayed). `waw_round_counter` therefore:
+
+- extracts the source display: `chalk_one_up` runs on BO2's
+  `level.zombie_round_change_custom` hook (where WaW's round_think called it;
+  BO2's round-start music call is kept), `chalk_round_hint` on `end_of_round`,
+  and the HUD objects come from the source `round_start` assignments that
+  create them with the framework's own functions (`create_chalk_hud`), never
+  round state such as `round_number`/`first_round`;
+- patches the owned `_waw2bo2_zm.gsc` so `setroundsplayed` and the 255 clamp
+  are skipped only while `level.waw2bo2_waw_round_counter` is set;
+- converts WaW's `hud_chalk_1..5` (precached by the source
+  `precache_shaders`) although BO2 ships materials of those names; material
+  isolation renames them `waw_world/hud_chalk_*`, and names built at run time
+  (`"hud_chalk_" + n`) resolve through the generated
+  `_waw2bo2_hud_materials.gsc` table (`waw_hud_material`).
+
+Shared fixes found on the way: `extract()` now honours entries deliberately
+extracted from no-extract framework scripts, and `extract_level_state` splits
+whole top-level statements (an assignment right after a `for {}` block was
+silently dropped).
+
+BO2's game-over text uses `level.round_number`, not the 8-bit value.
+
 ## Round count from source
 
 `Translator.extract_round_total` takes the source `round_spawning` statements

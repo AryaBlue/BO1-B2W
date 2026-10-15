@@ -11,9 +11,11 @@
   health) are a stock policy except Der Riese (user's explicit list).
 - Round count = source `round_spawning` formula as `level.max_zombie_func`.
 - Earlier claim "BO2 does not rotate attached triggers" was wrong (measured).
-- NEXT (user request): WaW round counter past 255 for stock maps (BO2's
-  `setroundsplayed` HUD is 8-bit). WaW draws it with script HUD
-  (`_zombiemode::create_chalk_hud` / `chalk_one_up`, `hud_chalk_1..5`).
+- WaW round counter (commit 6f28487): source chalk HUD replaces BO2's 8-bit
+  setroundsplayed display and the 255 round clamp on stock maps; WaW chalk
+  materials isolated as waw_world/hud_chalk_*. Built cleanly; in-game
+  screenshot verification (work/flogger_qr_rounds/probe.gsc + run_shots.ps1)
+  was pending because the user's game was running.
 - Not pushed; user playtest pending.
 
 ## Stock Shi No Numa DLC2 port, 2026-10-14
