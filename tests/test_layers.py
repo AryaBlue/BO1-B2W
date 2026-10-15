@@ -90,6 +90,17 @@ class AddedBindingTests(unittest.TestCase):
         self.assertNotIn(arg['location'] & 255, (0, 1, 13, 14, 15))
         self.assertIsNone(runtime.add_material_texture(native, material, source, runtime.t6_hash('detailMap'), self.PS))
 
+    def test_added_highest_hash_texture_stays_before_code_textures(self):
+        native = self._pass()
+        runtime.add_code_texture(native, runtime.CODE_TEXTURE_ARGS['attenuationSampler'], self.PS)
+        material = {'textures': [{'name': 'normalMap', 'image': 'n'}, {'name': 'colorMap', 'image': 'c'}]}
+        source = {'textures': [{'name': 'detailMap', 'image': 'd', 'semantic': 'normalMap'}]}
+        self.assertGreater(runtime.t6_hash('detailMap'), runtime.t6_hash('colorMap'))
+        arg = runtime.add_material_texture(native, material, source, runtime.t6_hash('detailMap'), self.PS)
+        stable = native['args'][2:]
+        self.assertEqual([a['type'] for a in stable], [2, 2, 2, 4, 5])
+        self.assertIs(stable[2], arg)
+
     def test_code_texture_goes_after_material_textures(self):
         native = self._pass()
         slot = runtime.add_code_texture(native, runtime.CODE_TEXTURE_ARGS['attenuationSampler'], self.PS)

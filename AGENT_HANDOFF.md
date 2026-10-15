@@ -1,5 +1,22 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Wunderwaffe first-person bands, 2026-10-15 (fixed, user playtested OK)
+
+- Symptom: orange/black bands on the Waffe viewmodel and arm, yellow in sun and dark indoors.
+  NOT shadows. A build with the sun-shadow test forced to "lit" (WAW2BO2_DIAG_SHADOW_LIT) still
+  had them. sm_enable/r_enablePlayerShadow/FX/dlight/primary-light/hero-light toggles,
+  glass/spec/normal swaps and the shadowless clone were all ruled out. Only the Waffe was affected.
+- Cause: `shaderruntime.add_material_texture` appended the extra `detailMap` type-2 arg (the
+  highest name hash) after the type-4 code textures. T6 never bound it, so t3 kept a stale texture,
+  and the d0 detail-normal program (mtl_tesla_metal, the only first-person d0 material) lit garbage.
+  Fix: insert inside the leading type-2 group, plus a test in tests/test_layers.py.
+- Evidence: work/flogger_qr_rounds/vm_* (vm_diag_j = relink with the arg reordered, clean;
+  vm_fixed_install = installed build, clean indoors, sun and shade, ray gun control).
+  Combined rebuild with the crosshair modzone change: work/shi_no_numa_dlc2/build_waffe_detail.log,
+  installed 15:37; previous install in build/installed_backup_20261015_waffe. 593 tests pass.
+  Relink-only A/B recipe: edit staged json, `build-mod` into a scratch
+  `--work`, then copy mod.ff/mod_load.ff/mod ipak into a temp mods folder.
+
 ## Stock map policies, round count, flogger, 2026-10-14
 
 - Branch `codex/flogger-qr-rounds`; details/limits `docs/STOCK_MAP_POLICIES.md`,
