@@ -204,10 +204,38 @@ def search_paths(paths) -> str:
     return ';'.join(str(path) for path in paths if path.is_dir())
 
 
+PUBLISH_TIMEOUT = 5.0
+
+
+def publish(source: Path, target: Path, *, overwrite: bool = False) -> None:
+    """Rename a staged file/folder into place, riding out sharing violations.
+
+    Antivirus scanners, the search indexer and editor file watchers briefly
+    open freshly written directories; Windows then refuses the rename with
+    WinError 5/32 although nothing is wrong with the cache.
+    """
+    deadline = time.monotonic() + PUBLISH_TIMEOUT
+    delay = 0.05
+    while True:
+        try:
+            if overwrite:
+                source.replace(target)
+            else:
+                source.rename(target)
+            return
+        except PermissionError as error:
+            if getattr(error, 'winerror', None) not in (None, 5, 32) or time.monotonic() >= deadline:
+                raise PermissionError(
+                    error.errno, f'could not move {source} to {target}; another process '
+                    f'(antivirus, indexer, editor) may be holding it: {error.strerror}') from error
+            time.sleep(min(delay, max(0.0, deadline - time.monotonic())))
+            delay = min(delay * 2, 0.5)
+
+
 def write_json(path: Path, data) -> None:
     temporary = path.with_name(path.name + '.tmp')
     temporary.write_text(json.dumps(data, sort_keys=True), encoding='utf-8')
-    temporary.replace(path)
+    publish(temporary, path, overwrite=True)
 
 
 def prune_stock_cache(root: Path, entries: dict, raw: Path) -> None:
@@ -372,7 +400,7 @@ def extract_zone(ff: Path, tool: Path, root: Path, search: str, *, assets: str |
         migrated = reuse_compact_subset(root, temporary, inputs)
         if migrated is not None:
             write_json(temporary / 'extraction.json', migrated)
-            temporary.rename(folder)
+            publish(temporary, folder)
             write_json(root / (key(inputs) + '.json'), {'folder': folder.name})
             return folder, migrated
     log = root / (ff.stem + '.log')
@@ -416,7 +444,7 @@ def extract_zone(ff: Path, tool: Path, root: Path, search: str, *, assets: str |
         raise RuntimeError(f'Extractor returned success without writing files for {ff}; see {log}')
     data = {'inputs': inputs, 'files': files, 'index': index, 'loaded_index': loaded_index}
     write_json(temporary / 'extraction.json', data)
-    temporary.rename(folder)
+    publish(temporary, folder)
     # A pointer lets retries/refreshes find the new generation on subsequent runs.
     write_json(root / (key(inputs) + '.json'), {'folder': folder.name})
     return folder, data
@@ -551,7 +579,7 @@ def prepare(game: Path, tool: Path, root: Path, *, engine: str, refresh: bool = 
                     owners[filename] = name
             write_json(pending / 'catalog.json', {'schema': SCHEMA, 'zones': entries,
                                                 'owners': owners, 'conflicts': conflicts})
-            pending.rename(raw)
+            publish(pending, raw)
         if engine == 'T6':
             from . import t6api
             print('Extract All: indexing BO2 script/API metadata', flush=True)
