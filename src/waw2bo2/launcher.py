@@ -163,7 +163,9 @@ def preflight(settings: Settings, *, include_map: bool = True, cache_paths=None)
           'raw/zm/mapstable.csv', 'raw/zm/gametypestable.csv', 'raw/maps/mp/zombies/_zm.gsc',
           'mods/zm_test/maps/mp/zm_test.gsc', 'mods/zm_test/clientscripts/mp/zm_test.csc',
           'zone/all/common_zm.ff', 'zone/all/code_post_gfx_zm.ff'])
-    files('WaW extractor', settings.t4, ['Unlinker.exe'])
+    from .all2raw import waw_extractor_problem
+    problem = waw_extractor_problem(Path(settings.t4 or '.') / 'Unlinker.exe') if settings.t4 else 'Missing: Unlinker.exe'
+    checks.append(Check('WaW extractor', not problem, problem or 'Ready'))
     files('BO2 bridge tools', settings.t6, ['Unlinker.exe', 'Linker.exe'])
     decoder_ok = bool(settings.decoder) and Path(settings.decoder).is_file()
     checks.append(Check('Audio decoder', decoder_ok, 'Ready' if decoder_ok else 'Select xaudio_wma_decoder.exe in Advanced paths.'))

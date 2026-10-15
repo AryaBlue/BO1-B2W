@@ -8,8 +8,10 @@ import threading
 import unittest
 from unittest.mock import patch
 
+from waw2bo2.all2raw import WORLD_DUMPER_MARKER
 from waw2bo2.launcher import (BuildPaths, ProcessRunner, Settings, build_command, discover,
                              input_stamp, map_fastfiles, perform_build, preflight, project_name, validate_project)
+
 
 
 class LauncherTests(unittest.TestCase):
@@ -34,7 +36,8 @@ class LauncherTests(unittest.TestCase):
                         if relative == 'main':
                             path.mkdir()
                         else:
-                            path.write_bytes(b'fixture')
+                            # The WaW extractor must be the converter's patched build.
+                            path.write_bytes(b'fixture' + (WORLD_DUMPER_MARKER if field == 't4' else b''))
         Path(values.decoder).write_bytes(b'fixture')
         Path(values.fastfile).parent.mkdir()
         Path(values.fastfile).write_bytes(b'fixture')
