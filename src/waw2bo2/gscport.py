@@ -2113,7 +2113,14 @@ class Translator:
 
     def client_fx_listener(self, key: str, script, entry: str, effects: dict[str, str]) -> dict | None:
         """Server copies of ``entry`` and its local callees, or None if any
-        call is not effect-only (that listener stays unported and reported)."""
+        call is not effect-only (that listener stays unported and reported).
+        Copies are emitted once however many threads main() starts."""
+        cache = self.__dict__.setdefault("_client_listener_copies", {})
+        if (key, entry) not in cache:
+            cache[(key, entry)] = self._client_fx_listener_copy(key, script, entry, effects)
+        return cache[(key, entry)]
+
+    def _client_fx_listener_copy(self, key: str, script, entry: str, effects: dict[str, str]) -> dict | None:
         names, pending = [], [entry]
         while pending:
             name = pending.pop()

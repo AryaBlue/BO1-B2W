@@ -186,6 +186,7 @@ class FrameworkHookTests(unittest.TestCase):
                 "maps/testmap.gsc": "main()\n{\n\tmaps\\_zombiemode::main();\n\tclientnotify( \"trap_a\" );\n}\n",
                 "clientscripts/testmap_fx.csc":
                     "main()\n{\n\tprecache();\n\tlevel thread monitor( \"trap_a\", \"side_a\" );\n"
+                    "\tlevel thread monitor( \"trap_b\", \"side_b\" );\n"
                     "\tlevel thread fog();\n}\n"
                     "precache()\n{\n\tlevel._effect[\"zapper\"] = loadfx( \"misc/fx_zombie_electric_trap\" );\n}\n"
                     "monitor( name, side )\n{\n\twhile ( 1 )\n\t{\n\t\tlevel waittill( name );\n"
@@ -209,6 +210,10 @@ class FrameworkHookTests(unittest.TestCase):
             main = (root / "out/maps/mp/waw/testmap.gsc").read_text(encoding="utf-8")
         self.assertIn(f'{gscport.COMPAT}::waw_clientnotify( "trap_a" )', main)
         self.assertIn('level thread waw2bo2_testmap_fx__monitor( "trap_a", "side_a" );', core)
+        self.assertIn('level thread waw2bo2_testmap_fx__monitor( "trap_b", "side_b" );', core)
+        # one definition each, however many threads main() starts
+        self.assertEqual(core.count("\nwaw2bo2_testmap_fx__monitor( name, side )"), 1)
+        self.assertEqual(core.count("\nwaw2bo2_testmap_fx__arc( side )"), 1)
         self.assertIn('level waittill( "waw_client_" + name )', core)
         self.assertIn('level waittill( "waw_client_" + side + "off" )', core)
         self.assertIn('SpawnFx( level.waw_effect["zapper"], self.origin, forward, up )', core)
