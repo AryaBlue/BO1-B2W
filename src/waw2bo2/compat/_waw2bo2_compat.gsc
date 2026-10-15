@@ -588,10 +588,22 @@ waw_playfxontag( fx, ent, tag )
 
 waw_bolted_fx_lifetime( carrier, parent, tag )
 {
+    // A triggered FX entity keeps playing where it was triggered: moving
+    // its origin alone leaves the effect behind (the mystery box sky marker
+    // moves with the box). Re-trigger it at the parent's new transform.
+    last_origin = carrier.origin;
+    last_angles = parent.angles;
     while ( isdefined( parent ) && isdefined( carrier ) )
     {
-        carrier.origin = parent gettagorigin( tag );
-        carrier.angles = parent.angles;
+        origin = parent gettagorigin( tag );
+        if ( distancesquared( origin, last_origin ) > 1 || parent.angles != last_angles )
+        {
+            carrier.origin = origin;
+            carrier.angles = parent.angles;
+            triggerfx( carrier );
+            last_origin = origin;
+            last_angles = parent.angles;
+        }
         wait 0.05;
     }
     if ( isdefined( carrier ) )
@@ -1167,7 +1179,34 @@ waw_add_zombie_weapon( name, hint, cost, weaponvo, variation_count, ammo_cost )
     // This must precede the native tactical initializer: it checks
     // level.zombie_weapons before registering its script-model animtree.
     if ( isdefined( level.waw2bo2_runtime_weapons ) && isdefined( level.waw2bo2_runtime_weapons[name] ) )
+    {
         maps\mp\zombies\_zm_weapons::add_zombie_weapon( level.waw2bo2_runtime_weapons[name], undefined, hint, cost, weaponvo, "", ammo_cost );
+        waw_native_only_weapon( level.waw2bo2_runtime_weapons[name] );
+    }
+}
+
+// level.zombie_weapons also holds entries only BO2 needs (its framework
+// last-stand pistol, native tactical helpers). WaW scripts never registered
+// them, so their key lists (the mystery box chooser) must not see them.
+waw_native_only_weapon( name )
+{
+    if ( !isdefined( level.waw2bo2_native_only_weapons ) )
+        level.waw2bo2_native_only_weapons = [];
+    level.waw2bo2_native_only_weapons[name] = 1;
+}
+
+waw_zombie_weapon_keys()
+{
+    keys = getarraykeys( level.zombie_weapons );
+    if ( !isdefined( level.waw2bo2_native_only_weapons ) )
+        return keys;
+    out = [];
+    for ( i = 0; i < keys.size; i++ )
+    {
+        if ( !isdefined( level.waw2bo2_native_only_weapons[keys[i]] ) )
+            out[out.size] = keys[i];
+    }
+    return out;
 }
 
 waw_getcurrentweapon()

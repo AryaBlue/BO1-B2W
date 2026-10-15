@@ -153,6 +153,42 @@ class FrameworkHookTests(unittest.TestCase):
         self.assertIn(f"{gscport.CORE}::framework_level_state();", main)
         self.assertIn(f"{gscport.PRECACHE}::init();", main)
 
+    def test_framework_effects_the_ported_scripts_read(self):
+        # WaW's _zombiemode::init_fx registers the box glow BO2 never builds
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                "maps/testmap.gsc": "main()\n{\n\tmaps\\_zombiemode::main();\n\tlevel._effect[\"own\"] = loadfx( \"own/fx\" );\n"
+                                    "\tplayfx( level._effect[\"chest_light\"], (0,0,0) );\n\tplayfx( level._effect[\"own\"], (0,0,0) );\n}\n",
+                "maps/_zombiemode.gsc": "main() {}\ninit_fx()\n{\n"
+                                        "\tlevel._effect[\"chest_light\"] = LoadFx( \"env/light/fx_ray_sun_sm_short\" );\n"
+                                        "\tlevel._effect[\"own\"] = LoadFx( \"framework/own\" );\n"
+                                        "\tlevel._effect[\"eye_glow\"] = LoadFx( \"misc/fx_zombie_eye_single\" );\n}\n",
+            }
+            for name, text in files.items():
+                (root / "src" / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / "src" / name).write_text(text, encoding="utf-8")
+            api = _api()
+            api.builtins.update({"loadfx": (1, 1), "playfx": (2, 4)})
+            report = gscport.port_map(gscport.Sources([root / "src"], [], None), api, "testmap", root / "out")
+            core = (root / "out/maps/mp/waw/_waw2bo2_core.gsc").read_text(encoding="utf-8")
+        self.assertIn('level.waw_effect["chest_light"]', core)
+        self.assertIn("env/light/fx_ray_sun_sm_short", report.fx)
+        self.assertNotIn("framework/own", core)     # the map assigns its own
+        self.assertNotIn("eye_glow", core)          # never read
+        self.assertIn("zombiemode__init_fx_level_state();", core)
+
+    def test_box_chooser_keys_skip_bo2_only_weapons(self):
+        tokens = gscport.gsc.tokenize("f()\n{\n\tkeys = GetArrayKeys( level.zombie_weapons );\n"
+                                      "\tp = GetArrayKeys( level.zombie_powerups );\n}\n")
+        self.assertEqual(gscport.lower_zombie_weapon_keys(tokens), 1)
+        text = gscport.gsc.emit(tokens)
+        self.assertIn(f"keys = {gscport.COMPAT}::waw_zombie_weapon_keys();", text)
+        self.assertIn("GetArrayKeys( level.zombie_powerups )", text)
+        registration = gscport.weapons_source({})
+        for weapon in gscport.BO2_FRAMEWORK_WEAPONS:
+            self.assertIn(f'waw_native_only_weapon( "{weapon}" );', registration)
+
     def test_named_models_precache_in_the_first_frame(self):
         # T6: "precacheModel must be called before any wait statements"; WaW perk
         # scripts precache the machine's on-model only when the power comes on
