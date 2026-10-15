@@ -1,5 +1,52 @@
 # Sound gain, attenuation, and voice limits
 
+## Rooms, ambient packages and reverb level
+
+A WaW map's `clientscripts/<map>_amb.csc` declares its ambient rooms and
+packages; map `ambient_package` triggers name them. BO2's `_ambientpackage`
+has the same API, so the converter ports `main()`'s declarative calls into the
+generated `<project>_amb.csc` (`sounds.port_ambient`): packages and their
+elements, rooms, room tones and room reverb. The room and package a WaW
+script activates at startup become BO2's default room and package (code
+triggers fall back to them). Rooms a trigger names but no script declares get
+the default room's settings; otherwise BO2 deactivates reverb there and its
+audible stock preset plays. Element and tone aliases are added to the sound
+dependencies; any that do not convert are dropped and reported.
+
+BO2 reverb is RAD (`radverb`), not I3DL2, and a map cannot add its own driver.
+Each WaW patch therefore selects the stock radverb of the same room class
+(`EAX_RADVERB`, e.g. MOUNTAINS -> `gen_hills`, HALLWAY -> `gen_hallway`); the
+`gen_*` presets are loaded by `zmb_code_post_gfx` on every zombies map.
+Custom-named patches use the nearest standard patch by decay time, reflection
+delay, HF level and late level. Silent patches and rooms without reverb stay
+dry. Every mapping is a `SOUND_ROOM_REVERB` warning and in the bridge report's
+`ambient` entry. Room dry/wet values are the source values.
+
+Alias sends are calibrated to BO2's convention, measured on every build
+(`t6bridge.measure_reverb_send`). WaW sends feed I3DL2 patches that are
+already 5-30 dB down, while radverbs return near unity, so BO2 designers send
+far less. The converter compares nonzero sends of the stock BO2 zombies banks
+(mod tools `raw/soundbank/zmb_*.all.aliases.csv`) with those of the stock WaW
+`nazi_zombie*` zones (extracted once into the shared asset cache), per BO2
+volume group the converter assigns from an identified WaW bus role (weapon,
+voice, ambience, music, UI; at least `REVERB_MIN_SAMPLES` on each side). Each
+alias gets its group's offset; other groups get the median of those offsets
+weighted by sample count. On the stock games (2026-10-15): weapon -24.0 dB,
+voice -26.1 dB, ambience -34.0 dB, overall -26.1 dB. Without either side's
+data the last measurement `REVERB_SEND_DB` (-24 dB) is used and reported as
+`SOUND_REVERB_SEND unmeasured`. The result is in the bridge report
+(`reverb_send`) and `sounds.bank.json`. Uncalibrated WaW sends, with the map's
+rooms undeclared, made weapons and voices echo in every room. Aliases with
+WaW's `noWetLevel` flag send nothing. Dry gains are unchanged.
+
+Falloff curves: BO2 build output names an approximated curve only when its
+loudness error exceeds `AUDIBLE_CURVE_DB` (3 dB RMS); the rest are summarized
+in one `SOUND_CURVES` warning. `sounds.curves.json` lists every binding.
+Rescaling alias distances does not improve any stock fit (measured on Shi No
+Numa), so curves keep their source distances.
+
+## Default reverb
+
 WaW's stock `DEFAULT` I3DL2 reverb patch is silent (-10000 millibels for
 room, reflections, and reverb). BO2's `default` RAD preset has audible
 reflections. Without a declared room, a converted map inherited that BO2
@@ -11,7 +58,8 @@ room controller owns subsequent room changes; alias sends, source PCM, and
 loaded weapon allocation are unchanged. Missing or audible custom source
 defaults are reported and are never assumed silent. Explicit WaW room presets
 still require I3DL2-to-RAD DSP translation; this fixes the baseline rather
-than claiming complete room acoustics conversion.
+than claiming complete room acoustics conversion. This baseline applies only to maps without a
+source `_amb.csc`; maps with one use its startup room (see above).
 
 WaW sound aliases retain their original audio, distance ranges, and four
 dry/wet falloff curves in the converter's sound IR. BO2 rejects a second

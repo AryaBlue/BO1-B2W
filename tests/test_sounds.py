@@ -46,6 +46,130 @@ class DefaultReverbTests(unittest.TestCase):
             self.assertEqual(sounds.default_reverb_mix(Path(temp))["status"], "missing_source_default")
 
 
+AMB_SOURCE = """
+main()
+{
+    declareAmbientPackage( "outside" );
+        addAmbientElement( "outside", "amb_wind", 5, 8, 300, 2000 );
+        addAmbientElement( "outside", "amb_missing", 1, 2 );
+    declareAmbientRoom( "outside" );
+        setAmbientRoomReverb( "outside", "MOUNTAINS", 1, 0.5 );
+    declareAmbientRoom( "hut" );
+        setAmbientRoomTone( "hut", "amb_hum" );
+        setAmbientRoomReverb( "hut", "my_hut", 0.7, 1, 3 );
+    declareAmbientRoom( "quiet" );
+    activateAmbientPackage( 0, "outside", 0 );
+    activateAmbientRoom( 0, "outside", 0 );
+}
+"""
+AMB_PATCHES = {"reverbPatches": [
+    {"name": "DEFAULT", "room": -10000, "roomHF": 0, "decayTime": 1, "reflections": -10000,
+     "reflectionsDelay": .02, "reverb": -10000},
+    {"name": "MOUNTAINS", "room": -1000, "roomHF": -2500, "decayTime": 1.49, "reflections": -2780,
+     "reflectionsDelay": .3, "reverb": -2014},
+    {"name": "SMALLROOM", "room": -1000, "roomHF": -600, "decayTime": 1.1, "reflections": -400,
+     "reflectionsDelay": .005, "reverb": 500},
+    {"name": "my_hut", "room": -1000, "roomHF": -650, "decayTime": 1.2, "reflections": -450,
+     "reflectionsDelay": .006, "reverb": 450}]}
+
+
+class ReverbSendMeasurementTests(unittest.TestCase):
+    def test_per_role_offsets_and_weighted_overall(self):
+        n = sounds.REVERB_MIN_SAMPLES
+        bo2 = {"grp_weapon": [-30.0] * 200, "grp_voice": [-28.0] * 100, "grp_ambience": [-40.0] * 50,
+               "grp_foley": [-60.0] * 500}
+        waw = {"grp_weapon": [-6.0] * 100, "grp_voice": [-2.0] * 100, "grp_ambience": [-6.0] * n,
+               "grp_foley": [-6.0] * 500, "grp_music": [-2.0] * (n - 1)}
+        result = sounds.measure_reverb_send(bo2, waw)
+        self.assertEqual(result["status"], "measured")
+        self.assertEqual(sorted(result["roles"]), ["grp_ambience", "grp_voice", "grp_weapon"])
+        self.assertAlmostEqual(result["roles"]["grp_ambience"]["offset_db"], -34)
+        # Weights 100 (weapon -24), 100 (voice -26), 20 (ambience -34): the
+        # weighted median is the voice offset; foley (a fallback) never counts.
+        self.assertAlmostEqual(result["db"], -26)
+
+    def test_without_shared_roles_the_last_measurement_is_used(self):
+        result = sounds.measure_reverb_send({"grp_weapon": [-30.0] * 50}, {})
+        self.assertEqual((result["status"], result["db"]), ("unmeasured_default", sounds.REVERB_SEND_DB))
+
+    def test_bo2_and_waw_levels_are_read_from_stock_data(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "zmb_x.all.aliases.csv").write_text(
+                "Name,VolumeGroup,ReverbSend\na,grp_weapon,70\nb,grp_weapon,0\nc,grp_voice,72\n")
+            (root / "mpl_x.all.aliases.csv").write_text("Name,VolumeGroup,ReverbSend\nd,grp_weapon,90\n")
+            self.assertEqual(sounds.bo2_send_levels(root), {"grp_weapon": [-30.0], "grp_voice": [-28.0]})
+            source, driver = fixture()
+            alias = root / "zone/soundaliases/custom_fire.w2bsnd.json"
+            alias.parent.mkdir(parents=True)
+            alias.write_text(json.dumps({**source, "name": "custom_fire",
+                                         "aliases": [{**source["aliases"][0], "reverbSend": .5}]}))
+            levels = sounds.waw_send_levels([root / "zone", root / "zone"], driver)
+        group = sounds._category({"bus": sounds._indexed(driver, "buses", sounds.decode_flags(
+            source["aliases"][0]["flags"])["busIndex"])})[1]
+        self.assertEqual(list(levels), [group])
+        self.assertEqual(len(levels[group]), 1)
+        self.assertAlmostEqual(levels[group][0], 20 * math.log10(.5))
+
+
+class AmbientPortTests(unittest.TestCase):
+    def port(self, trigger_rooms=frozenset()):
+        return sounds.port_ambient(AMB_SOURCE, AMB_PATCHES, {"amb_wind", "amb_hum"}, set(trigger_rooms))
+
+    def test_rooms_packages_and_defaults_translate(self):
+        report = self.port()
+        lines = report["lines"]
+        self.assertIn('declareambientpackage( "outside", 1 );', lines)
+        self.assertIn('declareambientroom( "outside", 1 );', lines)
+        self.assertIn('addambientelement( "outside", "waw/amb_wind", 5, 8, 300, 2000 );', lines)
+        self.assertIn('setambientroomreverb( "outside", "gen_hills", 1, 0.5, 2 );', lines)
+        self.assertIn('setambientroomtone( "hut", "waw/amb_hum" );', lines)
+        self.assertEqual(report["default_room"], "outside")
+        self.assertEqual(lines[-1], 'setreverb( "snd_enveffectsprio_level", "gen_hills", 1, 0.5, 0 );')
+        self.assertEqual(report["dropped"], [{"call": "addambientelement", "package": "outside",
+                                              "alias": "amb_missing", "reason": "alias not converted"}])
+
+    def test_custom_preset_uses_nearest_standard_and_reverbless_room_is_dry(self):
+        report = self.port()
+        self.assertEqual(report["rooms"]["hut"], {"status": "bo2_equivalent_nearest", "source": "my_hut",
+                                                  "nearest": "SMALLROOM", "radverb": "gen_smallroom",
+                                                  "dry": .7, "wet": 1.0})
+        self.assertIn('setambientroomreverb( "hut", "gen_smallroom", 0.7, 1, 3 );', report["lines"])
+        self.assertIn('setambientroomreverb( "quiet", "default", 1, 0 );', report["lines"])
+
+    def test_trigger_room_without_declaration_gets_default_room(self):
+        report = self.port({"cellar", "hut"})
+        self.assertEqual(report["undeclared_trigger_rooms"], ["cellar"])
+        self.assertIn('setambientroomreverb( "cellar", "gen_hills", 1, 0.5, 2 );', report["lines"])
+
+    def test_without_startup_room_the_silent_default_is_declared(self):
+        report = sounds.port_ambient(AMB_SOURCE.replace('activateAmbientRoom( 0, "outside", 0 );', ""),
+                                     AMB_PATCHES, set(), set())
+        self.assertEqual(report["default_room"], "waw_default")
+        self.assertEqual(report["lines"][-1], 'setreverb( "snd_enveffectsprio_level", "default", 1, 0, 0 );')
+
+    def test_ambient_aliases_are_discovered(self):
+        self.assertEqual(sounds.ambient_aliases(AMB_SOURCE), {"amb_wind", "amb_missing", "amb_hum"})
+
+    def test_bridge_writes_ported_rooms(self):
+        from waw2bo2 import t6bridge
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            driver = root / "content_source/sound_ir/driver_globals.json"
+            driver.parent.mkdir(parents=True)
+            driver.write_text(json.dumps(AMB_PATCHES))
+            source = root / "src/clientscripts/map_amb.csc"
+            source.parent.mkdir(parents=True)
+            source.write_text(AMB_SOURCE)
+            report = t6bridge.StageReport("example")
+            t6bridge.write_amb_csc(report, "example", root, source)
+            text = (root / "clientscripts/mp/example_amb.csc").read_text()
+        self.assertIn('    setambientroomreverb( "outside", "gen_hills", 1, 0.5, 2 );\n', text)
+        self.assertIn('declaremusicstate( "WAVE" )', text)
+        self.assertNotIn("waw_default", text)
+        self.assertTrue(any(w.startswith("SOUND_ROOM_REVERB outside") for w in report.warnings))
+
+
 def fixture():
     globals_data = {"_game": "T4", "_type": "waw2bo2_sound_globals", "_version": 1,
                     "buses": [{"index": 8, "name": "rfl_1st", "volumeMod": .68}],
@@ -418,7 +542,7 @@ class PlaybackBankTests(unittest.TestCase):
         self.assertAlmostEqual(float(row["VolMin"]), 100 + 20 * math.log10(.9 * .68), places=4)
         self.assertAlmostEqual(float(row["VolMax"]), 100 + 20 * math.log10(.68), places=4)
         self.assertEqual(row["DuckGroup"], "snp_wpn_1p")
-        self.assertAlmostEqual(float(row["ReverbSend"]), 100 + 20 * math.log10(.5), places=4)
+        self.assertAlmostEqual(float(row["ReverbSend"]), 100 + 20 * math.log10(.5) + sounds.REVERB_SEND_DB, places=4)
         self.assertEqual((row["DistMaxDry"], row["DistMaxWet"], row["PitchMin"]), ("600", "800", "-100"))
         self.assertEqual((row["Storage"], row["LimitCount"], row["EntityLimitCount"]), ("loaded", "0", "2"))
         self.assertEqual(row["PanType"], "2d")
@@ -435,7 +559,23 @@ class PlaybackBankTests(unittest.TestCase):
             for column in ("VolMin", "VolMax", "ReverbSend", "CenterSend", "EnvelopPercent"):
                 # Same conversion and quantization as the native T6 loader.
                 native = int(10 ** ((float(rows[0][column]) - 100) / 20) * 65535) / 65535
-                self.assertAlmostEqual(native, gain, delta=2 / 65535)
+                expected = gain * 10 ** (sounds.REVERB_SEND_DB / 20) if column == "ReverbSend" else gain
+                self.assertAlmostEqual(native, expected, delta=2 / 65535)
+
+    def test_measured_role_offset_applies_to_its_group(self):
+        measured = {"status": "measured", "db": -26.0, "roles": {"grp_voice": {"offset_db": -30.0}}}
+        rows, _ = sounds.t6_alias_rows(self.bound(), None, measured)
+        # The fixture's bus has no identified role: the overall offset applies.
+        self.assertAlmostEqual(float(rows[0]["ReverbSend"]), 100 + 20 * math.log10(.5) - 26, places=4)
+        rows, _ = sounds.t6_alias_rows(self.bound(), {"custom_fire"},
+                                       {**measured, "roles": {"grp_weapon": {"offset_db": -20.0}}})
+        self.assertAlmostEqual(float(rows[0]["ReverbSend"]), 100 + 20 * math.log10(.5) - 20, places=4)
+
+    def test_no_wet_level_flag_sends_nothing(self):
+        document = self.bound()
+        document["aliases"][0]["flags"]["noWetLevel"] = True
+        rows, _ = sounds.t6_alias_rows(document)
+        self.assertEqual(rows[0]["ReverbSend"], "0")
 
     def test_voice_limits_preserve_unlimited_reject_and_priority(self):
         document = self.bound()
