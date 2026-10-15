@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Reject a WaW extractor that is not the converter's patched build. Reported builds (9/11 Airport, McDonald's) had "WaW extractor folder" set to the app folder, where a different `Unlinker.exe` extracted the map "successfully" without the world dump, so staging stopped on a missing `<map>.d3dbsp.gfx.bin`. Setup now marks such an extractor as not ready, Extract All and builds stop with instructions to restore the bundled one, and a map dump missing a world its zone lists is an extraction error.
+- Reject a WaW extractor that is not the converter's patched build. A reported 9/11 Airport build had "WaW extractor folder" set to the app folder, where a different `Unlinker.exe` extracted the map "successfully" without the world dump, so staging stopped on a missing `<map>.d3dbsp.gfx.bin`. Setup now marks such an extractor as not ready, Extract All and builds stop with instructions to restore the bundled one, and a map dump missing a world its zone lists is an extraction error.
 
 - Fix the Setup tab hiding "BO2 bridge tools folder" and "Audio decoder" behind Shared Game Assets when Advanced Paths is open. The page now scrolls when the window is too small.
 
