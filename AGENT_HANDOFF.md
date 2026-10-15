@@ -1,5 +1,26 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Missing world gfx.bin + hidden Setup rows, 2026-10-15 (branch codex/world-dump-setup-layout, not merged)
+
+- Symptom: user builds fail at staging with FileNotFoundError on
+  `custom_maps/.../waw2bo2/maps/<map>.d3dbsp.gfx.bin` after Extract All reports success.
+- Evidence: issue Ticass/B2W#38 diagnostics (9/11 Airport, 0.2.14) show the saved
+  `t4` = `C:/Users/Chadn/Documents/WawConverter` (the app root), not
+  `_internal/vendor/OpenAssetTools/build/bin/Release_x86`. An `Unlinker.exe` must exist
+  there (source_dumps hashes it), but it is not ours: it extracts the map with exit 0
+  and writes no `waw2bo2/` world dumps. The bundled nightly and the local T4 Unlinker
+  both write gfx.bin for McDonald's from an empty cache under a path with spaces, so
+  cache keys, recent cache changes and spaces were ruled out. The McDonald's report
+  (`D:\waw maps\builds`) had no diagnostics here; same cause is likely, not confirmed.
+- Fix: `all2raw.waw_extractor_problem` (marker `waw2bo2_primary_lights`, only in the
+  patched T4 dumper) drives preflight's "WaW extractor" check; T4 prepare/source_dumps
+  refuse such a tool; `require_world_dumps` rejects a map dump missing a listed gfxworld.
+- UI: Advanced Paths and Shared Game Assets both used grid row 3 on Setup, covering
+  "BO2 bridge tools folder" and "Audio decoder". Groups own their rows; the Setup page
+  scrolls (`Launcher._scrollable`) instead of squashing the requirements list.
+- Verified: 599 tests; fresh McDonald's build (empty cache, path with spaces) passes staging.
+  Worktree `work/wt_world_dump_setup`. User playtest/merge pending.
+
 ## Wunderwaffe first-person bands, 2026-10-15 (fixed, user playtested OK)
 
 - Symptom: orange/black bands on the Waffe viewmodel and arm, yellow in sun and dark indoors.

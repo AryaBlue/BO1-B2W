@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reject a WaW extractor that is not the converter's patched build. A reported 9/11 Airport build had "WaW extractor folder" set to the app folder, where a different `Unlinker.exe` extracted the map "successfully" without the world dump, so staging stopped on a missing `<map>.d3dbsp.gfx.bin`. Setup now marks such an extractor as not ready, Extract All and builds stop with instructions to restore the bundled one, and a map dump missing a world its zone lists is an extraction error.
+
+- Fix the Setup tab hiding "BO2 bridge tools folder" and "Audio decoder" behind Shared Game Assets when Advanced Paths is open. The page now scrolls when the window is too small.
+
 - Restore the crosshair on converted maps. The full-screen WaW vision overlay redrew the frame resolved before the 2D pass, so it painted over the crosshair, which the engine draws just before the first HUD element. The overlay now blends with the frame, keeping the WaW grade unchanged on scene pixels while earlier 2D shows through. Images that template weapons pull into `mod.ff` are now also written to the mod ipak rather than referencing data no ipak holds.
 
 - Keep material textures that translated programs add to a pass inside the pass's leading material-texture argument group. A texture placed after the code textures was never bound by T6, so the slot kept the previous draw's texture. This caused the Wunderwaffe's orange/black first-person bands through its detail normal map; they were not shadows.

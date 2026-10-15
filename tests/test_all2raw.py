@@ -18,7 +18,7 @@ class All2RawTests(unittest.TestCase):
         self.game = self.root / 'game'
         self.cache = self.root / 'cache'
         self.tool = self.root / 'Unlinker.exe'
-        self.tool.write_bytes(b'tool')
+        self.tool.write_bytes(b'tool ' + all2raw.WORLD_DUMPER_MARKER)
         self.commands = []
         for folder, name in [('all', 'common_zm'), ('all', 'zm_alpha'), ('all', 'mp_beta'),
                              ('english', 'en_common_zm')]:
@@ -365,6 +365,53 @@ class All2RawTests(unittest.TestCase):
         second = all2raw.source_dumps(replace(settings, fastfile=str(folder / 'map_two.ff')), paths)
         self.assertEqual(self.commands, [])
         self.assertNotEqual(first['map'], second['map'])
+
+    def test_upstream_extractor_is_rejected_before_extracting_a_map(self):
+        # Reported 0.2.14 builds: "WaW extractor folder" pointed at an Unlinker
+        # without the waw2bo2 world dumper; the map "extracted" with no world.
+        folder = self.root / 'waw maps'
+        folder.mkdir()
+        (folder / 'map.ff').write_text('map')
+        upstream = self.root / 'upstream tools'
+        upstream.mkdir()
+        (upstream / 'Unlinker.exe').write_bytes(b'stock OpenAssetTools')
+        settings = Settings(waw=str(self.game), t4=str(upstream), work=str(self.root),
+                            fastfile=str(folder / 'map.ff'))
+        with self.assertRaisesRegex(RuntimeError, "not the converter's WaW extractor"):
+            all2raw.source_dumps(settings, all2raw.CachePaths.for_settings(settings))
+        with self.assertRaisesRegex(RuntimeError, "not the converter's WaW extractor"):
+            all2raw.prepare(self.game, upstream / 'Unlinker.exe', self.cache, engine='T4')
+        self.assertEqual(self.commands, [])
+        from waw2bo2.launcher import preflight
+        check = next(c for c in preflight(settings, include_map=False) if c.name == 'WaW extractor')
+        self.assertFalse(check.ready)
+        self.assertIn('Advanced Paths', check.detail)
+        check = next(c for c in preflight(replace(settings, t4=str(self.root)), include_map=False)
+                     if c.name == 'WaW extractor')
+        self.assertTrue(check.ready)
+
+    def test_map_dump_without_its_listed_world_is_an_extraction_error(self):
+        folder = self.root / 'waw maps'
+        folder.mkdir()
+        (folder / 'map.ff').write_text('map')
+        settings = Settings(waw=str(self.game), t4=str(self.root), work=str(self.root),
+                            fastfile=str(folder / 'map.ff'))
+        paths = all2raw.CachePaths.for_settings(settings)
+
+        def native(command, log, world=False):
+            self.native(command, log)
+            if '--list' in command:
+                log.write_text(log.read_text() + 'gfxworld,maps/map.d3dbsp\n')
+            elif world:
+                output = Path(command[command.index('--output-folder') + 1])
+                (output / 'waw2bo2/maps').mkdir(parents=True)
+                (output / 'waw2bo2/maps/map.d3dbsp.gfx.bin').write_bytes(b'world')
+        with patch.object(all2raw, 'run', side_effect=native):
+            with self.assertRaisesRegex(RuntimeError, 'did not export map world maps/map.d3dbsp'):
+                all2raw.source_dumps(settings, paths)
+        with patch.object(all2raw, 'run', side_effect=lambda c, l: native(c, l, world=True)):
+            dumps = all2raw.source_dumps(settings, paths, refresh=True)
+        self.assertTrue((dumps['map'] / 'waw2bo2/maps/map.d3dbsp.gfx.bin').is_file())
 
     def test_old_custom_cache_without_entities_is_reextracted_automatically(self):
         folder = self.root / 'custom map'

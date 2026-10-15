@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+import functools
 import hashlib
 import json
 import os
@@ -17,6 +18,34 @@ import uuid
 SCHEMA = 3
 WAW_ASSETS = ('clipmap,mapents,gfxworld,gameworldsp,material,image,fx,xmodel,weapon,xanim,sound,'
               'loadedsound,rawfile,comworld,lightdef,physpreset,snddriverglobals,localize')
+
+
+# Only the converter's patched T4 Unlinker (vendor/OpenAssetTools.patch) writes
+# the waw2bo2/ world dumps. Upstream OpenAssetTools extracts the same zone
+# "successfully" without them, so a build then dies reading <zone>.gfx.bin.
+WORLD_DUMPER_MARKER = b'waw2bo2_primary_lights'
+
+
+@functools.lru_cache(maxsize=8)
+def _has_world_dumper(path: str, size: int, mtime: int) -> bool:
+    return WORLD_DUMPER_MARKER in Path(path).read_bytes()
+
+
+def waw_extractor_problem(tool: Path) -> str | None:
+    """Why `tool` cannot extract WaW maps for the converter, or None."""
+    if not tool.is_file():
+        return f'Missing: {tool.name}'
+    stat = tool.stat()
+    if not _has_world_dumper(str(tool.resolve()), stat.st_size, stat.st_mtime_ns):
+        return (f"{tool} is not the converter's WaW extractor: it cannot export map worlds. "
+                'Clear "WaW extractor folder" in Setup > Advanced Paths and click Auto-detect to use the bundled one.')
+    return None
+
+
+def require_waw_extractor(tool: Path) -> None:
+    problem = waw_extractor_problem(tool)
+    if problem:
+        raise RuntimeError(problem)
 
 
 def stock_assets(engine: str, ff: Path) -> str:
@@ -422,6 +451,15 @@ def extract_zone(ff: Path, tool: Path, root: Path, search: str, *, assets: str |
     return folder, data
 
 
+def require_world_dumps(ff: Path, folder: Path, data: dict, tool: Path) -> None:
+    """Every world the zone defines must have its waw2bo2 dump on disk."""
+    missing = [name for name in data['index'].get('gfxworld', [])
+               if not (folder / f'waw2bo2/{name}.gfx.bin').is_file()]
+    if missing:
+        raise RuntimeError(f'{ff.name}: the WaW extractor did not export map world {missing[0]} '
+                           f'(waw2bo2/{missing[0]}.gfx.bin); extractor: {tool}')
+
+
 @dataclass(frozen=True)
 class CachePaths:
     waw: Path
@@ -498,6 +536,8 @@ def prepare(game: Path, tool: Path, root: Path, *, engine: str, refresh: bool = 
     zones = stock_zones(game, engine)
     if not zones:
         raise FileNotFoundError(f'No installed fastfiles found in {game / "zone"}')
+    if engine == 'T4':
+        require_waw_extractor(tool)
     inputs = inventory(game, tool, engine)
     tool_hash = inputs['tool']
     archives = inputs['archives']
@@ -576,6 +616,7 @@ def source_dumps(settings, paths: CachePaths, *, refresh=False) -> dict[str, Pat
     source = Path(settings.fastfile).resolve()
     folder = source.parent
     tool = Path(settings.t4) / 'Unlinker.exe'
+    require_waw_extractor(tool)
     root = paths.waw / 'custom_maps' / key(str(folder))
     dependencies = {str(p): stamp(p) for directory in (folder, Path(settings.waw) / 'main')
                     for p in directory.glob('*.iwd')}
@@ -600,9 +641,10 @@ def source_dumps(settings, paths: CachePaths, *, refresh=False) -> dict[str, Pat
         tool_hash = digest(tool) + ':short-staging'
         def extract(ff):
             print(f'Extract All: custom map starting {ff.name}', flush=True)
-            output, _ = extract_zone(ff, tool, root / key(str(ff)),
+            output, data = extract_zone(ff, tool, root / key(str(ff)),
                 search_paths((folder, Path(settings.waw) / 'main')), assets=WAW_ASSETS,
                 image_format='DDS', tool_digest=tool_hash, dependencies=dependencies, refresh=refresh)
+            require_world_dumps(ff, output, data, tool)
             return output
         outputs = dict(zip(unique, parallel_zones(unique, extract, label='custom map')))
         result = {role: outputs[ff] for role, ff in selected}
