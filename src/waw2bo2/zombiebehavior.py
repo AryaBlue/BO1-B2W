@@ -611,10 +611,16 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
     if has_policy:
         if len(skip.params) != 1:
             raise ValueError(f'{native}: expected one chase/entrance event argument')
-        script.tokens[skip.body_open].text += ('\n    if ( self ' + RUNTIME +
-            '::source_chases( ' + skip.params[0] + ' ) )\n        return true;\n')
+        # The source alone decides chase vs. window. T6's own zombie_chaser
+        # and find_flesh checks would override WaW's script_forcegoal, which
+        # WaW tests first (Shi No Numa's hut chasers tear their windows).
+        script.tokens[skip.body_open].text += ('\n    return self ' + RUNTIME +
+            '::source_chases( ' + skip.params[0] + ' );\n')
     # A source chaser's optional target is an intermediate path node, not a
     # forced barricade. Let the native chase branch consume that node first.
+    # A zombie_chaser's spawn point hands T6 the chase value; when the source
+    # sends that actor to a window instead, drop the value so the native
+    # entrance branches (target, then nearest windows) run.
     think = script.functions.get('zombie_think')
     if has_policy and think:
         result = _rise_result(script, think, definition['source_chase']['rise_event'])
@@ -626,6 +632,10 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
                 cond = ''.join(t.low for t in script.tokens[i + 2:end])
                 if cond == f'!isdefined({result.lower()})&&isdefined(self.target)&&self.target!=""':
                     script.tokens[end].text = ' && !self ' + RUNTIME + '::source_chases( ' + result + ' ) )'
+                    chaser = definition['source_membership']['native_chaser_value']
+                    script.tokens[i].text = (
+                        f'if ( isdefined( {result} ) && {result} == "{chaser}" && '
+                        f'!self {RUNTIME}::source_chases( {result} ) )\n        {result} = undefined;\n\n    if')
                     break
     core = out_root / 'maps/mp/waw/_waw2bo2_core.gsc'
     if core.is_file() and 'waw_tesla_init()' in core.read_text(encoding='utf-8'):
