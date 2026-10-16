@@ -461,7 +461,12 @@ waw_set_zombie_var( var, value, div, is_float )
 // T6 MP's entity rope anchors are visual followers, not physical joints.
 // Fixed-world source suspensions use an authoritative pendulum. Other models
 // retain native physics. This does not replace general rigid-body collision.
-// The launch impulse is a linear kick; off-center torque is not simulated.
+// Script kicks give the suspended body the velocity the engine gives a free
+// body of the same model: none measurable. Free copies of Peter's and the
+// swamp lamp's models launched with forces up to 50000 (centred or 20 units
+// off centre) only fell under gravity, never moving sideways. Adding the
+// source's +-20 kicks as velocity (no mass, no damping) piled energy up until
+// Peter spun around his rope.
 waw_physicslaunch( point, impulse )
 {
     definition = undefined;
@@ -488,8 +493,6 @@ waw_physicslaunch( point, impulse )
         self.waw_rope_motion = state;
         self thread waw_rope_motion();
     }
-    if ( isdefined( impulse ) )
-        self.waw_rope_motion.velocity += impulse;
 }
 
 waw_rope_rotate( vector, axis, cosine )
