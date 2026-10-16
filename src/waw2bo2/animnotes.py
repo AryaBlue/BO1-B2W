@@ -34,9 +34,13 @@ def add_sound_events(raw: bytes, sound_map: dict[str, str]) -> tuple[bytes, list
             pos = end + 3
         if len(notes) == count and pos == len(raw) and any(name in keys for name, _ in notes):
             candidates.append((start, notes))
-    if len(candidates) != 1:
-        raise weapons.WeaponError('raw animation has no unique valid notification suffix')
-    start, notes = candidates[0]
+    # Every candidate ends at the end of the file, so a shorter one is a tail of
+    # the longest: a frame's high byte that equals the remaining note count
+    # (frame 331 = 4B 01, then one note) parses as a second, nested suffix.
+    # The longest one is the real section; the nested ones never hold all notes.
+    if not candidates:
+        raise weapons.WeaponError('raw animation has no valid notification suffix')
+    start, notes = min(candidates)
     existing = set(notes)
     result, added = [], []
     for name, frame in notes:

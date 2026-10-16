@@ -24,6 +24,18 @@ class AnimationSoundTests(unittest.TestCase):
         two, _ = animnotes.add_sound_events(original, {'flip': 'waw/gun_two'})
         self.assertNotEqual(one, two)
 
+    def test_frame_high_byte_equal_to_remaining_count_is_not_a_second_section(self):
+        # Hotel: frame 331 (4B 01) before the last note also parses as "1 note"
+        # running to the end of the file; the full section must still win.
+        prefix = struct.pack('<HH', 17, 421) + b'opaque motion\0\0'
+        notes = [('clip_out', 42), ('rechamber_forward', 331), ('draw', 387)]
+        original = prefix + bytes([len(notes)]) + b''.join(
+            name.encode() + b'\0' + struct.pack('<H', frame) for name, frame in notes)
+        converted, added = animnotes.add_sound_events(original, {'clip_out': 'waw/out', 'draw': 'waw/draw'})
+        self.assertEqual(converted[len(prefix)], 5)
+        self.assertEqual([a['source'] for a in added], ['clip_out', 'draw'])
+        self.assertIn(b'rechamber_forward\0\x4b\x01', converted)
+
     def test_unmapped_motion_is_untouched_and_unknown_format_is_rejected(self):
         original, _ = self.raw()
         self.assertEqual(animnotes.add_sound_events(original, {'unmatched': 'waw/unused'}), (original, []))
