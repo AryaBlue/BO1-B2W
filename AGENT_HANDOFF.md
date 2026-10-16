@@ -1,5 +1,21 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Shi No Numa missing window grate = one-sided materials, 2026-10-16
+
+Branch `snn-window-grate` (on `snn-barrier-trap-betty`), evidence `work/snn_window_grate_20261016`.
+- The "missing fence" near (9614, 650, -528) is world geometry, not an entity: `wc/chainlink_fence`
+  planes in the hut windows (x 9538/9542) plus `wc/trans_barbedwire_1`. WaW draws them two-sided; the
+  converted materials culled back faces, so from inside the hut they vanished.
+- Cause: build_material keeps cull none only if every colour-writing WaW state is cull none; WaW's
+  wireframe debug state (technique 53, polymodeLine; 17597/20000 cached WaW materials) culls back.
+  Line-mode states no longer count. 80 Shi No Numa materials become two-sided (fences, wire, netting,
+  foliage cards, rug, cracked glass, water, some weapons/perk bottles), all cull none in WaW.
+- Audit for other missing things: static models 6170/6170 staged by name+origin; every model-bearing
+  WaW entity staged except actor spawners (renamed classes); every world material staged except the sky.
+- Verified in game (shots/user_view.png at the user's HUD spot: fence and wire visible). 629 tests.
+  Installed 15:17; previous install in `work/shi_no_numa_dlc2/build/installed_backup_20261016_window_grate`.
+  Other converted maps need a rebuild to pick the fix up.
+
 ## Shi No Numa playtest: window, trap FX, Betty vs dogs, round count, 2026-10-16
 
 Branch `snn-barrier-trap-betty` (worktree `work/wt_snn_bugs`), evidence `work/snn_bugs_20261016`.
