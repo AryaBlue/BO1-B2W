@@ -65,7 +65,8 @@ def stage_art(settings, root: Path) -> None:
             relative = Path(name)
             if len(relative.parts) == 2 and relative.parts[0] in ('images', 'materials') and relative.suffix in ('.iwi', '.json'):
                 (root / relative).unlink(missing_ok=True)
-    if not any((settings.menu_title, settings.menu_description, settings.menu_blit)):
+    if not any((settings.menu_title, settings.menu_description, getattr(settings, 'menu_mode', ''),
+                getattr(settings, 'menu_location', ''), settings.menu_blit)):
         # Remove only metadata previously created by this launcher.
         if previous.get('desktop_authored'):
             metadata.unlink()
@@ -74,6 +75,9 @@ def stage_art(settings, root: Path) -> None:
     data = {'title': settings.menu_title or settings.project,
             'description': settings.menu_description or f'{settings.project}: World at War custom map',
             'desktop_authored': True}
+    for key in ('mode', 'location'):
+        if getattr(settings, 'menu_' + key, ''):
+            data[key] = getattr(settings, 'menu_' + key)
     generated = []
     if settings.menu_blit:
         images = {role: read_art(getattr(settings, 'menu_' + role), role) for role in SIZES}
