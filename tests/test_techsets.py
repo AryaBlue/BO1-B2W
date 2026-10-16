@@ -52,6 +52,19 @@ class HudTechniqueTests(unittest.TestCase):
         self.assertEqual([s["cullFace"] for s in out["stateBits"]], ["back", "back"])
         self.assertEqual(donor["stateBits"][0]["cullFace"], "back")    # the donor is not modified
 
+    def test_wireframe_pass_does_not_make_a_two_sided_source_one_sided(self):
+        # wc/chainlink_fence: every drawn pass is cull none; the debug wireframe
+        # pass (technique 53, polymodeLine) culls back and is never drawn.
+        donor = {"techniqueSet": "wc_lit_sm_t0c0n0s0", "textures": [],
+                 "stateBits": [{"cullFace": "back", "colorWriteRgb": True}]}
+        fence = {"stateBits": [{"cullFace": "none", "colorWriteRgb": True},
+                               {"cullFace": "back", "colorWriteRgb": True, "polymodeLine": True}]}
+        out = techsets.build_material(fence, donor, [])
+        self.assertEqual([s["cullFace"] for s in out["stateBits"]], ["none"])
+        wire_only = {"stateBits": [{"cullFace": "none", "colorWriteRgb": True, "polymodeLine": True}]}
+        out = techsets.build_material(wire_only, donor, [])
+        self.assertEqual([s["cullFace"] for s in out["stateBits"]], ["back"])
+
 
 if __name__ == "__main__":
     unittest.main()
