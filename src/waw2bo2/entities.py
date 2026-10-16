@@ -18,6 +18,8 @@ import re
 from collections import Counter
 from pathlib import Path
 
+from . import paths as pathgraph
+
 ENTITY_RE = re.compile(r"\{([^{}]*)\}")
 KV_RE = re.compile(r'"([^"]*)"\s+"([^"]*)"')
 
@@ -498,13 +500,14 @@ def link_barrier_traversals(bsp_dir: Path) -> list[str]:
     WaW places the window's wall_hop negotiation at the goal (measured: 12
     units away, end ~78 inward) but links nothing. The nearest begin node
     within BARRIER_NODE_RADIUS whose end lies inward joins the goal's target
-    group, in the path data and in its node entity. Returns report lines."""
+    group, in the path data and in its node entity, and lands on its own end
+    node (paths.split_window_ends). Returns report lines."""
     entities_json, paths_json = bsp_dir / "entities.json", bsp_dir / "paths.json"
     data = json.loads(entities_json.read_text(encoding="utf-8"))
     paths = json.loads(paths_json.read_text(encoding="utf-8"))
     nodes = paths["nodes"]
     by_name = {n["targetname"]: n for n in nodes if n.get("targetname")}
-    notes, used = [], set()
+    notes, used, windows = [], set(), []
     for goal in data["entities"]:
         if goal.get("targetname") != "exterior_goal" or not goal.get("target"):
             continue
@@ -537,6 +540,8 @@ def link_barrier_traversals(bsp_dir: Path) -> list[str]:
             notes.append(f"UNSUPPORTED_BARRIER_TRAVERSAL {goal['target']}: node entity at {node['origin']} not found")
             continue
         node["targetname"] = goal["target"]
+        windows.append(best[1])
+    pathgraph.split_window_ends(paths, windows)
     entities_json.write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
     paths_json.write_text(json.dumps(paths, separators=(",", ":")) + "\n", encoding="utf-8")
     return notes

@@ -102,7 +102,10 @@ init()
 // (measured: find_flesh, zm_traverse_barrier, 6/6 closed). Same rule here.
 // Measured in T6: unlinknodes leaves a negotiation link in place; disabling
 // the inside end node cuts the traversal (findpath outside -> inside fails)
-// while the begin node and the attack spots outside stay reachable.
+// while the begin node and the attack spots outside stay reachable. That end
+// is the window's own node (paths.split_window_ends): T6 picks a disabled
+// nearest node anyway, so disabling the shared hub failed every path to a
+// player standing at the window.
 waw_window_paths()
 {
     level endon( "end_game" );

@@ -86,9 +86,44 @@ class BarrierTests(unittest.TestCase):
             ]}))
             self.assertEqual(entities.link_barrier_traversals(bsp), [])
             nodes = json.loads((bsp / "paths.json").read_text())["nodes"]
-            self.assertEqual([n["targetname"] for n in nodes], ["win1", "in1", "traverse", "out1"])
+            self.assertEqual([n["targetname"] for n in nodes],
+                             ["win1", "in1", "traverse", "out1", "in1_waw2bo2_window"])
+            self.assertEqual(nodes[0]["target"], "in1_waw2bo2_window")
             ents = json.loads((bsp / "entities.json").read_text())["entities"]
             self.assertEqual([e["targetname"] for e in ents], ["exterior_goal", "win1", "traverse"])
+
+    def test_window_traversal_lands_on_its_own_end_below_the_hub(self):
+        flags = 40
+        def link(node, negotiation=0):
+            return {"node": node, "dist": 10.0, "disconnectCount": 0, "negotiationLink": negotiation, "flags": flags}
+        nodes = [
+            {"type": 17, "targetname": "win", "target": "hub", "origin": [0, 0, 0], "links": [link(1, 1), link(2)]},
+            {"type": 18, "targetname": "hub", "target": "", "origin": [0, 70, 0], "links": [link(3)]},
+            {"type": 0, "targetname": "", "target": "", "origin": [50, -40, 0], "links": [link(0)]},
+            {"type": 0, "targetname": "", "target": "", "origin": [0, 200, 0], "links": [link(1)]},
+        ]
+        count = len(nodes)
+        # arbitrary visibility, hub (1) sees 3 but not 2
+        seen = {(0, 1), (0, 2), (1, 3), (2, 3)}
+        vis = bytearray((count * (count - 1) + 7) // 8)
+        for lo, hi in seen:
+            k = lo * count + hi
+            vis[k >> 3] |= 1 << (k & 7)
+        data = {"nodeCount": count, "visBytes": len(vis), "pathVis": vis.hex(), "nodes": nodes}
+        self.assertEqual(paths.split_window_ends(data, [0]), ["hub_waw2bo2_window"])
+        new = data["nodes"][4]
+        self.assertEqual((data["nodeCount"], new["type"], new["origin"]), (5, 18, [0, 70, -paths.WINDOW_END_DROP]))
+        self.assertEqual([(l["node"], l["negotiationLink"]) for l in new["links"]], [(1, 0)])
+        self.assertEqual([(l["node"], l["negotiationLink"]) for l in nodes[0]["links"]], [(4, 1), (2, 0)])
+        self.assertEqual(nodes[0]["target"], "hub_waw2bo2_window")
+        self.assertEqual(nodes[1]["links"], [link(3)])  # the hub keeps its inside links
+        out = bytes.fromhex(data["pathVis"])
+        self.assertEqual(data["visBytes"], (5 * 4 + 7) // 8)
+        for a in range(count):
+            for b in range(count):
+                self.assertEqual(paths.vis_bit(out, 5, a, b), paths.vis_bit(bytes(vis), count, a, b))
+        # the new end sees what its hub sees
+        self.assertEqual([paths.vis_bit(out, 5, 4, x) for x in range(4)], [1, 1, 0, 1])
 
 
 if __name__ == "__main__":
