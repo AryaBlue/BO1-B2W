@@ -83,3 +83,32 @@ def align_native_boards(bsp: Path, bo2: Path) -> dict:
                         'native_repaired_depth': native_depth, 'root_advance': shift})
     path.write_text(json.dumps(data, indent=1) + '\n', encoding='utf-8')
     return {'aligned': aligned, 'repair_poses': poses, 'warnings': warnings}
+
+
+def drop_replaced_chunks(bsp: Path) -> dict:
+    """Leave out source plank and clip brushes a native zbarrier replaces.
+
+    BO2 _zm_blockers deletes a window group's brush chunks in favour of its
+    zbarrier, but only after level init. T6 zombies leaves 912 of its 1022
+    entities to the map (the first 110 slots are reserved; G_Spawn sub_54FCC0
+    fails at 1022), so ~7 brushes per window can exhaust the budget before
+    BO2 ever deletes them (Project X: "G_Spawn: no free entities" on the first
+    frame). Stock BO2 windows (zm_prison) carry no such brushes. Run after
+    align_native_boards, which measures the source planks.
+    """
+    path = bsp / 'entities.json'
+    data = json.loads(path.read_text())
+    es = data['entities']
+    replaced = set()
+    for goal in es:
+        if goal.get('targetname') != 'exterior_goal' or not goal.get('target'):
+            continue
+        group = [e for e in es if e.get('targetname') == goal['target']]
+        if sum(e.get('classname') == 'zbarrier_zmcore_BasicWoodBarrier' for e in group) == 1:
+            replaced.add(goal['target'])
+    kept = [e for e in es if not (e.get('classname') == 'script_brushmodel' and e.get('targetname') in replaced)]
+    dropped = len(es) - len(kept)
+    if dropped:
+        data['entities'] = kept
+        path.write_text(json.dumps(data, indent=1) + '\n', encoding='utf-8')
+    return {'windows': len(replaced), 'dropped_brushes': dropped}

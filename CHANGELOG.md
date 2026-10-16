@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix Project X (and other large maps) failing to boot with `G_Spawn: no free entities`. T6 zombies leaves only 912 of its 1022 entities to the map, about 100 fewer than WaW, and each window kept its ~7 WaW plank and clip brushes beside the BO2 zbarrier that replaces them until BO2 deleted them after startup. Those brushes are now left out of the map (Project X: 156 brushes, 821 -> 666 map entities). Project X now boots into the map.
+
 - Fix converted map names in the BO2 lobby and loading screen. The map table carried the title itself, and BO2 appends `_CAPS` and `_LOC` to that column to build its own keys, so maps showed as "Title_CAPS" / "Title_LOC" (unbranded ones as "zm_map_waw_CAPS"). The column is now a key and every map ships the strings BO2 asks for. The line under the map name read "TRANZIT" (BO2's fallback when a map has no mode name); Map Details now has **Mode name** (default "Zombies") and **Location** (default "World at War").
 
 - Reject a WaW extractor that is not the converter's patched build. A reported 9/11 Airport build had "WaW extractor folder" set to the app folder, where a different `Unlinker.exe` extracted the map "successfully" without the world dump, so staging stopped on a missing `<map>.d3dbsp.gfx.bin`. Setup now marks such an extractor as not ready, Extract All and builds stop with instructions to restore the bundled one, and a map dump missing a world its zone lists is an extraction error.
