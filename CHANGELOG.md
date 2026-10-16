@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix converted map names in the BO2 lobby and loading screen. The map table carried the title itself, and BO2 appends `_CAPS` and `_LOC` to that column to build its own keys, so maps showed as "Title_CAPS" / "Title_LOC" (unbranded ones as "zm_map_waw_CAPS"). The column is now a key and every map ships the strings BO2 asks for. The line under the map name read "TRANZIT" (BO2's fallback when a map has no mode name); Map Details now has **Mode name** (default "Zombies") and **Location** (default "World at War").
+
 - Reject a WaW extractor that is not the converter's patched build. A reported 9/11 Airport build had "WaW extractor folder" set to the app folder, where a different `Unlinker.exe` extracted the map "successfully" without the world dump, so staging stopped on a missing `<map>.d3dbsp.gfx.bin`. Setup now marks such an extractor as not ready, Extract All and builds stop with instructions to restore the bundled one, and a map dump missing a world its zone lists is an extraction error.
 
 - Fix the Setup tab hiding "BO2 bridge tools folder" and "Audio decoder" behind Shared Game Assets when Advanced Paths is open. The page now scrolls when the window is too small.
