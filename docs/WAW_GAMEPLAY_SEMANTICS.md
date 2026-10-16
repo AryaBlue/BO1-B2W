@@ -73,15 +73,43 @@ keyed on WaW source data, never on a map name.
   WaW HUD hides in menus (T4's opaque pause menu covered it).
 - Two-sided source materials keep `cullFace none` on every converted pass.
 
+## Weapons and effects (2026-10-15/16)
+
+- T6 keeps clip and stock per held weapon. An `altmode` weapon resolves to its
+  primary's slot unless the alternate sets `ignoreAttachments` (t6zm
+  sub_5CC300 -> sub_4E1D20, WeaponVariantDef+472; stock gl_m16_upgraded_zm
+  sets it). The box M1 Garand held one round: the M7's clip of 1 overwrote
+  the rifle's 8. `weapons.separate_alt_ammo` sets it for alternates with their
+  own WaW ammoName. Measured: rifle 8/128, launcher 1/19, independent.
+- The Wunderwaffe arc is a trail drawn with a WaW zfeather falloff material.
+  T6 trail vertices carry the trail definition's cross-section normal
+  untransformed, so WaW's dot(view, normal)^2 falloff was ~0 and the arc
+  almost invisible. Trail elements use a `__w2b_trail` material variant whose
+  falloff is evaluated face-on. Verified: bright jagged arcs in game.
+- Measured in game: the Waffe zaps its shooter for 25% of max health (+1 from
+  the bolt), the flogger killed 8 of 8 zombies placed in its sweep.
+
+## Suspensions
+
+- Peter (`hanging_dead_guy`): the source kicks him every 0-7 s with impulses
+  up to 20 per axis. Free copies of his and the swamp lamp's models launched
+  with forces up to 50000 (centred or off centre) only fall in T6; the engine
+  gives these kicks no measurable velocity. The rope solver now gives them the
+  same response instead of adding them to velocity (which piled energy up).
+  Measured: Peter still for 60 s.
+
 ## Open
 
-- Peter (`hanging_dead_guy`): the source kicks him every 0-7 s with impulses up
-  to 20 per axis. The suspension solver adds them to velocity with zero
-  damping, so energy accumulates without limit. WaW's physics engine divides
-  by mass and damps; his model has no physics preset. Needs measuring before
-  changing the solver.
-- Barricades letting zombies through (comm room), zombies clipping through
-  world barriers, and zombies stuck near the flogger need in-game locations.
-  Candidates: one-sided clip sheets the converter omits, the 0x4000 bit in
-  WaW's movement mask that T6's lacks.
-- None of this is runtime-verified yet; it needs the in-game retest.
+- Comm room (south-west hut, around 7495 -1239): zombies reported coming
+  through boarded windows. Path links through its windows are only the
+  barricade traversals; spawns are not inside. Needs an observed entry: the
+  user has scripts/zm/waw2bo2_entry_watch.gsc (crouch + knife or
+  `set w2b_watch 1`, logs `W2B ENTRY`).
+- Zombies under boardwalk planks: WaW fills under-deck space with
+  player+monster clip (0x8030200); T6 actors test 0x20000 (mask 0x2820011).
+  A 72-unit zombie body stalled at upstairs windows and was reverted. Needs
+  the location (location HUD: melee prints `WAW2BO2 LOCATION`).
+- Zombies stuck near the flogger: zombies recycled by round_spawn_failsafe in
+  probes were all meleeing an invulnerable test player (the WaW failsafe does
+  the same). Not reproduced; the compat STUCK monitor logs real positions.
+- Zombies through world barriers: needs a location.
