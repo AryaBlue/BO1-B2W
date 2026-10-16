@@ -412,6 +412,13 @@ def build_material(t4: dict, donor: dict, notes: list[str]) -> dict:
     return out
 
 
+def only_casts_shadow(t4: dict) -> bool:
+    """WaW's onlyCastShadow material option ("the material itself will not
+    render"): compiled as game flag 0x1, which in Shi No Numa only the black
+    mangrove gobo cards carry. Stock T6 shadowcaster materials carry it too."""
+    return '1' in t4.get('gameFlags', [])
+
+
 def material_techset(t4: dict) -> str:
     """Unlit shader names alone do not encode a material's custom blending."""
     name = t4.get('techniqueSet', '')
