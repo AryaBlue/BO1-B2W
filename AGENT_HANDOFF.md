@@ -1,5 +1,38 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Shi No Numa playtest: window, trap FX, Betty vs dogs, round count, 2026-10-16
+
+Branch `snn-barrier-trap-betty` (worktree `work/wt_snn_bugs`), evidence `work/snn_bugs_20261016`.
+Installed 2026-10-16 (ff backup `work/shi_no_numa_dlc2/build/installed_backup_20261016_snn_bugs`).
+628 tests pass. Not pushed; user playtest pending.
+
+- Comm room window (pf6980, 7894 -1633): passive recorder (hut_watch.gsc) during the user's
+  rounds showed zombies already in `find_flesh` outside (swamp is playable) walking to the
+  begin node and playing `zm_traverse_barrier` with 6/6 boards closed. WaW's clip brush
+  disconnects a boarded window's traversal until all chunks are destroyed; T6's
+  `blocker_(dis)connect_paths` are empty and blocker_init deletes the clip next to a
+  zbarrier. Measured: `unlinknodes` leaves a negotiation link linked; `setenablenode(neg_end, 0)`
+  makes findpath outside->inside fail while begin/attack spots stay reachable. Compat
+  `waw_window_paths` enables the end node only while all chunks are destroyed. Verified:
+  boarded 0, torn 1, repaired 0. Not yet seen in live play.
+- Electric trap FX: WaW `clientNotify` is a maps\_utility script function, so it resolved to
+  BO2's maps\mp\_utility::clientnotify and never raised `waw_client_<msg>` for the server
+  copy of trap_fx_monitor. gscport now routes source framework functions named in
+  compat_wrappers to the wrapper (template scripts excepted). Verified: 5 arcs on 5 structs.
+- Betty vs dogs: compat AI-trigger emulation used `getaiarray(team)`, which excludes
+  zombie_dog (measured; `getaispeciesarray("axis")` includes it). Now `waw_trigger_ai` with
+  species "all" (radius and linked triggers). Verified: dog (350 hp) killed by a Betty.
+- Round count: the ported source formula is right (in game: 4, 9, 14, 19, 24 solo). The user's
+  7 on round 1 came from BO2's `put_timed_out_zombies_back_in_queue` requeueing failsafe kills;
+  WaW never requeues. The owned bootstrap sets it to 0. Spawn delay already follows WaW
+  (3, x0.95 per round). Left as is: WaW caps alive zombies at 32 (`get_enemy_count() > 31`),
+  BO2 at `zombie_ai_limit` 24 (only coop high rounds; T6 actor cap unmeasured); BO2's
+  `kill_trapped_zombies` recycle still requeues (rare door case).
+- Open: user reports a missing metal fence model in a window near (9614, 650, -528), yaw 184.
+- Probe gotchas: run_probe.ps1 must skip old console lines (stale DONE); a bare
+  `getstructarray` in a scripts/zm probe needs `common_scripts\utility::`; `nodescanpath` is
+  not a graph test, use `findpath`.
+
 ## Map compilation and portable flame schema regressions, 2026-10-15
 
 - Reproduced McDonald's through the GUI on main 8efb636. Fresh extraction passed
