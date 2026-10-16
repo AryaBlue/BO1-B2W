@@ -1484,6 +1484,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
             if bo2_root is not None:
                 from . import barriers
                 report.entities['barrier_alignment'] = barriers.align_native_boards(project_root / 'BSP', bo2_root)
+                report.entities['barrier_chunks'] = barriers.drop_replaced_chunks(project_root / 'BSP')
         except ValueError as exc:
             raise StageError(f"map entities: {exc}") from exc
         synthesized = report.entities.get("synthesized_zones")
