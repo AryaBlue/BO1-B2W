@@ -143,6 +143,19 @@ class WeaponRegistrationTests(unittest.TestCase):
         self.assertIn('include_zombie_weapon( "knife_zm", 0 );', source)
         self.assertNotIn("None", source)
 
+    def test_zombies_get_the_waw_actor_body(self):
+        with tempfile.TemporaryDirectory() as temp:
+            main = Path(temp) / "map.gsc"
+            main.write_text("zombie_init_done()\n{\n    self.allowpain = 0;\n    self setphysparams( 15, 0, 48 );\n}\n"
+                            "crawler()\n{\n    self setphysparams( 15, 0, 24 );\n}\n")
+            self.assertTrue(gscport.hook_bo2_actor_size(main))
+            self.assertFalse(gscport.hook_bo2_actor_size(main))
+            text = main.read_text()
+            self.assertIn("    self setphysparams( 15, 0, 72 );\n}\ncrawler()", text)
+            self.assertIn("self setphysparams( 15, 0, 24 );", text)   # other bodies untouched
+            main.write_text("main()\n{\n}\n")
+            self.assertFalse(gscport.hook_bo2_actor_size(main))
+
     def test_wall_buys_follow_the_carried_weapon_table(self):
         import json
         from waw2bo2 import entities

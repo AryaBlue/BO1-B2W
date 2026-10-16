@@ -3066,6 +3066,29 @@ def hook_bo2_weapons(main_gsc: Path) -> bool:
     return changed != source
 
 
+# WaW actors move as a 15-radius, 72-tall body. The BO2 template's
+# zombie_init_done shrinks zombies to 48 units, so they fitted under WaW hut
+# floors and boardwalks built 50-70 units above the mud (Shi No Numa: 109 deck
+# pieces measured in game) and walked there with their upper body through the
+# planks. WaW geometry and paths assume the WaW body.
+WAW_ACTOR_RADIUS, WAW_ACTOR_HEIGHT = 15, 72
+
+
+def hook_bo2_actor_size(main_gsc: Path) -> bool:
+    """Give zombies WaW's actor body in the template's zombie_init_done
+    (idempotent; a template without that call is left unchanged)."""
+    source = main_gsc.read_text(encoding="utf-8", errors="replace")
+    body = re.search(r"^zombie_init_done\(\)\s*\{.*?^\}", source, re.MULTILINE | re.DOTALL)
+    if body is None:
+        return False
+    sized = re.sub(r"setphysparams\(\s*[\d.]+\s*,\s*([\d.]+)\s*,\s*[\d.]+\s*\)",
+                   rf"setphysparams( {WAW_ACTOR_RADIUS}, \g<1>, {WAW_ACTOR_HEIGHT} )", body[0])
+    if sized == body[0]:
+        return False
+    main_gsc.write_text(source[:body.start()] + sized + source[body.end():], encoding="utf-8")
+    return True
+
+
 CHARACTER_HOOKS = {"precachecustomcharacters": "precache", "givecustomcharacters": "give"}
 
 
