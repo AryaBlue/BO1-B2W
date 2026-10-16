@@ -250,6 +250,21 @@ class EngineMaterialTests(unittest.TestCase):
         # BO2 melee wallbuys charge self.stub.cost; WaW trigger_use wallbuys get one
         self.assertIn("triggers[j].stub.cost = melee_weapon.cost;", compat)
 
+    def test_boarded_windows_are_shut_to_path_finding(self):
+        # WaW's clip brush disconnects a boarded window's traversal; T6's
+        # blocker_(dis)connect_paths are empty, so find_flesh zombies walked
+        # through six closed boards (Shi No Numa comm room, measured).
+        script = gscport.gsc.parse((gscport.COMPAT_DIR / "_waw2bo2_compat.gsc").read_text(encoding="utf-8"), "compat")
+        fn = script.functions["waw_window_paths"]
+        body = gscport.gsc.emit(script.tokens[fn.body_open:fn.body_close + 1])
+        self.assertIn("all_chunks_destroyed( goal, goal.barrier_chunks )", body)
+        self.assertIn("link_nodes_wrapper( goal.neg_start, goal.neg_end )", body)
+        self.assertIn("unlink_nodes_wrapper( goal.neg_start, goal.neg_end )", body)
+        self.assertLess(body.index("link_nodes_wrapper"), body.index("unlink_nodes_wrapper"))
+        init = script.functions["init"]
+        self.assertIn("level thread waw_window_paths();",
+                      gscport.gsc.emit(script.tokens[init.body_open:init.body_close + 1]))
+
 
 if __name__ == "__main__":
     unittest.main()

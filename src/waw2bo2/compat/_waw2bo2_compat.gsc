@@ -88,8 +88,38 @@ init()
     level thread all_players_connected_bridge();
     level thread first_player_ready_bridge();
     level thread stuck_zombie_monitor();
+    level thread waw_window_paths();
     level thread power_bridge();
     level thread melee_wallbuy_costs();
+}
+
+// WaW keeps a boarded window shut to path-finding: its clip brush
+// disconnects the window's traversal until every chunk is destroyed and again
+// on the first repair (_zombiemode_blockers). T6's blocker_disconnect_paths
+// and blocker_connect_paths are empty, and blocker_init deletes the clip
+// beside a zbarrier, so zombies already in the playable area outside a window
+// (Shi No Numa's swamp walkways) walked its traversal through all six boards
+// (measured: find_flesh, zm_traverse_barrier, 6/6 closed). Same rule here:
+// the begin -> end link exists only while all chunks are destroyed.
+waw_window_paths()
+{
+    level endon( "end_game" );
+    while ( !isdefined( level.exterior_goals ) )
+        wait 0.05;
+    waittillframeend;
+    for ( ;; )
+    {
+        foreach ( goal in level.exterior_goals )
+        {
+            if ( !isdefined( goal ) || !isdefined( goal.zbarrier ) || !isdefined( goal.neg_start ) || !isdefined( goal.neg_end ) )
+                continue;
+            if ( maps\mp\zombies\_zm_utility::all_chunks_destroyed( goal, goal.barrier_chunks ) )
+                maps\mp\zombies\_zm_utility::link_nodes_wrapper( goal.neg_start, goal.neg_end );
+            else
+                maps\mp\zombies\_zm_utility::unlink_nodes_wrapper( goal.neg_start, goal.neg_end );
+        }
+        wait 0.05;
+    }
 }
 
 // BO2's melee wallbuy (_zm_melee_weapon::melee_weapon_think) charges
