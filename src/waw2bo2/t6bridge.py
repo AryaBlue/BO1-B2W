@@ -1673,7 +1673,6 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
             if report.scripts.get("characters"):
                 gscport.hook_bo2_characters(main_gsc)
             gscport.hook_bo2_weapons(main_gsc)
-            gscport.hook_bo2_actor_size(main_gsc)
             gscport.hook_bo2_box(main_gsc)
             if bo2_root is None:
                 raise ValueError("BO2 runtime sources required to stage WaW perk ownership")
