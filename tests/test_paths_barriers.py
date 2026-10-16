@@ -131,5 +131,15 @@ class BarrierTests(unittest.TestCase):
         self.assertEqual([paths.vis_bit(out, 5, 4, x) for x in range(4)], [1, 1, 0, 1])
 
 
+class WaterCollisionTests(unittest.TestCase):
+    def test_water_only_triangles_leave_collision_but_water_with_clip_stays(self):
+        from waw2bo2 import fbx
+        self.assertTrue(fbx.water_only(0x08000020))   # WaW water surface (detail + water)
+        self.assertTrue(fbx.water_only(0x20))
+        self.assertFalse(fbx.water_only(0x20A0))      # water + missile/shot clip: stock keeps it
+        self.assertFalse(fbx.water_only(0x08000001))  # detail solid
+        self.assertFalse(fbx.water_only(0))
+
+
 if __name__ == "__main__":
     unittest.main()
