@@ -821,6 +821,27 @@ def bridge_launch_triggers(tokens: list[gsc.Token]) -> int:
     return fixes
 
 
+def lower_zombie_weapon_keys(tokens: list[gsc.Token]) -> int:
+    """`GetArrayKeys( level.zombie_weapons )` -> the WaW-registered keys only
+    (compat waw_zombie_weapon_keys): the WaW box chooser offers every key, and
+    BO2's framework pistol and native helpers share that array."""
+    pattern = ['getarraykeys', '(', 'level', '.', 'zombie_weapons', ')']
+    changed = 0
+    for i in range(len(tokens) - len(pattern)):
+        if [t.low for t in tokens[i:i + len(pattern)]] != pattern or tokens[i - 1].text in ('.', '::'):
+            continue
+        tokens[i].text = COMPAT + '::waw_zombie_weapon_keys'
+        # This is a complete target call, not a source builtin for resolve_refs.
+        # Leaving it IDENT makes the resolver replace the qualified text with
+        # an unsupported stub, whose undefined result stalls the box chooser.
+        tokens[i].kind = gsc.PUNCT
+        for t in tokens[i + 2:i + 5]:
+            t.text = t.pre = ''
+        tokens[i + 5].pre = ''
+        changed += 1
+    return changed
+
+
 def lower_stationary_fx_carriers(tokens: list[gsc.Token]) -> int:
     """Play effects on inert tag_origin carriers at their authored transform.
 
@@ -1139,6 +1160,7 @@ class Translator:
             if tokens[i].text.lower() == "zombie_hints" and tokens[i - 1].text == "." and tokens[i - 2].text.lower() == "level":
                 tokens[i].text = "waw2bo2_hints"
         self.report.rewrites['source priced perk hints'] += bridge_generic_perk_hints(tokens, script)
+        self.report.rewrites["zombie_weapons key lists without BO2-only entries"] += lower_zombie_weapon_keys(tokens)
         for ref in gsc.references(tokens):
             if neutralized_ranges is not None:
                 self.anim_neutralized = any(start <= ref.index < end for start, end in neutralized_ranges)
@@ -1320,7 +1342,8 @@ class Translator:
             self.report.extracted.append(f"{core}::{name}")
         return self.core_funcs[key]
 
-    def extract_level_state(self, core: str, init: str, read: set[str] | None = None) -> str | None:
+    def extract_level_state(self, core: str, init: str, read: set[str] | None = None,
+                            effect_keys: set[str] | None = None) -> str | None:
         """The statements of ``core::init`` that assign level fields the code
         already extracted from ``core`` reads (or the given ``read`` fields), as
         one extracted function. A WaW framework init (BO2 owns the rest of it)
@@ -1345,6 +1368,9 @@ class Translator:
         # (for/if { ... }) is its own statement, not the block's tail
         for start, end in top_level_statements(toks, fn.body_open, fn.body_close):
             stmt = toks[start:end]
+            if effect_keys is not None and not (len(stmt) > 5 and stmt[3].text == "[" and stmt[4].kind == gsc.STRING
+                                                and stmt[4].text[1:-1].lower() in effect_keys):
+                continue  # a keyed effect table: only the entries ported scripts read
             if len(stmt) > 3 and stmt[0].low == "level" and stmt[1].text == "." and stmt[2].low in read and \
                     any(s.text == "=" for s in stmt):
                 kept += [gsc.Token(s.kind, s.text, s.pre, s.line) for s in stmt]
@@ -2285,6 +2311,20 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
         if counter:
             framework_state.append(counter)
         report.rewrites["stock WaW map policies (solo Quick Revive)"] += 1
+    # Effects of WaW's framework FX init (BO2 replaces _zombiemode): the box
+    # glow, eye glow, window chunks... registered for the keys ported scripts
+    # read and never assign.
+    texts = [*tr.done.values(), *core_parts]
+    effect_reads = {k.lower() for t in texts for k in re.findall(r'level\.waw_effect\[\s*"([^"]+)"\s*\]', t)}
+    effect_sets = {k.lower() for t in texts
+                   for k in re.findall(r'level\.waw_effect\[\s*"([^"]+)"\s*\]\s*=[^=]', t)}
+    missing_effects = effect_reads - effect_sets
+    if missing_effects:
+        for core, init in FRAMEWORK_EFFECT_INITS:
+            state = tr.extract_level_state(core, init, {"_effect"}, missing_effects)
+            if state:
+                framework_state.append(state)
+                report.rewrites["framework effects registered for ported reads"] += 1
     drain()
     core_parts += tr.level_state_parts
     # effects loaded by extracted framework/template functions (e.g. the DLC3
@@ -2575,6 +2615,9 @@ BOX_STATE_INIT = ("maps\\_zombiemode_weapons", "init")
 # WaW framework inits whose level tables map scripts read (the anim tables of
 # _zombiemode::init_anims); only the fields the ported scripts read are kept
 FRAMEWORK_STATE_INITS = (("maps\\_zombiemode", "init_standard_zombie_anims"),)
+# WaW framework FX tables (level._effect) BO2 never builds; only the keys the
+# ported scripts read without assigning are kept
+FRAMEWORK_EFFECT_INITS = (("maps\\_zombiemode", "init_fx"),)
 DAMAGE_OVERRIDE = "player_damage_override"
 # WaW framework function whose inline formula sets level.zombie_total
 ROUND_SPAWNING = "round_spawning"
@@ -2727,6 +2770,7 @@ def weapons_source(registration: dict[str, list[str | None]]) -> str:
     lines += ["}", "", "add_weapons()", "{",
               '    maps\\mp\\zombies\\_zm_weapons::add_zombie_weapon( "m1911_zm", "m1911_upgraded_zm", '
               '&"ZOMBIE_WEAPON_M1911", 50, "", "", undefined );']
+    lines += [f'    {COMPAT}::waw_native_only_weapon( "{w}" );' for w in BO2_FRAMEWORK_WEAPONS]
     lines += [f"    {CORE}::{fn}();" for fn in registration.get("add", []) if fn]
     lines += ["}", "", "// The WaW mystery box, after BO2 _zm_magicbox::init, with independent chest flags.",
               "start_box()", "{"]
