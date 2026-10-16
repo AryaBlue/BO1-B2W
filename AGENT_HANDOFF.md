@@ -205,8 +205,9 @@ Installed 2026-10-16 (ff backup `work/shi_no_numa_dlc2/build/installed_backup_20
   keeping attack slots outside and entry structs as repair triggers. Earlier
   live probe observed board opening and zombies entering. Final visual board
   alignment and absence of shell impact FX still need user confirmation.
-- Perk hints use the source's full selector/prices instead of the generic
-  prefix, with T6 activation-key bindings. Keep source hut unlock events.
+- Perk hints keep the source's generic prompt (Shi No Numa prices are on the
+  machines' red stickers; the 2026-10-16 revert removed the priced-hint
+  rewrite). Activation-key bindings stay. Keep source hut unlock events.
 - Flogger's sound thread contains the source's delayed kill; the unsupported
   `OkToSpawn()` stub broke its boolean guard. Runtime now admits up to four
   requests per server frame (T4's 800-byte snapshot counter has no GSC T6

@@ -294,30 +294,6 @@ def neutralize_animations(tokens: list[gsc.Token], tree: str) -> None:
             tokens[i + 1].kind = gsc.STRING
 
 
-def bridge_generic_perk_hints(tokens: list[gsc.Token], script: gsc.Script) -> int:
-    """Use the source's priced hint selector when it supplies one.
-
-    WaW's generic perk prompt relies on prices painted on the machine. T6
-    has room for the full prompts already precached by the source framework.
-    Retain that framework's names and prices rather than inventing a table.
-    """
-    if 'vending_set_hintstring' not in script.functions:
-        return 0
-    fixes = 0
-    for ref in gsc.references(tokens):
-        if ref.name.lower() != 'sethintstring' or not ref.method:
-            continue
-        i = ref.index
-        if (i > 0 and tokens[i - 1].low == 'self'
-                and i + 3 < len(tokens) and tokens[i + 1].text == '('
-                and tokens[i + 2].text == '&"ZOMBIE_PERK_GENERIC"'
-                and tokens[i + 3].text == ')'):
-            tokens[i].text = 'vending_set_hintstring'
-            tokens[i + 2].text = 'self.script_noteworthy'
-            fixes += 1
-    return fixes
-
-
 def bridge_contact_kill_attacks(tokens: list[gsc.Token], script: gsc.Script) -> int:
     """Let source proximity/ragdoll kills own combat during their monitor.
 
@@ -1251,7 +1227,6 @@ class Translator:
                 self.report.rewrites['WaW playername field -> T6 name'] += 1
             if tokens[i].text.lower() == "zombie_hints" and tokens[i - 1].text == "." and tokens[i - 2].text.lower() == "level":
                 tokens[i].text = "waw2bo2_hints"
-        self.report.rewrites['source priced perk hints'] += bridge_generic_perk_hints(tokens, script)
         self.report.rewrites["zombie_weapons key lists without BO2-only entries"] += lower_zombie_weapon_keys(tokens)
         for ref in gsc.references(tokens):
             if neutralized_ranges is not None:
