@@ -189,6 +189,30 @@ class FrameworkHookTests(unittest.TestCase):
         for weapon in gscport.BO2_FRAMEWORK_WEAPONS:
             self.assertIn(f'waw_native_only_weapon( "{weapon}" );', registration)
 
+    def test_box_weapon_keys_survive_map_and_framework_translation(self):
+        # Exercise reference resolution, not just the token rewrite: a stub
+        # returns undefined and leaves the real box's keys.size loop spinning.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'maps').mkdir()
+            body = ('choose() { keys = GetArrayKeys( level.zombie_weapons ); '
+                    'for (i = 0; i < keys.size; i++) { last = keys[i]; } return keys; }')
+            (root / 'maps/custom.gsc').write_text(body)
+            (root / 'maps/_zombiemode_weapons.gsc').write_text(body)
+            tr = gscport.Translator(gscport.Sources([root], [], None), _api(), gscport.PortReport())
+            mapped = tr.translate(r'maps\custom')
+            tr.extract_entry(r'maps\_zombiemode_weapons', 'choose')
+            extracted = tr.translate_extracted(*tr.core_queue.pop(0))
+        for output in (mapped, extracted):
+            parsed = gscport.gsc.parse(output, 'translated box chooser')
+            calls = gscport.gsc.references(parsed.tokens)
+            self.assertTrue(any(ref.qualifier == gscport.COMPAT and ref.name == 'waw_zombie_weapon_keys'
+                                for ref in calls), output)
+            self.assertNotIn('stub_', output)
+            self.assertNotIn('GetArrayKeys', output)
+        self.assertEqual(tr.report.unsupported, {})
+        self.assertEqual(tr.stubs, {})
+
     def test_named_models_precache_in_the_first_frame(self):
         # T6: "precacheModel must be called before any wait statements"; WaW perk
         # scripts precache the machine's on-model only when the power comes on

@@ -831,6 +831,10 @@ def lower_zombie_weapon_keys(tokens: list[gsc.Token]) -> int:
         if [t.low for t in tokens[i:i + len(pattern)]] != pattern or tokens[i - 1].text in ('.', '::'):
             continue
         tokens[i].text = COMPAT + '::waw_zombie_weapon_keys'
+        # This is a complete target call, not a source builtin for resolve_refs.
+        # Leaving it IDENT makes the resolver replace the qualified text with
+        # an unsupported stub, whose undefined result stalls the box chooser.
+        tokens[i].kind = gsc.PUNCT
         for t in tokens[i + 2:i + 5]:
             t.text = t.pre = ''
         tokens[i + 5].pre = ''
@@ -1070,7 +1074,6 @@ class Translator:
                 self.animation_requirements[fn.animtree.lower()].update(
                     animation_names(tokens[fn.start:fn.body_close + 1]))
         self.report.rewrites["stationary FX carriers lowered to authored-position FX"] += lower_stationary_fx_carriers(tokens)
-        self.report.rewrites["zombie_weapons key lists without BO2-only entries"] += lower_zombie_weapon_keys(tokens)
         self.report.rewrites["launch volume includes its activation trigger"] += bridge_launch_triggers(tokens)
         where_file = self.sources.origin.get(norm(path) + ".gsc", path)
         included_bo2: set[str] = set()
@@ -1157,6 +1160,7 @@ class Translator:
             if tokens[i].text.lower() == "zombie_hints" and tokens[i - 1].text == "." and tokens[i - 2].text.lower() == "level":
                 tokens[i].text = "waw2bo2_hints"
         self.report.rewrites['source priced perk hints'] += bridge_generic_perk_hints(tokens, script)
+        self.report.rewrites["zombie_weapons key lists without BO2-only entries"] += lower_zombie_weapon_keys(tokens)
         for ref in gsc.references(tokens):
             if neutralized_ranges is not None:
                 self.anim_neutralized = any(start <= ref.index < end for start, end in neutralized_ranges)
