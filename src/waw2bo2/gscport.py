@@ -3295,6 +3295,12 @@ WAW_SELF_DAMAGE_CAP = (
     "        if ( self.health > 75 && !( isdefined( self.is_zombie ) && self.is_zombie ) )\n"
     "            return 75;\n",
     "        // waw2bo2: WaW applies the player's own explosive damage in full.\n")
+# WaW's round_spawn_failsafe kills a zombie that is stuck or below the world
+# and never returns it to the round (no zombie_total++ anywhere in WaW's
+# _zombiemode scripts). BO2 requeues every timed-out zombie, which put extra
+# zombies into rounds the source formula had already counted.
+WAW_FAILSAFE_NO_REQUEUE = ("level.put_timed_out_zombies_back_in_queue = 1;",
+                           "level.put_timed_out_zombies_back_in_queue = 0; // waw2bo2: WaW never requeues")
 WAW_ZOMBIE_VAR_HELPER = """
 waw2bo2_set_zombie_var( var, value, is_float, column, is_team_based )
 {
@@ -3469,6 +3475,9 @@ def stage_bo2_perk_support(out_root: Path, bo2_root: Path, *, bo2_stock_perks: b
     if bootstrap.count(WAW_SELF_DAMAGE_CAP[0]) != 1:
         raise ValueError("BO2 server bootstrap explosive self-damage cap changed")
     bootstrap = bootstrap.replace(*WAW_SELF_DAMAGE_CAP)
+    if bootstrap.count(WAW_FAILSAFE_NO_REQUEUE[0]) != 1:
+        raise ValueError("BO2 server bootstrap failsafe requeue changed")
+    bootstrap = bootstrap.replace(*WAW_FAILSAFE_NO_REQUEUE)
     bootstrap = waw_zombie_var_defaults(bootstrap)
     bootstrap = waw_pvp_attack_notify(bootstrap)
     bootstrap += WAW_ROUND_COUNTER_HELPER

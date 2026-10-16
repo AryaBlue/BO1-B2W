@@ -258,9 +258,9 @@ class EngineMaterialTests(unittest.TestCase):
         fn = script.functions["waw_window_paths"]
         body = gscport.gsc.emit(script.tokens[fn.body_open:fn.body_close + 1])
         self.assertIn("all_chunks_destroyed( goal, goal.barrier_chunks )", body)
-        self.assertIn("link_nodes_wrapper( goal.neg_start, goal.neg_end )", body)
-        self.assertIn("unlink_nodes_wrapper( goal.neg_start, goal.neg_end )", body)
-        self.assertLess(body.index("link_nodes_wrapper"), body.index("unlink_nodes_wrapper"))
+        # unlinknodes leaves a T6 negotiation link in place (measured)
+        self.assertIn("setenablenode( goal.neg_end, open )", body)
+        self.assertNotIn("unlink", body)
         init = script.functions["init"]
         self.assertIn("level thread waw_window_paths();",
                       gscport.gsc.emit(script.tokens[init.body_open:init.body_close + 1]))

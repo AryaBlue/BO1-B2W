@@ -99,8 +99,10 @@ init()
 // and blocker_connect_paths are empty, and blocker_init deletes the clip
 // beside a zbarrier, so zombies already in the playable area outside a window
 // (Shi No Numa's swamp walkways) walked its traversal through all six boards
-// (measured: find_flesh, zm_traverse_barrier, 6/6 closed). Same rule here:
-// the begin -> end link exists only while all chunks are destroyed.
+// (measured: find_flesh, zm_traverse_barrier, 6/6 closed). Same rule here.
+// Measured in T6: unlinknodes leaves a negotiation link in place; disabling
+// the inside end node cuts the traversal (findpath outside -> inside fails)
+// while the begin node and the attack spots outside stay reachable.
 waw_window_paths()
 {
     level endon( "end_game" );
@@ -113,10 +115,11 @@ waw_window_paths()
         {
             if ( !isdefined( goal ) || !isdefined( goal.zbarrier ) || !isdefined( goal.neg_start ) || !isdefined( goal.neg_end ) )
                 continue;
-            if ( maps\mp\zombies\_zm_utility::all_chunks_destroyed( goal, goal.barrier_chunks ) )
-                maps\mp\zombies\_zm_utility::link_nodes_wrapper( goal.neg_start, goal.neg_end );
-            else
-                maps\mp\zombies\_zm_utility::unlink_nodes_wrapper( goal.neg_start, goal.neg_end );
+            open = maps\mp\zombies\_zm_utility::all_chunks_destroyed( goal, goal.barrier_chunks );
+            if ( isdefined( goal.waw_path_open ) && goal.waw_path_open == open )
+                continue;
+            goal.waw_path_open = open;
+            setenablenode( goal.neg_end, open );
         }
         wait 0.05;
     }
