@@ -13,6 +13,16 @@ def write_json(path: Path, data) -> None:
 
 
 class RuntimeWeaponTests(unittest.TestCase):
+    def test_alternate_with_its_own_ammo_keeps_a_separate_t6_slot(self):
+        rifle = {"inventoryType": "primary", "ammoName": "waw_m1garand", "altWeapon": "m7"}
+        launcher = {"inventoryType": "altmode", "ammoName": "waw_m7_launcher", "altWeapon": "garand"}
+        shared = {"inventoryType": "altmode", "ammoName": "waw_m1garand", "altWeapon": "garand"}
+        table = {"garand": rifle, "m7": launcher}
+        self.assertTrue(weapons.separate_alt_ammo(launcher, table))
+        self.assertFalse(weapons.separate_alt_ammo(shared, table))   # one WaW pool stays one pool
+        self.assertFalse(weapons.separate_alt_ammo(rifle, table))
+        self.assertFalse(weapons.separate_alt_ammo(dict(launcher, altWeapon="gone"), table))
+
     def test_primary_frags_use_stock_weapon_without_carrying_ghost_assets(self):
         frag = {"weaponType": "grenade", "offhandClass": "Frag Grenade",
                 "offhandSlot": "Lethal grenade", "projectileModel": "waw_xmodel/absent"}

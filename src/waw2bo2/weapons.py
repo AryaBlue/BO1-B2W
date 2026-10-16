@@ -777,6 +777,21 @@ def primary_frag_replacement(name: str, fields: dict[str, str]) -> str | None:
 
 # T6 weapon field types stored as raw char* (see stage_runtime)
 POINTER_STRING_FIELDS = {"CSPFT_STRING", "WFT_ANIM_NAME"}
+
+
+def separate_alt_ammo(fields: dict[str, str], fields_by_weapon: dict[str, dict[str, str]]) -> bool:
+    """True for an alternate mode that keeps its own ammo in WaW.
+
+    T6 stores clip and stock per held weapon; an "altmode" weapon resolves to
+    its primary's slot unless WeaponVariantDef.bIgnoreAttachments is set
+    (measured in t6zm: sub_5CC300 -> sub_4E1D20 reads variant+472; stock
+    gl_m16_upgraded_zm sets it). Without it the box M1 Garand held one round:
+    the M7 launcher's clip of 1 overwrote the rifle's 8. WaW pools ammo by
+    ammoName, so only alternates with their own ammoName are separated."""
+    if fields.get("inventoryType") != "altmode":
+        return False
+    primary = fields_by_weapon.get(fields.get("altWeapon", ""))
+    return primary is not None and primary.get("ammoName") != fields.get("ammoName")
 WAW_WEAPON_PREFIX = "waw_"
 PREFIXES = {"xmodel": "waw_xmodel/", "material": "waw_material/", "xanim": "waw_xanim/",
             "accuracy": "waw_accuracy/"}
@@ -916,6 +931,8 @@ def stage_runtime(project: Path, ipak: str, equivalents=None, loaded: dict[str, 
         for key, kind in t6_types.items():
             if kind in POINTER_STRING_FIELDS and key not in fields:
                 fields[key] = ""
+        if separate_alt_ammo(fields, fields_by_weapon):
+            fields["ignoreAttachments"] = "1"
         if fields.get("altWeapon") in table:
             fields["altWeapon"] = table[fields["altWeapon"]]
         if table[name] != name:
