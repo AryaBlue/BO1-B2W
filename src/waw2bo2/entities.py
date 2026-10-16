@@ -541,7 +541,23 @@ def link_barrier_traversals(bsp_dir: Path) -> list[str]:
             continue
         node["targetname"] = goal["target"]
         windows.append(best[1])
-    pathgraph.split_window_ends(paths, windows)
+    # GetNode resolves targetnames through the node entities (measured: the
+    # path data name alone is not found), so each new end gets one and the
+    # window's begin entity targets it.
+    hubs = {name: hub for hub, name in pathgraph.split_window_ends(paths, windows)}
+    for begin in windows:
+        window, name = paths["nodes"][begin]["targetname"], paths["nodes"][begin]["target"]
+        hub = hubs.get(name)
+        hub_ents = [e for e in data["entities"] if e.get("classname") == "node_negotiation_end"
+                    and e.get("targetname") == hub]
+        if hub is None or len(hub_ents) != 1:
+            notes.append(f"UNSUPPORTED_BARRIER_TRAVERSAL {window}: {len(hub_ents)} end node entities; "
+                         f"its own end {name} has no entity, so GetNode cannot find it")
+            continue
+        data["entities"].append({**hub_ents[0], "targetname": name})
+        for ent in data["entities"]:
+            if ent.get("classname") == "node_negotiation_begin" and ent.get("targetname") == window:
+                ent["target"] = name
     entities_json.write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
     paths_json.write_text(json.dumps(paths, separators=(",", ":")) + "\n", encoding="utf-8")
     return notes

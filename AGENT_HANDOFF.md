@@ -1,5 +1,24 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Shi No Numa comm room window targeting + local window cut, 2026-10-16
+
+Branch `snn-window-targeting` (worktree `work/wt_snn_window_target`; snn-window-grate + main merged
++ perk-prompt revert). Probes in `work/snn_bugs_20261016/probe_cut*.gsc`, `probe_verify_window.gsc`.
+Installed 2026-10-16 (backup `work/shi_no_numa_dlc2/build/installed_backup_20261016_window_target`).
+637 tests pass. User playtest pending; not merged.
+- Hut windows (pf6980/pf6989) are entered only by `southwest_building_spawners`: zombie_chaser WITH
+  script_forcegoal; WaW tests forcegoal first. T6 should_skip_teardown chased on the chaser string /
+  find_flesh spawn value, so nobody tore those windows. Source policy is now the whole predicate.
+- Perk machines: Shi No Numa's generic "Press &&1 to buy" is authored (prices on red stickers);
+  the priced-hint rewrite is reverted.
+- T6 window cut, measured: unlinknodes (both ways) and zbarrier DisconnectPaths do nothing; no
+  badplace in T6 ZM; spawnpathnode nodes are ignored by lookups; getnearestnode/findpath pick a
+  disabled nearest node, so disabling the shared inside hub broke every path to a player at the
+  window. Each window traversal now lands on its own end node at the hub origin (linked to it,
+  hub's vis; node entity added since GetNode resolves names via entities). Nearest stays the hub.
+  Game drops nodes to the floor on load. pathVis bit = lo*n+hi, LSB first.
+- Probes: teleport the player ONCE (user wants to move around during probes).
+
 ## Shi No Numa missing window grate = one-sided materials, 2026-10-16
 
 Branch `snn-window-grate` (on `snn-barrier-trap-betty`), evidence `work/snn_window_grate_20261016`.

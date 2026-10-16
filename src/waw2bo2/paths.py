@@ -263,13 +263,7 @@ def _or_bits(data: bytearray, start: int, value: int) -> None:
     data[first:last] = (int.from_bytes(data[first:last], "little") | value).to_bytes(last - first, "little")
 
 
-# Below the hub by this much, the hub stays strictly nearer to any standing
-# position (origins at or above the floor), so nearest-node lookups never land
-# on the dedicated window end.
-WINDOW_END_DROP = 2.0
-
-
-def split_window_ends(paths: dict, begins: list[int]) -> list[str]:
+def split_window_ends(paths: dict, begins: list[int]) -> list[tuple[str, str]]:
     """Give each window traversal its own negotiation end node.
 
     WaW shuts a boarded window by disconnecting only the links that cross its
@@ -278,9 +272,12 @@ def split_window_ends(paths: dict, begins: list[int]) -> list[str]:
     also fails every path to a goal whose nearest node it is; T6 picks the
     nearest node whether or not it is enabled (all measured in game). The
     window's inside end is an ordinary hub node, the nearest node for a player
-    at the window. Each traversal now lands on a dedicated end node just below
-    the hub, linked onward to it, so disabling that node cuts the window alone.
-    Returns the new end nodes' targetnames."""
+    at the window. Each traversal now lands on a dedicated end node at the
+    hub's origin, linked onward to it, so disabling that node cuts the window
+    alone. The game drops nodes to the floor on load, so the two share one
+    position; the nearest-node lookup keeps the hub. GetNode finds a node's
+    targetname through its map entity, so the caller adds one.
+    Returns (hub targetname, new end targetname) pairs."""
     nodes = paths["nodes"]
     count = len(nodes)
     index = {n["targetname"]: i for i, n in enumerate(nodes) if n.get("targetname")}
@@ -292,9 +289,9 @@ def split_window_ends(paths: dict, begins: list[int]) -> list[str]:
             continue
         end = dict(nodes[hub])
         name = f"{end['targetname']}_waw2bo2_window"
-        end.update(targetname=name, target="", origin=[*end["origin"][:2], end["origin"][2] - WINDOW_END_DROP])
+        end.update(targetname=name, target="")
         flags = next((l["flags"] for l in end.get("links", ())), T6_CLEARANCE_LINK_FLAGS)
-        end["links"] = [{"node": hub, "dist": WINDOW_END_DROP, "disconnectCount": 0,
+        end["links"] = [{"node": hub, "dist": 0.0, "disconnectCount": 0,
                          "negotiationLink": 0, "flags": flags}]
         new_index = count + len(hubs)
         for link in begin.get("links", ()):
@@ -303,7 +300,7 @@ def split_window_ends(paths: dict, begins: list[int]) -> list[str]:
         begin["target"] = name
         nodes.append(end)
         hubs.append(hub)
-        names.append(name)
+        names.append((nodes[hub]["targetname"], name))
     if hubs and paths.get("pathVis"):
         old = bytes.fromhex(paths["pathVis"])
         total = len(nodes)

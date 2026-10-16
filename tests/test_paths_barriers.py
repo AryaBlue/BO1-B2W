@@ -77,6 +77,7 @@ class BarrierTests(unittest.TestCase):
                 goal,
                 {"classname": "node_negotiation_begin", "targetname": "traverse", "target": "in1", "origin": "0 12.4 0"},
                 {"classname": "node_negotiation_begin", "targetname": "traverse", "target": "out1", "origin": "5 5 0"},
+                {"classname": "node_negotiation_end", "targetname": "in1", "origin": "0 90 0"},
             ]}))
             (bsp / "paths.json").write_text(json.dumps({"nodes": [
                 {"type": 17, "targetname": "traverse", "target": "in1", "origin": [0, 12.40002, 0]},
@@ -90,7 +91,11 @@ class BarrierTests(unittest.TestCase):
                              ["win1", "in1", "traverse", "out1", "in1_waw2bo2_window"])
             self.assertEqual(nodes[0]["target"], "in1_waw2bo2_window")
             ents = json.loads((bsp / "entities.json").read_text())["entities"]
-            self.assertEqual([e["targetname"] for e in ents], ["exterior_goal", "win1", "traverse"])
+            self.assertEqual([e["targetname"] for e in ents],
+                             ["exterior_goal", "win1", "traverse", "in1", "in1_waw2bo2_window"])
+            self.assertEqual(ents[1]["target"], "in1_waw2bo2_window")
+            self.assertEqual(ents[2]["target"], "out1")
+            self.assertEqual((ents[4]["classname"], ents[4]["origin"]), ("node_negotiation_end", "0 90 0"))
 
     def test_window_traversal_lands_on_its_own_end_below_the_hub(self):
         flags = 40
@@ -110,9 +115,9 @@ class BarrierTests(unittest.TestCase):
             k = lo * count + hi
             vis[k >> 3] |= 1 << (k & 7)
         data = {"nodeCount": count, "visBytes": len(vis), "pathVis": vis.hex(), "nodes": nodes}
-        self.assertEqual(paths.split_window_ends(data, [0]), ["hub_waw2bo2_window"])
+        self.assertEqual(paths.split_window_ends(data, [0]), [("hub", "hub_waw2bo2_window")])
         new = data["nodes"][4]
-        self.assertEqual((data["nodeCount"], new["type"], new["origin"]), (5, 18, [0, 70, -paths.WINDOW_END_DROP]))
+        self.assertEqual((data["nodeCount"], new["type"], new["origin"]), (5, 18, [0, 70, 0]))
         self.assertEqual([(l["node"], l["negotiationLink"]) for l in new["links"]], [(1, 0)])
         self.assertEqual([(l["node"], l["negotiationLink"]) for l in nodes[0]["links"]], [(4, 1), (2, 0)])
         self.assertEqual(nodes[0]["target"], "hub_waw2bo2_window")
