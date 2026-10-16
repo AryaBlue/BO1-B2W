@@ -74,6 +74,31 @@ mov o1.xy, v1
             with self.assertRaisesRegex(shaders.ShaderError, 'full matrix adapter'):
                 runtime.vertex_contract(source.replace('c28.w', 'c28.x'), args, {'args': []}, Path('.'), paired=True)
 
+    def test_trail_geometry_evaluates_view_falloff_face_on(self):
+        source = """//   falloffParms  c13      1
+//   featherParms  c12      1
+vs_3_0
+dcl_position v0
+dcl_position o0
+mad o0, v0, c13.zzzz, c13.wwww
+add o0, o0, c12
+"""
+        native = '// Input signature:\n// POSITION 0 xyzw 0 NONE float xyzw\nvs_5_0\n'
+        args = {'args': [{'type': 0, 'dest': 13, 'value': runtime.waw_hash('falloffParms')},
+                         {'type': 0, 'dest': 12, 'value': runtime.waw_hash('featherParms')}]}
+        material = {'constants': [{'name': 'falloffParms', 'literal': [0.005, -0.05, 33.0, 0.0]},
+                                  {'name': 'featherParms', 'literal': [0.05, 20.0, 0.0, 0.0]}]}
+        with patch.object(runtime, '_native_program', return_value=native):
+            plain = runtime.vertex_contract(source, args, {'args': []}, Path('.'), paired=True,
+                                            source_material=material)
+            trail = runtime.vertex_contract(source, args, {'args': []}, Path('.'), paired=True,
+                                            source_material=material, trail_geometry=True)
+        self.assertEqual(plain['constants']['c13']['expr'], 'float4(0.005, -0.05, 33.0, 0.0)')
+        self.assertNotIn('face_on_falloff', plain)
+        self.assertEqual(trail['constants']['c13']['expr'], 'float4(0.0, 0.0, 0.0, 1.0)')
+        self.assertEqual(trail['constants']['c12'], plain['constants']['c12'])
+        self.assertTrue(trail['face_on_falloff'])
+
     def test_direct_uv_copy_does_not_require_a_lightmap_or_half_decoder(self):
         source = 'vs_3_0\ndcl_position v1\ndcl_texcoord v0\ndcl_position o1\ndcl_texcoord o0.xy\nmov o1, v1\nmov o0.xy, v0\n'
         native = '// Input signature:\n// POSITION 0 xyzw 1 NONE float xyzw\n// TEXCOORD 0 xy 0 NONE float xy\nvs_5_0\n'

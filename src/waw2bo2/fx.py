@@ -62,6 +62,7 @@ ELEM_FLAG_MAP = {
 # light, 8 spot light, 9 sound, 10 decal, 11 runner. Pairs of same-named
 # WaW/BO2 effects agree (3->4 line, 4->5 trail, 5->6 cloud, 7->8 omni light).
 T4_SPOT_LIGHT = 8
+T4_TRAIL = 4
 ELEM_TYPE_MAP = {0: 0, 1: 1, 2: 3, 3: 4, 4: 5, 5: 6, 6: 7, 7: 8, 8: 9, 9: 10, 10: 11, 11: 12}
 T6_TYPE_NAMES = ["sprite_billboard", "sprite_oriented", "sprite_rotated", "tail", "line", "trail", "cloud",
                  "model", "omni_light", "spot_light", "sound", "decal", "runner"]
@@ -115,6 +116,14 @@ class Deps:
     materials: set[str] = field(default_factory=set)
     models: set[str] = field(default_factory=set)
     sounds: set[str] = field(default_factory=set)
+    # materials drawn by trail elements (their T6 vertices differ, see
+    # shaderruntime.FACE_ON_FALLOFF_PARMS)
+    trail_materials: set[str] = field(default_factory=set)
+
+
+def trail_material_key(waw_material: str) -> str:
+    """``material_names`` key of a material's trail-geometry variant."""
+    return waw_material + "#trail"
 
 
 def dependencies(t4: dict) -> Deps:
@@ -128,6 +137,8 @@ def dependencies(t4: dict) -> Deps:
                 d.effects.add(v["effect"])
             if v.get("material"):
                 d.materials.add(v["material"])
+                if e["elemType"] == T4_TRAIL:
+                    d.trail_materials.add(v["material"])
             for m in v.get("materials", []):
                 if m:
                     d.materials.add(m)
@@ -206,7 +217,11 @@ def convert_elem(e: dict, material_names: dict[str, str], notes: list[str], wher
         if "materials" in v:
             visuals.append({"materials": [material_names.get(m, m) if m else "" for m in v["materials"]]})
         elif "material" in v:
-            visuals.append({"material": material_names.get(v["material"], v["material"])})
+            name = v["material"]
+            if t6_type == T6_TRAIL and trail_material_key(name) in material_names:
+                visuals.append({"material": material_names[trail_material_key(name)]})
+            else:
+                visuals.append({"material": material_names.get(name, name)})
         elif "effect" in v:
             visuals.append({"effect": output_name(v["effect"]) if v["effect"] else ""})
         elif v.get("sound"):
@@ -407,6 +422,7 @@ def closure(names: list[str], roots: list[Path], resolve=None) -> Closure:
         c.effects[name] = src
         d = dependencies(json.loads(src.read_text(encoding="utf-8")))
         c.deps.materials |= d.materials
+        c.deps.trail_materials |= d.trail_materials
         c.deps.models |= d.models
         c.deps.sounds |= d.sounds
         stack += [(e, name) for e in sorted(d.effects)]

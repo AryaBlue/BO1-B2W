@@ -1967,6 +1967,8 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
 
 MOD_EXTRA_ZONE = "mod_extra.zone"
 FX_MATERIAL_PREFIX = "waw_fx/"
+# trail-geometry variant of an effect material (shaderruntime.FACE_ON_FALLOFF_PARMS)
+FX_TRAIL_MATERIAL_SUFFIX = "__w2b_trail"
 # Effect images are renamed too: 38 of Nuketown's 68 effect images share a name
 # with a stock BO2 image in common_zm, which loads first, so the game drew BO2's
 # texture (another size and atlas layout) under the WaW UVs.
@@ -2121,20 +2123,30 @@ def stage_effects(report: StageReport, names: list[str], roots: list[Path], stoc
             report.errors.append(f"fx material {mat} ({ts}): {exc}")
             failed_materials.add(mat)
             continue
-        runtime = shaderruntime.bind_material(t4, out, all_roots, project_root, techset_dump) if techset_dump else {'active': [], 'unsupported': ['native technique dump absent']}
-        for tex in out.get("textures", []):
-            if tex.get("image") and not tex["image"].startswith((",", "$")):
-                tex["image"] = FX_IMAGE_PREFIX + tex["image"]
-        out_rel = techsets.oat_material_path(out_name)
-        dst = project_root / out_rel
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
-        res.techsets.add(out['techniqueSet'])
-        effect_images |= {t["image"] for t in out.get("textures", []) if t.get("image")}
-        material_names[mat] = out_name
-        report.materials.append({"name": out_name, "source": mat, "file": out_rel.as_posix(), "t4_techset": ts,
-                                 "t6_techset": out['techniqueSet'], "shader_runtime": runtime,
-                                 "donor": donor.path.relative_to(stock_materials).as_posix(), "notes": notes})
+        variants = [(out_name, mat, out, False)]
+        if mat in cl.deps.trail_materials and techset_dump:
+            # trail elements need WaW's view falloff evaluated face-on
+            variants.append((out_name + FX_TRAIL_MATERIAL_SUFFIX, fx.trail_material_key(mat), copy.deepcopy(out), True))
+        for name, key, material, trail in variants:
+            runtime = shaderruntime.bind_material(t4, material, all_roots, project_root, techset_dump,
+                                                  trail_geometry=trail) if techset_dump else {'active': [], 'unsupported': ['native technique dump absent']}
+            if trail and not runtime.get('face_on_falloff'):
+                continue  # no view falloff: trails share the ordinary material
+            for tex in material.get("textures", []):
+                if tex.get("image") and not tex["image"].startswith((",", "$")):
+                    tex["image"] = FX_IMAGE_PREFIX + tex["image"]
+            out_rel = techsets.oat_material_path(name)
+            dst = project_root / out_rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(json.dumps(material, indent=2) + "\n", encoding="utf-8")
+            res.techsets.add(material['techniqueSet'])
+            effect_images |= {t["image"] for t in material.get("textures", []) if t.get("image")}
+            material_names[key] = name
+            report.materials.append({"name": name, "source": mat, "file": out_rel.as_posix(), "t4_techset": ts,
+                                     "t6_techset": material['techniqueSet'], "shader_runtime": runtime,
+                                     "donor": donor.path.relative_to(stock_materials).as_posix(),
+                                     "notes": notes + (["trail geometry: WaW view falloff evaluated face-on"]
+                                                       if trail else [])})
     if world_materials:
         res.techsets |= stage_materials(report, set(world_materials), all_roots, stock_materials, project_root,
                                         techset_dump, rename=world_materials)

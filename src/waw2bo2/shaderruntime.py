@@ -679,8 +679,19 @@ def is_scorch_program(source_material):
     return '_sco' in (source_material or {}).get('techniqueSet', '')
 
 
+# WaW effect programs fade by view angle: saturate(dot(view, normal)^2 *
+# falloffParms.z + falloffParms.w), with WaW's world-space face normal of each
+# trail ribbon. T6 trail vertices carry the trail definition's cross-section
+# normal untransformed, (0, nx, ny) in trail space (measured: the normal
+# rendered as colour is constant world Y/Z on trails in every direction), so
+# the term is meaningless there and nearly blanks the Wunderwaffe's arcs.
+# Trail geometry evaluates the falloff face-on, as WaW draws a ribbon facing
+# the camera.
+FACE_ON_FALLOFF_PARMS = (0.0, 0.0, 0.0, 1.0)
+
+
 def vertex_contract(source_assembly, source_pass, native_pass, native_root, paired=False, source_material=None,
-                    layered=False):
+                    layered=False, trail_geometry=False):
     _, ir = shaders.translate(source_assembly)
     native_vs = _native_program(native_root, 'vs', native_pass)
     incoming = signature(native_vs, 'Input')
@@ -763,6 +774,9 @@ def vertex_contract(source_assembly, source_pass, native_pass, native_root, pair
             literal = material_literal(source_material, material_arg['value'])
             if literal is None:
                 raise shaders.ShaderError(f'original vertex material constant absent for {reg}')
+            if trail_geometry and names.get(reg, (None, 0))[0] == 'falloffParms':
+                literal = list(FACE_ON_FALLOFF_PARMS)
+                contract['face_on_falloff'] = True
             contract['constants'][reg] = {'expr': 'float4(' + ', '.join(repr(v) for v in literal) + ')', 'uses': []}
             continue
         arg = next((a for a in source_pass['args'] if a['type'] == 3 and a['dest'] <= int(reg[1:]) < a['dest'] + a['rowCount']), None)
@@ -1163,9 +1177,11 @@ DIAGNOSTIC_SLOT_COLORS = {4: '0.0, 0.5, 0.0', 5: '0.5, 0.5, 0.0', 6: '0.5, 0.25,
 
 
 def bind_material(source_material, output_material, roots, project_root, native_root, falloff_placement=None,
-                  light_shadows=True):
+                  light_shadows=True, trail_geometry=False):
     """``falloff_placement``: the map's WaW lightFalloffPlacement; ``light_shadows``
-    False when every primary light is staged unshadowed (shadowed slots unreachable)."""
+    False when every primary light is staged unshadowed (shadowed slots unreachable).
+    ``trail_geometry``: the material draws T6 FX trails (see vertex_contract);
+    ``result['face_on_falloff']`` reports that it changed a vertex program."""
     result = {'active': [], 'unsupported': []}
     # Diagnostic A/B switch: WAW2BO2_RUNTIME_SHADERS=none keeps every T6 donor pass.
     if os.environ.get('WAW2BO2_RUNTIME_SHADERS', 'all') == 'none':
@@ -1205,7 +1221,10 @@ def bind_material(source_material, output_material, roots, project_root, native_
                 vertex_assembly = embed_literals(_assembly(vertex_binary), source_pass, 'vs')
                 vertex_binding = vertex_contract(vertex_assembly, source_pass, target_pass, native_root, paired=True,
                                                  source_material=source_material,
-                                                 layered=bool(pristine.get('worldVertFormat')))
+                                                 layered=bool(pristine.get('worldVertFormat')),
+                                                 trail_geometry=trail_geometry)
+                if vertex_binding.get('face_on_falloff'):
+                    result['face_on_falloff'] = True
                 vertex_hlsl, vertex_info = shaders.translate(vertex_assembly, vertex_binding)
                 vertex_hlsl = native_fog_adapter(vertex_hlsl, vertex_assembly, vertex_binding, target_pass, native_root)
                 vertex_code = shaders.compile_hlsl(vertex_hlsl, 'vs_5_0')
@@ -1311,7 +1330,10 @@ def bind_material(source_material, output_material, roots, project_root, native_
             if vertex_binary:
                 try:
                     vertex_assembly = embed_literals(_assembly(vertex_binary), source_pass, 'vs')
-                    vertex_binding = vertex_contract(vertex_assembly, source_pass, target_pass, native_root, source_material=source_material)
+                    vertex_binding = vertex_contract(vertex_assembly, source_pass, target_pass, native_root,
+                                                     source_material=source_material, trail_geometry=trail_geometry)
+                    if vertex_binding.get('face_on_falloff'):
+                        result['face_on_falloff'] = True
                     vertex_hlsl, vertex_info = shaders.translate(vertex_assembly, vertex_binding)
                     vertex_hlsl = native_fog_adapter(vertex_hlsl, vertex_assembly, vertex_binding, target_pass, native_root)
                     vertex_code = shaders.compile_hlsl(vertex_hlsl, 'vs_5_0')

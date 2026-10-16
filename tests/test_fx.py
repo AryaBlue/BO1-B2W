@@ -103,6 +103,20 @@ class ElementTranslation(unittest.TestCase):
             self.assertIn('level.waw2bo2_weapons["gun"] = "waw_gun";', text)
             self.assertEqual(report.content['model_overlay_fx'][0]['model'], 'machine_on')
 
+    def test_trail_elements_use_the_trail_material_variant(self):
+        trail = {"verts": [], "inds": [], "splitDist": 32, "scrollTimeMsec": 0, "repeatDist": 64}
+        effect = t4_effect([t4_elem(4, visuals=[{"material": "bolt"}], trail=trail),
+                            t4_elem(3, visuals=[{"material": "bolt"}])])
+        deps = fx.dependencies(effect)
+        self.assertEqual(deps.trail_materials, {"bolt"})
+        names = {"bolt": "waw_fx/bolt", fx.trail_material_key("bolt"): "waw_fx/bolt__w2b_trail"}
+        out, _ = fx.convert_effect(effect, names)
+        self.assertEqual(out["elemDefs"][0]["visuals"], [{"material": "waw_fx/bolt__w2b_trail"}])
+        self.assertEqual(out["elemDefs"][1]["visuals"], [{"material": "waw_fx/bolt"}])
+        # without a variant (no view falloff) trails keep the shared material
+        out, _ = fx.convert_effect(effect, {"bolt": "waw_fx/bolt"})
+        self.assertEqual(out["elemDefs"][0]["visuals"], [{"material": "waw_fx/bolt"}])
+
     def test_flags_shift_after_run_mode(self):
         e = t4_elem(flags=0x2 | 0xC0 | 0x100 | 0x200 | 0x400 | 0x800 | 0x04000000 | 0x80000000)
         out, _ = fx.convert_effect(t4_effect([e]))
