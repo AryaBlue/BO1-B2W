@@ -562,6 +562,23 @@ waw_spawn( classname, origin, flags, radius, height )
     return ent;
 }
 
+// Actors a WaW trigger's AI flags (1 axis, 2 allies, 4 neutral) respond to:
+// every species of the team, dogs included. T6 getaiarray( team ) returns
+// only the team's human species (measured: a zombie_dog is in
+// getaispeciesarray( "axis" ) but not in getaiarray( "axis" )), so dogs
+// never set off a Bouncing Betty.
+waw_trigger_ai( flags )
+{
+    candidates = [];
+    if ( flags & 1 )
+        candidates = arraycombine( candidates, getaispeciesarray( "axis", "all" ), 0, 0 );
+    if ( flags & 2 )
+        candidates = arraycombine( candidates, getaispeciesarray( "allies", "all" ), 0, 0 );
+    if ( flags & 4 )
+        candidates = arraycombine( candidates, getaispeciesarray( "neutral", "all" ), 0, 0 );
+    return candidates;
+}
+
 waw_radius_ai_contacts( flags )
 {
     self endon( "death" );
@@ -569,13 +586,7 @@ waw_radius_ai_contacts( flags )
     {
         // Allow the source caller to begin its waittill after spawn returns.
         wait 0.05;
-        candidates = [];
-        if ( flags & 1 )
-            candidates = arraycombine( candidates, getaiarray( "axis" ), 0, 0 );
-        if ( flags & 2 )
-            candidates = arraycombine( candidates, getaiarray( "allies" ), 0, 0 );
-        if ( flags & 4 )
-            candidates = arraycombine( candidates, getaiarray( "neutral" ), 0, 0 );
+        candidates = waw_trigger_ai( flags );
         foreach ( actor in candidates )
             if ( isdefined( actor ) && isalive( actor ) && actor istouching( self ) )
                 self notify( "trigger", actor );
@@ -1805,13 +1816,7 @@ waw_linked_trigger_contacts( parent )
         // trigger_off parks the volume far from its parent
         if ( abs( distance( self.origin, parent.origin ) - offset ) > 1000 )
             continue;
-        candidates = [];
-        if ( flags & 1 )
-            candidates = arraycombine( candidates, getaiarray( "axis" ), 0, 0 );
-        if ( flags & 2 )
-            candidates = arraycombine( candidates, getaiarray( "allies" ), 0, 0 );
-        if ( flags & 4 )
-            candidates = arraycombine( candidates, getaiarray( "neutral" ), 0, 0 );
+        candidates = waw_trigger_ai( flags );
         if ( !( flags & 8 ) )
             candidates = arraycombine( candidates, getplayers(), 0, 0 );
         // A fast rotor (the flogger, ~23 degrees a frame) can pass over an

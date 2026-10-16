@@ -1088,6 +1088,16 @@ class Translator:
             extracted = self.extract(core, name)
             if extracted:
                 return extracted
+        # A compat wrapper replaces every spelling of its call. WaW defines
+        # clientNotify in maps\_utility, so the source call reaches it through
+        # the include, and BO2's maps\mp\_utility::clientnotify never raises
+        # the "waw_client_" notify the server copies of client listeners
+        # (Shi No Numa's electric trap arcs) wait for.
+        if name in API["compat_wrappers"]:
+            compat = self.compat_name(name)
+            if compat:
+                self.report.rewrites[f"{core}::{name} -> compat wrapper"] += 1
+                return compat
         if any(self.api.defines(inc, name) for inc in included):
             self.report.rewrites[f"{core}::{name} -> included BO2 script"] += 1
             return None
