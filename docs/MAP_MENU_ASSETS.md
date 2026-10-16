@@ -32,7 +32,19 @@ named materials, where `<project>` is the converted map's technical name:
 - `loadscreen_<project>_zclassic_`
 
 The build generates namespaced title, uppercase location title, and description
-localization. It binds the icon in `mapstable.csv` and the Blit in category 5 of
+localization for every map, branded or not. `menu.json` may also carry `mode`
+(the line BO2 fills with "TRANZIT" under the map name; default "Zombies") and
+`location` (the loading screen's location line; default "World at War").
+
+T6 composes three keys itself (measured in t6zm.exe): the map name is
+`<mapstable col 3>_CAPS` (`ls_mapname`, sub_5D0EF0), the location is
+`<col 3>_LOC` (`ls_maplocation`, sub_5E6900), and the mode line is
+`<gametype col 7>_<map>_CAPS` in the lobby (sub_5581A0) or
+`<gametype col 7>_<col 3>_LOC_CAPS` on the loading screen (sub_694EB0), falling
+back to the gametype's own name, `ZMUI_CLASSIC_CAPS` = "TRANZIT". Column 3 is
+therefore a short key (`WAW_<PROJECT>`, at most 26 characters to fit the
+engine's 32-byte buffer), never display text: a title there showed as
+"Title_CAPS" and "Title_LOC". It binds the icon in `mapstable.csv` and the Blit in category 5 of
 `gametypestable.csv`. Existing vanilla location projection values are retained.
 Both `mod.ff` and `mod_load.ff` include the menu registrations and artwork.
 An additional `<project>_menu.ipak` contains the image pixels, using native

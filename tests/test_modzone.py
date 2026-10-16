@@ -73,8 +73,9 @@ class ModZoneTests(unittest.TestCase):
                 output = modzone.stage_lobby_map_table(stock, project, 'zm_custom')
                 with output.open() as stream:
                     row = next(r for r in csv.reader(stream) if r[0] == 'zm_custom')
+                # T6 localizes col3 + "_CAPS"/"_LOC": a key prefix, not the title
                 self.assertEqual((row[3], row[4], row[6]),
-                    ('Test Town', 'custom_atom', 'WAW_MENU_ZM_CUSTOM_DESC'))
+                    ('WAW_ZM_CUSTOM', 'custom_atom', 'WAW_MENU_ZM_CUSTOM_DESC'))
                 self.assertEqual(row[11], '0')
             modes = root / 'modes.csv'
             with modes.open('w', newline='') as stream:
@@ -87,6 +88,40 @@ class ModZoneTests(unittest.TestCase):
             self.assertEqual(row[4:7], ['WAW_MENU_ZM_CUSTOM_CAPS', 'WAW_MENU_ZM_CUSTOM_DESC', 'custom_cutout'])
             self.assertEqual(row[7:12], ['1', '0', '0', '180', '-50'])
             self.assertEqual(row[17:19], ['100', '-90'])
+
+    def test_engine_composed_menu_keys_are_localized(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'menu.json').write_text(json.dumps({'title': 'Test Town', 'description': 'Text',
+                                                        'mode': 'Survival', 'location': 'Berlin, 1945'}))
+            (root / 'zm').mkdir()
+            with (root / 'zm/gametypestable.csv').open('w', newline='') as stream:
+                csv.writer(stream).writerows([[f'c{i}' for i in range(10)],
+                    ['0', 'zclassic', 'ZMUI_CLASSIC_CAPS', 'D', 'p', '0', 'YES', 'ZMUI_CLASSIC', 'YES', 'zclassic'],
+                    ['0', 'zgrief', 'ZMUI_GRIEF_CAPS', 'D', 'p', '2', 'YES', 'ZMUI_GRIEF', 'YES', 'zencounter'],
+                    ['6', '0', 'zm_custom', 'default', 'zclassic', '0', 'left', 'YES', '', '']])
+            self.assertEqual(modzone.stage_menu_assets(root, 'zm_custom'), ['localize,menu_zm_custom'])
+            from waw2bo2.localization import parse
+            strings = parse((root / 'english/localizedstrings/menu_zm_custom.str').read_text())
+            self.assertEqual(strings['WAW_ZM_CUSTOM_CAPS'], 'TEST TOWN')
+            self.assertEqual(strings['WAW_ZM_CUSTOM_LOC'], 'Berlin, 1945')
+            self.assertEqual(strings['ZMUI_CLASSIC_ZM_CUSTOM_CAPS'], 'SURVIVAL')
+            self.assertEqual(strings['ZMUI_CLASSIC_WAW_ZM_CUSTOM_LOC_CAPS'], 'SURVIVAL')
+            self.assertNotIn('ZMUI_GRIEF_ZM_CUSTOM_CAPS', strings)
+
+    def test_unbranded_map_still_localizes_its_lobby_names(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.assertEqual(modzone.stage_menu_assets(root, 'zm_custom'), ['localize,menu_zm_custom'])
+            from waw2bo2.localization import parse
+            strings = parse((root / 'english/localizedstrings/menu_zm_custom.str').read_text())
+            self.assertEqual(strings['WAW_ZM_CUSTOM_CAPS'], 'ZM_CUSTOM')
+            self.assertEqual(strings['WAW_ZM_CUSTOM_LOC'], modzone.DEFAULT_MENU_LOCATION)
+
+    def test_long_project_names_fit_the_engine_name_buffer(self):
+        key = modzone.map_name_key('zm_a_very_long_custom_map_name_waw')
+        self.assertLessEqual(len(key + '_CAPS'), 31)
+        self.assertEqual(key, modzone.map_name_key('zm_a_very_long_custom_map_name_waw'))
 
     def test_authored_menu_requires_all_runtime_materials_and_images(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -178,7 +213,7 @@ class ModZoneTests(unittest.TestCase):
             self.assertEqual([float(custom[i]) for i in (16, 17, 18)], [0, 0, 0])
             # no empty frontend column (Lua reads them all): base-game values, own name/index
             self.assertTrue(all(v.strip() for v in custom))
-            self.assertEqual(custom[3], "zm_custom")
+            self.assertEqual(custom[3], "WAW_ZM_CUSTOM")
             self.assertEqual(custom[5], "1")
             self.assertEqual(custom[11], "0")
             self.assertEqual(custom[4], "signpost")

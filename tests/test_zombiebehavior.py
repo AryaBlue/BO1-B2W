@@ -166,6 +166,33 @@ class ZombieBehaviorTests(unittest.TestCase):
                 self.assertIn('dummy_anim_ref = %waw_anim_fast;', p.read_text())
             self.assertNotIn('waw_anim_fast', (raw / 'animstatedefs/zm_nuked_basic.asd').read_text())
 
+    def test_movement_clip_absent_from_every_zone_is_left_out(self):
+        # Yard: run1 names a clip no zone carries; the build used to stop.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            sources = self.make_sources(root, '#using_animtree("human");\n'
+                'init_standard_zombie_anims(){ level.scr_anim["zombie"]["run1"]=%absent; '
+                'level.scr_anim["zombie"]["run2"]=%present; level.scr_anim["zombie"]["walk1"]=%gone; }')
+            raw = root / 'bo2/raw'
+            for path, text in {
+                'animtrees/zm_nuked_basic.atr': 'body\n{\nstock\n}\n',
+                'animstatedefs/zm_nuked_basic.asd': 'zm_move_run : notify move_anim\n{\nstock_run\n}\n'
+                    'zm_move_walk : notify move_anim\n{\nstock_walk\n}\n',
+            }.items():
+                p = raw / path; p.parent.mkdir(parents=True, exist_ok=True); p.write_text(text)
+            out = root / 'out'
+            (out / 'xanim').mkdir(parents=True)
+            (out / 'xanim/waw_anim_present').write_bytes(b'original source clip')
+            result = zombiebehavior.stage_actor_movement(sources, out, root / 'bo2', gscport.API['zombie_runtime'])
+            self.assertEqual(result['clips'], ['waw_anim_present'])
+            self.assertEqual(result['states'], {'run': ['present']})
+            self.assertEqual(result['missing'], ['absent', 'gone'])
+            self.assertEqual(result['native_states'], ['walk'])
+            asd = (out / ('animstatedefs/' + zombiebehavior.ACTOR_TREE + '.asd')).read_text()
+            self.assertIn('zm_move_run : notify move_anim\n{\n\twaw_anim_present\n}', asd)
+            self.assertIn('zm_move_walk : notify move_anim\n{\nstock_walk\n}', asd)
+            self.assertNotIn('absent', asd)
+
     def test_spawner_sampler_preserves_source_reroll_body(self):
         with tempfile.TemporaryDirectory() as temp:
             sources = self.make_sources(Path(temp), 'round_spawning(){ unrelated(); old_spawn=undefined; '

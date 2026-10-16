@@ -10,6 +10,7 @@ which Plutonium loads with the mod.
 from __future__ import annotations
 
 import csv
+import hashlib
 import math
 import io
 import re
@@ -486,19 +487,65 @@ def menu_metadata(project_root: Path) -> dict:
     return data
 
 
-def stage_menu_assets(project_root: Path, project: str) -> list[str]:
-    """Localize authored branding and include its materials in both zones."""
+DEFAULT_MENU_MODE = 'Zombies'
+DEFAULT_MENU_LOCATION = 'World at War'
+
+
+def menu_strings(project_root: Path, project: str) -> dict[str, str]:
+    """Title, description, mode name and location; unbranded maps get defaults."""
     data = menu_metadata(project_root)
-    if not data:
+    return {'title': data.get('title') or project,
+            'description': data.get('description') or f'{project}: World at War custom map',
+            'mode': (data.get('mode') or '').strip() or DEFAULT_MENU_MODE,
+            'location': (data.get('location') or '').strip() or DEFAULT_MENU_LOCATION}
+
+
+def map_name_key(project: str) -> str:
+    """mapstable column 3: a key prefix, never display text.
+
+    T6 localizes "<col3>_CAPS" as the map name (ls_mapname) and "<col3>_LOC" as
+    its location (ls_maplocation), both formatted into 32-byte buffers
+    (sub_5D0EF0, sub_5E6900). A title there showed as "Title_CAPS"/"Title_LOC".
+    """
+    key = 'WAW_' + re.sub(r'\W', '_', project.upper())
+    if len(key) + len('_CAPS') > 31:
+        key = 'WAW_' + hashlib.sha1(project.encode()).hexdigest()[:16].upper()
+    return key
+
+
+def gametype_name_keys(project_root: Path, project: str) -> list[str]:
+    """Mode-name keys T6 tries before the gametype's own name ("TRANZIT").
+
+    sub_5581A0 (lobby) localizes "<gametype col7>_<map>_CAPS" and sub_694EB0
+    (loading screen) "<gametype col7>_<col3>_LOC_CAPS"; stock pairs are
+    ZMUI_CLASSIC_ZM_TOMB_CAPS and ZMUI_CLASSIC_ZMUI_BURIED_LOC_CAPS.
+    """
+    table = project_root / 'zm/gametypestable.csv'
+    if not table.is_file():
         return []
+    rows = list(csv.reader(io.StringIO(table.read_text(encoding='utf-8-sig'))))
+    modes = {r[4] for r in rows if len(r) > 4 and r[0] == '6' and r[2] == project}
+    prefixes = sorted({r[7] for r in rows if len(r) > 7 and r[0] == '0' and r[1] in modes and r[7]})
+    return [key for prefix in prefixes
+            for key in (f'{prefix}_{project.upper()}_CAPS', f'{prefix}_{map_name_key(project)}_LOC_CAPS')]
+
+
+def stage_menu_assets(project_root: Path, project: str) -> list[str]:
+    """Localize the map's frontend strings and include authored materials in both zones."""
+    data = menu_metadata(project_root)
+    strings = menu_strings(project_root, project)
     from .localization import quote
     prefix = 'WAW_MENU_' + project.upper()
+    name = map_name_key(project)
     asset = 'menu_' + project
     path = project_root / 'english/localizedstrings' / (asset + '.str')
     path.parent.mkdir(parents=True, exist_ok=True)
-    values = {'TITLE': data['title'], 'CAPS': data['title'].upper(), 'DESC': data['description']}
-    path.write_text('VERSION "1"\nCONFIG ""\nFILENOTES "Authored map menu"\n\n' +
-                    ''.join(f'REFERENCE {prefix}_{key}\nLANG_ENGLISH {quote(value)}\n\n'
+    values = {f'{prefix}_TITLE': strings['title'], f'{prefix}_CAPS': strings['title'].upper(),
+              f'{prefix}_DESC': strings['description'], name: strings['title'],
+              f'{name}_CAPS': strings['title'].upper(), f'{name}_LOC': strings['location']}
+    values.update((key, strings['mode'].upper()) for key in gametype_name_keys(project_root, project))
+    path.write_text('VERSION "1"\nCONFIG ""\nFILENOTES "Converted map menu"\n\n' +
+                    ''.join(f'REFERENCE {key}\nLANG_ENGLISH {quote(value)}\n\n'
                             for key, value in values.items()) + 'ENDMARKER\n', encoding='utf-8')
     if not data.get('icon'):
         return [f'localize,{asset}']
@@ -570,15 +617,10 @@ def stage_lobby_map_table(stock: Path, project_root: Path, project: str) -> Path
     count[1] = str(len(maps))
     if not existing[5].strip():
         existing[5] = str(maps.index(existing))
-    metadata = menu_metadata(project_root)
-    if metadata:
-        # The loading screen shows this column (ls_mapname) while the map's
-        # zones load, before a mod localize asset exists: a key would show
-        # raw. Unknown strings pass through Localize unchanged (an unbranded
-        # map shows its plain project name here), so use the title itself.
-        existing[3] = metadata['title']
-        existing[4] = metadata.get('icon', existing[4])
-        existing[6] = 'WAW_MENU_' + project.upper() + '_DESC'
+    # Strings come from stage_menu_assets' localize asset, for every map.
+    existing[3] = map_name_key(project)
+    existing[4] = menu_metadata(project_root).get('icon', existing[4])
+    existing[6] = 'WAW_MENU_' + project.upper() + '_DESC'
     result = project_root / "zm/mapstable.csv"
     result.parent.mkdir(parents=True, exist_ok=True)
     with result.open("w", encoding="utf-8", newline="") as stream:
@@ -610,11 +652,10 @@ def stage_lobby_gametype_table(stock: Path, project_root: Path, project: str) ->
         entries = [r for r in rows if r and r[0] == category]
         # Engine iteration uses these bounds, not the physical CSV row count.
         count[1] = str(max((int(r[1]) for r in entries), default=-1) + 1)
-    metadata = menu_metadata(project_root)
-    if metadata:
-        entry = next(r for r in rows if len(r) > 2 and r[0] == '5' and r[2] == project)
-        prefix = 'WAW_MENU_' + project.upper()
-        entry[4], entry[5], entry[6], entry[16] = prefix + '_CAPS', prefix + '_DESC', metadata.get('blit', entry[6]), prefix + '_TITLE'
+    entry = next(r for r in rows if len(r) > 2 and r[0] == '5' and r[2] == project)
+    prefix = 'WAW_MENU_' + project.upper()
+    entry[4], entry[5], entry[6], entry[16] = (prefix + '_CAPS', prefix + '_DESC',
+                                               menu_metadata(project_root).get('blit', entry[6]), prefix + '_TITLE')
     result = project_root / "zm/gametypestable.csv"
     result.parent.mkdir(parents=True, exist_ok=True)
     with result.open("w", encoding="utf-8", newline="") as stream:

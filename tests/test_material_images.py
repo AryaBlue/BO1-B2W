@@ -136,6 +136,22 @@ class MaterialImageTests(unittest.TestCase):
             self.assertEqual(result['material_images']['waw_material/custom'], ['waw_image/original'])
             self.assertEqual((project / 'images/waw_image/original.iwi').read_bytes(), iwi.dds_to_iwi(dds))
 
+    def test_absent_material_equivalent_drops_its_bo2_thermal_material(self):
+        # Project X: BO2's mtl_blackhawk_fastrope names a thermal material that
+        # is never staged; the linker then refused the material and its model.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            native, project = root / 'native', root / 'project'
+            path = native / 'materials/mc/equivalent.json'
+            write_json(path, {'techniqueSet': 'trivial_12345678', 'thermalMaterial': 'mc/equivalent_thermal',
+                              'textures': []})
+            write_json(native / 'techniquesets/trivial_12345678.json', {'techniques': []})
+            report = t6bridge.StageReport('any_map')
+            t6bridge.stage_materials(report, {'mc/missing'}, [root / 'source'], native / 'materials', project, native,
+                                    native_fallbacks={'mc/missing': path})
+            actual = json.loads((project / techsets.oat_material_path('mc/missing')).read_text())
+            self.assertNotIn('thermalMaterial', actual)
+
     def test_absent_material_equivalent_preserves_native_pixels_and_source_wins(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

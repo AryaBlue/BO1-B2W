@@ -241,9 +241,10 @@ def stage_materials(report: StageReport, names: set[str], roots: list[Path], sto
         if remastered or (src is None and name in (native_fallbacks or {})):
             native_path = remaster[name] if remastered else native_fallbacks[name]
             out = _load_json(native_path)
-            if remastered and out.pop('thermalMaterial', None):
+            if out.pop('thermalMaterial', None):
                 # a second BO2 material (thermal-sight view) the WaW material it
-                # replaces never had; the linker would need it and its images too
+                # replaces never had; the linker would need it and its images
+                # too, and refuses the whole material (and its model) without it
                 notes.append('BO2 thermalMaterial dropped (the WaW material has none)')
             native_root = stock_materials.parent
             for texture in out.get('textures', []):
@@ -1483,6 +1484,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
             if bo2_root is not None:
                 from . import barriers
                 report.entities['barrier_alignment'] = barriers.align_native_boards(project_root / 'BSP', bo2_root)
+                report.entities['barrier_chunks'] = barriers.drop_replaced_chunks(project_root / 'BSP')
         except ValueError as exc:
             raise StageError(f"map entities: {exc}") from exc
         synthesized = report.entities.get("synthesized_zones")
@@ -2609,6 +2611,12 @@ def port_scripts(report: StageReport, stage: Path, project_root: Path, waw_map_s
         movement = zombiebehavior.stage_actor_movement(sources, project_root, bo2_root, gscport.API['zombie_runtime'], map_name)
         if movement:
             report.scripts['actor_movement'] = movement
+            for name in movement.get('missing', []):
+                report.warnings.append(f"SOURCE_MOVEMENT_XANIM {name}: no WaW xanim in any zone dump; "
+                                       f"left out of the zombie movement state")
+            for speed in movement.get('native_states', []):
+                report.warnings.append(f"BO2_FALLBACK movement {speed}: none of the WaW clips exist; "
+                                       f"the native BO2 clips stay")
     report.scripts["staged_xanims"] = xanims
     report.scripts["staged_animtrees"] = sorted(gscport.animation_tree_name(t) for t in core_trees)
     report.errors += [f"scripts: {e}" for e in port.errors]

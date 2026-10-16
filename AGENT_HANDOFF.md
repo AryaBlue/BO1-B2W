@@ -49,6 +49,51 @@ Installed 2026-10-16 (ff backup `work/shi_no_numa_dlc2/build/installed_backup_20
   `getstructarray` in a scripts/zm probe needs `common_scripts\utility::`; `nodescanpath` is
   not a graph test, use `findpath`.
 
+## Four v0.2.14 failure bundles: yard, library, hotelv2, projectx, 2026-10-16 (branch fix-failure-bundles-yard-library-hotel, not merged)
+
+- Bundles extracted into the session scratchpad only, nothing run from them.
+  Each map fails at a different step, with a different cause; the four failures
+  are unrelated. None of the four source maps exist locally, so no full build
+  was run, and nothing was installed or playtested.
+- Hotel v2 (`WeaponError: raw animation has no unique valid notification suffix`,
+  weapon runtime step): `animnotes.add_sound_events` scans for the raw v17
+  notify suffix (count:u8 then name/frame pairs). When the high byte of a note's
+  frame equals the number of notes after it (frame 331 = `4B 01`, then one note),
+  that byte also parses as a nested, shorter suffix, so the scanner found two
+  and raised. It now takes the longest suffix. Measured over the 2,958 weapon
+  xanims with a sound map in the local build caches: 14 failed before the fix
+  (all reload/reload_empty of custom guns, e.g. `viewmodel_bf4_aws_reload_empty`),
+  0 after. The hotel bundle has no xanims or sound maps, so its specific
+  animation is not identified; the same error and layout are inferred, not proven.
+- Library (`UnicodeEncodeError ... '�'`, same step): `wawtext.read`
+  decodes a weapon file as cp1252 with `errors="replace"`, so bytes with no cp1252
+  character (0x81, 0x8D, 0x8F, 0x90, 0x9D) become U+FFFD. `viewmodels.stage_shadow_variants`
+  wrote the weapon file back in the locale code page; every other weapon writer
+  already used UTF-8. That write now passes `encoding='utf-8'`. The test emulates a
+  cp1252 locale and reproduces the exact error without the fix. Which weapon held
+  the byte is not in the bundle.
+- Yard (`ValueError: Source movement xanim missing: waw_anim_bo2_mech_run01`,
+  script step): the map's `_zombiemode::init_standard_zombie_anims` lists
+  `%bo2_mech_run01`, and no map zone or stock `common.ff` holds it (asset logs
+  list only `bo2_mech_fly_in`/`bo2_mech_minigun_spray`). The animtree stage already
+  reports such clips as UNSUPPORTED_XANIM; `stage_actor_movement` raised instead.
+  It now leaves an absent clip out of the native movement state
+  (`SOURCE_MOVEMENT_XANIM` warning; substates are random, so no index shifts). A
+  speed with none of its clips keeps the native BO2 clips (`BO2_FALLBACK movement`).
+  The source script is not in the bundle: the rest of yard's build is unverified,
+  and so is the runtime meaning of that table row in WaW.
+- Project X (bundle `...1792102230945378500`, step 4 T6 bridge link): WaW model
+  `vehicle_blackhawk_night` uses `mc/mtl_blackhawk_fastrope`, which is absent from
+  WaW, so the BO2 raw material is used (BO2_FALLBACK). That material names
+  `thermalMaterial mc/mtl_veh_blackhawk_interior_thermal`, which is never staged; the
+  linker refused the material and the model. `stage_materials` already dropped
+  thermalMaterial for remastered materials, and now drops it for native fallbacks too
+  (WaW never had a thermal view). This is a later stage than the two earlier
+  Project X reports (localization, `pby_fly.ff` abort); later steps are unverified.
+- Tests: one new test per cause (test_animnotes, test_viewmodels,
+  test_zombiebehavior, test_material_images); full suite: 629 tests pass
+  (worktree needs the ignored vendor/OpenAssetTools; linked from main).
+
 ## Map compilation and portable flame schema regressions, 2026-10-15
 
 - Reproduced McDonald's through the GUI on main 8efb636. Fresh extraction passed

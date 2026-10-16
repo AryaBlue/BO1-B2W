@@ -49,7 +49,7 @@ class Launcher(ttk.Frame):
         self.action_widgets: list = []
         self.vars = {key: tk.StringVar(value=getattr(self.settings, key)) for key in
                      ('waw', 'bo2', 'waw_tools', 't4', 't6', 'decoder', 'work', 'fastfile', 'project',
-                      'menu_title', 'menu_description', 'menu_blit', 'menu_large', 'menu_blur')}
+                      'menu_title', 'menu_description', 'menu_mode', 'menu_location', 'menu_blit', 'menu_large', 'menu_blur')}
         self.art_cache = {}
         self.source_fx = tk.BooleanVar(value=self.settings.source_fx)
         self.bo2_stock_perks = tk.BooleanVar(value=self.settings.bo2_stock_perks)
@@ -66,7 +66,7 @@ class Launcher(ttk.Frame):
         self.pack(fill='both', expand=True)
         for variable in self.vars.values():
             variable.trace_add('write', lambda *_: self._refresh())
-        for key in ('menu_title', 'menu_description', 'menu_blit', 'menu_large', 'menu_blur', 'project'):
+        for key in ('menu_title', 'menu_description', 'menu_mode', 'menu_location', 'menu_blit', 'menu_large', 'menu_blur', 'project'):
             self.vars[key].trace_add('write', lambda *_: self._art_preview())
         self._art_preview()
         self.source_fx.trace_add('write', lambda *_: self._refresh())
@@ -262,7 +262,9 @@ class Launcher(ttk.Frame):
         tab.columnconfigure(1, weight=1)
         details = self._group(tab, 'In-game map details')
         details.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
-        for key, label in [('menu_title', 'Map title'), ('menu_description', 'Map description')]:
+        for key, label in [('menu_title', 'Map title'), ('menu_description', 'Map description'),
+                           ('menu_mode', 'Mode name (replaces TRANZIT under the map name)'),
+                           ('menu_location', 'Location (loading screen, under the map name)')]:
             ttk.Label(details, text=label).pack(anchor='w')
             entry = ttk.Entry(details, textvariable=self.vars[key])
             entry.pack(fill='x', pady=(3, 8))

@@ -46,6 +46,8 @@ class Settings:
     project: str = ''
     menu_title: str = ''
     menu_description: str = ''
+    menu_mode: str = ''
+    menu_location: str = ''
     menu_blit: str = ''
     menu_large: str = ''
     menu_blur: str = ''

@@ -316,12 +316,19 @@ def stage_actor_movement(sources, out_root: Path, bo2_root: Path, definition: di
     if not sets:
         return {}
     asd = (bo2_root / 'raw/animstatedefs/zm_nuked_basic.asd').read_text(encoding='utf-8')
-    clips = []
-    for speed, names in sets.items():
-        assets = ['waw_anim_' + name for name in names]
-        for asset in assets:
-            if not (out_root / 'xanim' / asset).is_file():
-                raise ValueError(f'Source movement xanim missing: {asset}')
+    clips, missing, native = [], [], []
+    for speed, names in list(sets.items()):
+        # A clip absent from every zone dump was already reported by the
+        # animtree stage (UNSUPPORTED_XANIM); the native state cannot list it.
+        # Substates are picked at random, so dropping it shifts no index.
+        kept = [name for name in names if (out_root / 'xanim' / ('waw_anim_' + name)).is_file()]
+        missing += [name for name in names if name not in kept]
+        if not kept:
+            native.append(speed)    # keeps the native BO2 clips: BO2 instead of nothing
+            del sets[speed]
+            continue
+        sets[speed] = kept
+        assets = ['waw_anim_' + name for name in kept]
         state = definition['source_movement']['states'][speed]
         pattern = re.compile(r'(^' + re.escape(state) + r'\s*:[^\n]*\n\{).*?^\}', re.M | re.S)
         asd, count = pattern.subn(lambda m: m[1] + '\n' + ''.join('\t' + a + '\n' for a in assets) + '}', asd)
@@ -349,7 +356,12 @@ def stage_actor_movement(sources, out_root: Path, bo2_root: Path, definition: di
                  ''.join(f'    dummy_anim_ref = %{clip};\n' for clip in sorted(set(clips))) +
                  '}\n// END SOURCE MOVEMENT REFS\n')
         actor.write_text(text, encoding='utf-8')
-    return {'states': sets, 'tree': ACTOR_TREE, 'clips': sorted(set(clips))}
+    result = {'states': sets, 'tree': ACTOR_TREE, 'clips': sorted(set(clips))}
+    if missing:
+        result['missing'] = sorted(set(missing))
+    if native:
+        result['native_states'] = native
+    return result
 
 
 def runtime_source(definition: dict, speed_function: str | None, selection_function: str | None = None,

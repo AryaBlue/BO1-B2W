@@ -66,3 +66,11 @@ class MenuArtworkTests(unittest.TestCase):
         self.settings.menu_title = self.settings.menu_description = ''
         stage_art(self.settings, project)
         self.assertFalse((project / 'menu.json').exists())
+
+    def test_mode_name_and_location_reach_menu_metadata(self):
+        project = self.root / 'project'
+        self.settings.menu_title = self.settings.menu_description = ''
+        self.settings.menu_mode, self.settings.menu_location = 'Nacht', 'Germany, 1945'
+        stage_art(self.settings, project)
+        data = json.loads((project / 'menu.json').read_text())
+        self.assertEqual((data['title'], data['mode'], data['location']), ('zm_example', 'Nacht', 'Germany, 1945'))
