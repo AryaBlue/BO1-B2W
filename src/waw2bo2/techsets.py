@@ -383,9 +383,11 @@ def build_material(t4: dict, donor: dict, notes: list[str]) -> dict:
     out["constants"] = consts
     # Two-sided source materials (wires, foliage cards, the flogger's wire)
     # draw both faces; the donor's states cull back faces, so only one side
-    # showed. Keep the source's cull mode on every converted pass.
+    # showed. Keep the source's cull mode on every converted pass. The
+    # wireframe debug pass (polymodeLine, WaW technique 53) always culls back
+    # and is never drawn in game, so it does not count (chainlink fences).
     source_states = t4.get('stateBits', [])
-    color = [s for s in source_states if s.get('colorWriteRgb')]
+    color = [s for s in source_states if s.get('colorWriteRgb') and not s.get('polymodeLine')]
     if color and all(s.get('cullFace') == 'none' for s in color):
         for state in out.get('stateBits', []):
             if 'cullFace' in state:
@@ -410,6 +412,13 @@ def build_material(t4: dict, donor: dict, notes: list[str]) -> dict:
     out["_game"] = "t6"
     out["_type"] = "material"
     return out
+
+
+def only_casts_shadow(t4: dict) -> bool:
+    """WaW's onlyCastShadow material option ("the material itself will not
+    render"): compiled as game flag 0x1, which in Shi No Numa only the black
+    mangrove gobo cards carry. Stock T6 shadowcaster materials carry it too."""
+    return '1' in t4.get('gameFlags', [])
 
 
 def material_techset(t4: dict) -> str:

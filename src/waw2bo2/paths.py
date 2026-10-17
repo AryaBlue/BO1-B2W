@@ -239,6 +239,91 @@ def convert_paths(waw: dict, substates: set[str] | None = None) -> tuple[dict, d
             "nodes": out_nodes}, renamed, summary
 
 
+def vis_bit(vis: bytes, count: int, a: int, b: int) -> int:
+    """Node-pair visibility. Measured on converted Shi No Numa (3670 nodes):
+    pair (lo, hi) is bit lo*count + hi, LSB first; 99.87% of linked pairs
+    read visible, every other tested layout <= 35%."""
+    if a == b:
+        return 1
+    k = min(a, b) * count + max(a, b)
+    return (vis[k >> 3] >> (k & 7)) & 1 if (k >> 3) < len(vis) else 0
+
+
+def _bits(data: bytes | bytearray, start: int, length: int) -> int:
+    first, last = start >> 3, (start + length + 7) >> 3
+    return (int.from_bytes(data[first:last + 1], "little") >> (start & 7)) & ((1 << length) - 1)
+
+
+def _or_bits(data: bytearray, start: int, value: int) -> None:
+    if not value:
+        return
+    first = start >> 3
+    value <<= start & 7
+    last = first + (value.bit_length() + 7) // 8
+    data[first:last] = (int.from_bytes(data[first:last], "little") | value).to_bytes(last - first, "little")
+
+
+def split_window_ends(paths: dict, begins: list[int]) -> list[tuple[str, str]]:
+    """Give each window traversal its own negotiation end node.
+
+    WaW shuts a boarded window by disconnecting only the links that cross its
+    clip. T6 has no such cut: unlinknodes and DisconnectPaths leave the
+    negotiation link in place, and the only working cut, disabling a node,
+    also fails every path to a goal whose nearest node it is; T6 picks the
+    nearest node whether or not it is enabled (all measured in game). The
+    window's inside end is an ordinary hub node, the nearest node for a player
+    at the window. Each traversal now lands on a dedicated end node at the
+    hub's origin, linked onward to it, so disabling that node cuts the window
+    alone. The game drops nodes to the floor on load, so the two share one
+    position; the nearest-node lookup keeps the hub. GetNode finds a node's
+    targetname through its map entity, so the caller adds one.
+    Returns (hub targetname, new end targetname) pairs."""
+    nodes = paths["nodes"]
+    count = len(nodes)
+    index = {n["targetname"]: i for i, n in enumerate(nodes) if n.get("targetname")}
+    hubs, names = [], []
+    for begin_index in begins:
+        begin = nodes[begin_index]
+        hub = index.get(begin.get("target", ""))
+        if hub is None:
+            continue
+        end = dict(nodes[hub])
+        name = f"{end['targetname']}_waw2bo2_window"
+        end.update(targetname=name, target="")
+        flags = next((l["flags"] for l in end.get("links", ())), T6_CLEARANCE_LINK_FLAGS)
+        end["links"] = [{"node": hub, "dist": 0.0, "disconnectCount": 0,
+                         "negotiationLink": 0, "flags": flags}]
+        new_index = count + len(hubs)
+        for link in begin.get("links", ()):
+            if link["node"] == hub and link.get("negotiationLink"):
+                link["node"] = new_index
+        begin["target"] = name
+        nodes.append(end)
+        hubs.append(hub)
+        names.append((nodes[hub]["targetname"], name))
+    if hubs and paths.get("pathVis"):
+        old = bytes.fromhex(paths["pathVis"])
+        total = len(nodes)
+        if total > 0xFFFF - 128:
+            raise PathError(f"{total} path nodes exceed the uint16 node index range")
+        out = bytearray((total * (total - 1) + 7) // 8)
+        for lo in range(total):
+            if lo < count:
+                row = _bits(old, lo * count + lo + 1, count - lo - 1)
+                for t, hub in enumerate(hubs):
+                    row |= vis_bit(old, count, lo, hub) << (count + t - lo - 1)
+            else:
+                row = 0
+                for u in range(lo - count + 1, len(hubs)):
+                    row |= vis_bit(old, count, hubs[lo - count], hubs[u]) << (count + u - lo - 1)
+            _or_bits(out, lo * total + lo + 1, row)
+        paths["visBytes"] = len(out)
+        paths["pathVis"] = out.hex()
+    if "nodeCount" in paths:
+        paths["nodeCount"] = len(nodes)
+    return names
+
+
 def stage_paths(paths_file: Path, bsp_dir: Path, project_root: Path,
                 asd: Path | None = None) -> tuple[PathSummary, dict[str, str]]:
     """Write BSP/paths.json and the generated traversal scripts. ``asd``: the
