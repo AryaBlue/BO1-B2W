@@ -437,9 +437,33 @@ bind_spawn_location()
 {{
     if ( isdefined( self.spawn_point_override ) )
         return;
-    // Plain WaW spawners use their own origin. Risers keep BO2's zone selection.
-    if ( isdefined( self.script_string ) && self.script_string == "riser" )
+    // Plain WaW spawners use their own origin.
+    if ( isdefined( self.script_string ) && self.script_string == "{membership['riser_actor_value']}" )
+    {{
+        // WaW do_zombie_rise: a riser rises at random( level.{rise_field} )
+        // when the map keeps that list (Shi No Numa: the rise structs of the
+        // zones players are in), as choose_spawn_location does for round
+        // spawns. Source scripts also spawn risers themselves (Shi No Numa's
+        // <hut>_initial_zombies when a door opens): with no point chosen, T6
+        // would take any active zone location. With the list empty WaW's
+        // riser stays at its spawner. Maps without the list keep BO2's zone
+        // selection.
+        if ( !isdefined( level.{rise_field} ) )
+            return;
+        if ( level.{rise_field}.size )
+        {{
+            self.spawn_point_override = rise_point( level.{rise_field}[randomint( level.{rise_field}.size )], self );
+            return;
+        }}
+        point = spawnstruct();
+        point.origin = self.origin;
+        point.angles = self.angles;
+        point.script_noteworthy = "{definition['plain_spawn_location']}";
+        point.target = self.target;
+        point.targetname = self.targetname;
+        self.spawn_point_override = point;
         return;
+    }}
     if ( !isdefined( level.zombie_spawn_locations ) )
         return;
     spots = level.zombie_spawn_locations;
@@ -452,6 +476,21 @@ bind_spawn_location()
             return;
         }}
     }}
+}}
+
+rise_point( anchor, actor )
+{{
+    point = spawnstruct();
+    point.origin = anchor.origin;
+    point.angles = anchor.angles;
+    point.script_noteworthy = "{membership['native_riser_location']}";
+    // T6 reads any other string as a barrier id; WaW riser_door goes to the
+    // nearest windows, the native no-string default.
+    if ( isdefined( anchor.script_noteworthy ) && anchor.script_noteworthy == "{membership['native_chaser_value']}" )
+        point.script_string = "{membership['native_chaser_value']}";
+    point.target = actor.target;
+    point.targetname = actor.targetname;
+    return point;
 }}
 
 spawn_zombie( spawner, target_name, spawn_point, round_number )
