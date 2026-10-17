@@ -367,6 +367,16 @@ def unavailable_weapons(unavailable: list[str]) -> set[str]:
     return names
 
 
+LOADED_WEAPON_RE = re.compile(r'^Loaded weapon "([^"]+)"', re.MULTILINE)
+
+
+def loaded_weapons(work: Path) -> set[str]:
+    """Weapons the successful mod.ff link loaded, its dependencies included
+    (alt-mode and dual-wield weapons the zone does not list)."""
+    log = work.resolve() / "linker.log"
+    return set(LOADED_WEAPON_RE.findall(log.read_text(encoding="utf-8", errors="replace"))) if log.is_file() else set()
+
+
 def prune_weapon_references(script: Path, weapons: set[str]) -> list[str]:
     """Comment out map-script lines that name a weapon mod.ff does not carry."""
     lines = script.read_text(encoding="utf-8", errors="replace").splitlines()

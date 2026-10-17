@@ -75,8 +75,11 @@ init()
         level.waw2bo2_weapon_names = [];
     if ( !isdefined( level.waw2bo2_runtime_weapons ) )
         level.waw2bo2_runtime_weapons = [];
+    if ( !isdefined( level.waw2bo2_bo2_weapons ) )
+        level.waw2bo2_bo2_weapons = [];
     maps\mp\waw\_waw2bo2_assets::init();
     maps\mp\waw\_waw2bo2_hint_defaults::init();
+    maps\mp\waw\_waw2bo2_bo2weapons::init();
     maps\mp\waw\_waw2bo2_visions::init();
     maps\mp\_utility::registerclientsys( "waw_sun" );
     maps\mp\_utility::registerclientsys( "waw_vision_global" );
@@ -1050,20 +1053,33 @@ stuck_zombie_monitor()
 // level.waw2bo2_weapons (generated in _waw2bo2_assets): every WaW weapon of the
 // map -> the weapon mod.ff carries for it, or "" when it is not carried.
 // level.waw2bo2_weapon_names is the reverse (BO2 name -> WaW name). A name in
-// neither table is BO2's own (the BO2 framework can hand one to a WaW script)
-// and passes through. T6 fails on an unknown weapon, so an uncarried WaW
-// weapon is reported and the call skipped.
+// neither table may be BO2's own (the BO2 framework can hand one to a WaW
+// script): it passes through when level.waw2bo2_bo2_weapons (generated in
+// _waw2bo2_bo2weapons from the linked mod.ff) lists it. T6 fails on an
+// unknown weapon, so any other weapon (an uncarried WaW weapon, or one a mod
+// script names but the map does not ship) is reported and the call skipped.
 
 waw_weapon( name )
 {
-    if ( !isdefined( name ) || !isdefined( level.waw2bo2_weapons ) || !isdefined( level.waw2bo2_weapons[name] ) )
+    if ( !isdefined( name ) )
         return name;
-    if ( level.waw2bo2_weapons[name] == "" )
+    if ( isdefined( level.waw2bo2_weapons ) && isdefined( level.waw2bo2_weapons[name] ) )
+    {
+        if ( level.waw2bo2_weapons[name] == "" )
+        {
+            report( "WEAPON", name );
+            return undefined;
+        }
+        return level.waw2bo2_weapons[name];
+    }
+    // an empty table: the build did not record mod.ff's weapons (lowercase
+    // keys: the engine matches weapon names case-insensitively)
+    if ( isstring( name ) && isdefined( level.waw2bo2_bo2_weapons ) && level.waw2bo2_bo2_weapons.size && !isdefined( level.waw2bo2_bo2_weapons[tolower( name )] ) )
     {
         report( "WEAPON", name );
         return undefined;
     }
-    return level.waw2bo2_weapons[name];
+    return name;
 }
 
 // BO2 weapon name -> the WaW name the map scripts compare against
@@ -1115,6 +1131,123 @@ waw_weaponclipsize( name )
     if ( !isdefined( weapon ) )
         return 0;
     return weaponclipsize( weapon );
+}
+
+waw_weaponmaxammo( name )
+{
+    weapon = waw_weapon( name );
+    if ( !isdefined( weapon ) )
+        return 0;
+    return weaponmaxammo( weapon );
+}
+
+waw_weaponstartammo( name )
+{
+    weapon = waw_weapon( name );
+    if ( !isdefined( weapon ) )
+        return 0;
+    return weaponstartammo( weapon );
+}
+
+waw_weaponfuellife( name )
+{
+    weapon = waw_weapon( name );
+    if ( !isdefined( weapon ) )
+        return 0;
+    return weaponfuellife( weapon );
+}
+
+waw_weaponfiretime( name )
+{
+    weapon = waw_weapon( name );
+    if ( !isdefined( weapon ) )
+        return 0;
+    return weaponfiretime( weapon );
+}
+
+waw_weaponreloadtime( name )
+{
+    weapon = waw_weapon( name );
+    if ( !isdefined( weapon ) )
+        return 0;
+    return weaponreloadtime( weapon );
+}
+
+waw_weaponissemiauto( name )
+{
+    weapon = waw_weapon( name );
+    return isdefined( weapon ) && weaponissemiauto( weapon );
+}
+
+waw_weaponisboltaction( name )
+{
+    weapon = waw_weapon( name );
+    return isdefined( weapon ) && weaponisboltaction( weapon );
+}
+
+waw_weaponisgasweapon( name )
+{
+    weapon = waw_weapon( name );
+    return isdefined( weapon ) && weaponisgasweapon( weapon );
+}
+
+waw_isweaponcliponly( name )
+{
+    weapon = waw_weapon( name );
+    return isdefined( weapon ) && isweaponcliponly( weapon );
+}
+
+waw_isweapondetonationtimed( name )
+{
+    weapon = waw_weapon( name );
+    return isdefined( weapon ) && isweapondetonationtimed( weapon );
+}
+
+waw_weaponinventorytype( name )
+{
+    weapon = waw_weapon( name );
+    if ( !isdefined( weapon ) )
+        return "none";
+    return weaponinventorytype( weapon );
+}
+
+waw_weaponaltweaponname( name )
+{
+    weapon = waw_weapon( name );
+    if ( !isdefined( weapon ) )
+        return "none";
+    return waw_weapon_name( weaponaltweaponname( weapon ) );
+}
+
+waw_weapondualwieldweaponname( name )
+{
+    weapon = waw_weapon( name );
+    if ( !isdefined( weapon ) )
+        return "none";
+    return waw_weapon_name( weapondualwieldweaponname( weapon ) );
+}
+
+waw_givestartammo( name )
+{
+    weapon = waw_weapon( name );
+    if ( isdefined( weapon ) )
+        self givestartammo( weapon );
+}
+
+waw_getfractionstartammo( name )
+{
+    weapon = waw_weapon( name );
+    if ( !isdefined( weapon ) )
+        return 0;
+    return self getfractionstartammo( weapon );
+}
+
+waw_getfractionmaxammo( name )
+{
+    weapon = waw_weapon( name );
+    if ( !isdefined( weapon ) )
+        return 0;
+    return self getfractionmaxammo( weapon );
 }
 
 waw_giveweapon( name, model_index, a, b )

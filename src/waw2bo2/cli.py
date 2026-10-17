@@ -296,7 +296,8 @@ def _stage_bridge(args: argparse.Namespace) -> int:
 
 
 def _build_mod(args: argparse.Namespace) -> int:
-    from . import modzone, overheathud
+    from . import gscport, modzone, overheathud
+    from .weapons import ENGINE_WEAPONS
 
     extra = args.stage.resolve() / "zone_raw" / args.project / t6bridge.MOD_EXTRA_ZONE
     extra_lines = extra.read_text(encoding="utf-8").splitlines() if extra.exists() else []
@@ -335,6 +336,21 @@ def _build_mod(args: argparse.Namespace) -> int:
     for script in t6bridge.map_scripts(project_root, args.project):
         for line in modzone.prune_weapon_references(project_root / script, weapons):
             print(f"{script}: disabled {line}")
+    # Weapons a mod script names that neither the map nor BO2 carries (e.g. a
+    # custom weapon the map never shipped) must be skipped at runtime: T6
+    # aborts on "unknown weapon". The compat lookup checks this list.
+    known = modzone.loaded_weapons(args.work)
+    if known:
+        cache = args.stage.resolve() / "t6api_cache.json"
+        if cache.is_file():
+            known |= set(json.loads(cache.read_text(encoding="utf-8")).get("stock_assets", {}).get("weapon", []))
+        known |= ENGINE_WEAPONS
+        target = project_root / "maps" / "mp" / "waw" / gscport.BO2_WEAPONS_SCRIPT
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(gscport.bo2_weapons_source(known), encoding="utf-8")
+        print(f"BO2 weapons loaded with the map: {len(known)} (unknown script weapons are skipped at runtime)")
+    else:
+        print("warning: no weapons recorded in the mod.ff linker log; script weapon names are not checked")
     return 0
 
 
