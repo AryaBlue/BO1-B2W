@@ -176,14 +176,61 @@ def list_zone_assets(bo2_root: Path, unlinker: Path, stock_dump: Path | None = N
     return out
 
 
+# The script API of the stock game (t6zm.exe + the mod tools' raw scripts),
+# indexed once from a complete install and shipped with the converter. The
+# index is only as good as the local raw folder: without raw\clientscripts the
+# client-only builtin tables (setanimknob, setflaggedanimknob...) lose their
+# client votes and classify as server methods, so translated scripts call
+# builtins the T6 linker does not have. Every machine uses this snapshot so
+# script translation never depends on what a user's raw folder holds.
+SNAPSHOT = Path(__file__).with_name("compat") / "t6_script_api.json"
+
+
+def load_snapshot() -> dict | None:
+    if not SNAPSHOT.is_file():
+        return None
+    return json.loads(SNAPSHOT.read_text(encoding="utf-8"))
+
+
+def write_snapshot(bo2_root: Path, target: Path = SNAPSHOT) -> dict:
+    """Index ``bo2_root`` (a complete stock install with the mod tools' raw)
+    into the shipped snapshot."""
+    missing = [sub for sub in ("maps", "common_scripts", "clientscripts")
+               if not (bo2_root / "raw" / sub).is_dir()]
+    if missing:
+        raise FileNotFoundError(f"{bo2_root / 'raw'} is not a complete mod tools raw folder "
+                                f"(missing {', '.join(missing)})")
+    functions, methods, scripts = index_scripts(bo2_root)
+    data = {"version": CACHE_VERSION, "builtins": functions, "methods": methods, "scripts": scripts}
+    target.write_text(json.dumps(data, sort_keys=True, indent=0) + "\n", encoding="utf-8")
+    return data
+
+
 def build(bo2_root: Path, cache: Path, unlinker: Path | None = None, stock_dump: Path | None = None) -> T6Api:
+    stock = load_snapshot()
+
+    def api(data, assets):
+        return T6Api({k: tuple(v) for k, v in data["builtins"].items()},
+                     data["scripts"],
+                     methods={k: tuple(v) for k, v in data["methods"].items()},
+                     stock_assets=assets)
+
     if cache.exists():
         data = json.loads(cache.read_text(encoding="utf-8"))
         if data.get("version") == CACHE_VERSION and (unlinker is None or data.get("stock_assets")):
-            return T6Api({k: tuple(v) for k, v in data["builtins"].items()},
-                         data["scripts"],
-                         methods={k: tuple(v) for k, v in data["methods"].items()},
-                         stock_assets={k: set(v) for k, v in data.get("stock_assets", {}).items()})
+            return api(stock or data, {k: set(v) for k, v in data.get("stock_assets", {}).items()})
+    functions, methods, scripts = ((stock["builtins"], stock["methods"], stock["scripts"]) if stock
+                                   else index_scripts(bo2_root))
+    assets = list_zone_assets(bo2_root, unlinker, stock_dump) if unlinker is not None else {}
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"version": CACHE_VERSION, "builtins": functions, "methods": methods,
+                                 "scripts": scripts,
+                                 "stock_assets": {k: sorted(v) for k, v in assets.items()}}), encoding="utf-8")
+    return api({"builtins": functions, "methods": methods, "scripts": scripts}, assets)
+
+
+def index_scripts(bo2_root: Path):
+    """(server functions, server methods, stock scripts) of ``bo2_root``."""
     raw = bo2_root / "raw"
     scripts: dict[str, dict[str, int]] = {}
     usage: dict[str, list[int]] = {}
@@ -208,9 +255,12 @@ def build(bo2_root: Path, cache: Path, unlinker: Path | None = None, stock_dump:
             functions[name] = (0, 32)
         if meth and name not in methods:
             methods[name] = (0, 32)
-    assets = list_zone_assets(bo2_root, unlinker, stock_dump) if unlinker is not None else {}
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps({"version": CACHE_VERSION, "builtins": functions, "methods": methods,
-                                 "scripts": scripts,
-                                 "stock_assets": {k: sorted(v) for k, v in assets.items()}}), encoding="utf-8")
-    return T6Api(functions, scripts, methods=methods, stock_assets=assets)
+    return functions, methods, scripts
+
+
+if __name__ == "__main__":
+    import sys
+    # python -m waw2bo2.t6api "<BO2 install>"  regenerates compat/t6_script_api.json
+    written = write_snapshot(Path(sys.argv[1]))
+    print(f"{SNAPSHOT}: {len(written['builtins'])} functions, {len(written['methods'])} methods, "
+          f"{len(written['scripts'])} scripts")
