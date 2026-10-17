@@ -20,7 +20,7 @@ Installed (backup `work/shi_no_numa_dlc2/build/installed_backup_20261016_dogs_bl
 - Hut "power lines" (comm room cables to the trap power box/switch) are world surfaces with wc/global_black;
   WaW's own global_black_c.iwi (iw_03/iw_26) is DXT1 solid black and the material has no spec, so they are
   black in WaW too, and WaW's sumpf film (contrast 1.25, brightness 0.09 -> bias -0.035) keeps black black.
-  Not changed; asked the user. WaW reference shot via CoDWaW.exe +devmap failed
+  Not changed: user decided to leave global_black black (matches WaW). WaW reference shot via CoDWaW.exe +devmap failed
   (EXE_ERR_HOSTALREADYCONNECTED).
 
 ## Shi No Numa comm room window targeting + local window cut, 2026-10-16
