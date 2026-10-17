@@ -2,10 +2,10 @@
 
 ## Shi No Numa: Waffe vs dogs, door risers, black Flogger, hut cables, 2026-10-16
 
-Branch `fix-gobo-black-leaves` (63eb799, 61f680f, cf78b8e). Evidence/probes `work/snn_power_lines`
+Branch `fix-gobo-black-leaves` (63eb799, 61f680f; cf78b8e reverted by 8b3bbfb). Evidence/probes `work/snn_power_lines`
 (run_shots_probe.ps1 fixed: `$probe` clobbered the `$Probe` param, PowerShell names are case-insensitive).
 Installed (backup `work/shi_no_numa_dlc2/build/installed_backup_20261016_dogs_blends`); build script
-`work/snn_power_lines/build.py` (map build.py points at a deleted settings file). 646 tests. User playtest pending.
+`work/snn_power_lines/build.py` (map build.py points at a deleted settings file). 644 tests. User playtest pending.
 - Waffe/dogs: T6 dog `type` is "zombie_dog"; WaW enemy_is_dog tests "dog" -> compat waw_enemy_is_dog.
   Arc FX asks the target for the source's bone (j_spine1 / j_spineupper; T6 dogs are BO2 zombie_wolf):
   source gettagorigin -> compat waw_gettagorigin (origin when model + attachments lack the tag, via
@@ -13,13 +13,14 @@ Installed (backup `work/shi_no_numa_dlc2/build/installed_backup_20261016_dogs_bl
 - Door zombies: <hut>_initial_zombies are RISER spawners. WaW do_zombie_rise: random(level.zombie_rise_spawners),
   at the spawner if empty. bind_spawn_location now does that for risers with no chosen point (round spawns
   already did). Measured after flag_set("sw_magic_box"): rise at swamp riser_location points near the hut.
-- Flogger black band: brush model *3 blend *6n_83 (metal + bloodsplat8) drew black (lit and fullbright);
-  world blends with layer 83 are fine, and the Flogger's *8n_23 blood showed. Cause NOT established.
-  Brush-model "*a_b" blends now draw base layer = "wc/" + clip.materials[a] (BSP material list); 17 surfaces,
-  blood layers lost. A real fix needs the T6 bmodel draw path (IDA open of t6zm.exe.i64 failed this session).
+- Flogger "pitch black texture" = its drive belt: world surfaces with wc/global_black, the same material as the
+  hut cables. cf78b8e (brush-model blends drawn as base layer) was a misdiagnosis and removed the Flogger's
+  blood; reverted in 8b3bbfb, rebuilt and installed (blood back, verified: work/snn_power_lines/arm).
+  The Flogger posts' blood blend (*6n_84, world) and arm/log blends render correctly.
 - Hut "power lines" (comm room cables to the trap power box/switch) are world surfaces with wc/global_black;
   WaW's own global_black_c.iwi (iw_03/iw_26) is DXT1 solid black and the material has no spec, so they are
-  black in WaW too. Not changed; asked the user. WaW reference shot via CoDWaW.exe +devmap failed
+  black in WaW too, and WaW's sumpf film (contrast 1.25, brightness 0.09 -> bias -0.035) keeps black black.
+  Not changed; asked the user. WaW reference shot via CoDWaW.exe +devmap failed
   (EXE_ERR_HOSTALREADYCONNECTED).
 
 ## Shi No Numa comm room window targeting + local window cut, 2026-10-16
