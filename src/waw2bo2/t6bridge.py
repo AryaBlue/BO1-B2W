@@ -1294,41 +1294,6 @@ def write_shadow_geometry(report: StageReport, world, mesh_of_surface: dict[int,
                                          "removed_source_surfaces": dropped}
 
 
-def brush_blends_to_base_layer(report: StageReport, world, clip, roots: list[Path]) -> frozenset[int]:
-    """Draw layered ("*a_b") surfaces of brush models with their base layer.
-
-    Measured on Shi No Numa's Flogger (brush model *3): its metal + blood
-    splat blend (*6n_83) drew solid black, lit and fullbright, while blends
-    with the same splat layer on static world geometry draw correctly. Why
-    T6 draws it black is not established (the Flogger's wood + blood pool
-    blend did show its blood), so every brush-model blend takes the base
-    layer: the black is gone, and the blood layers are lost. A generated blend's
-    numbers index the BSP material list, which the collision dump carries, so
-    the base layer is that WaW world material. Returns the surface indices
-    whose vertex colour (the layer blend weights) must not tint it."""
-    changed: set[int] = set()
-    kept_blends: Counter = Counter()
-    for surface in world.surfaces:
-        if not surface.brush_model or not surface.material.startswith("*"):
-            continue
-        first = _star_parts(surface.material)[0].rstrip("n")
-        base = None
-        if first.isdigit() and int(first) < len(clip.materials):
-            base = "wc/" + clip.materials[int(first)].name
-        if base is None or _find(roots, techsets.oat_material_path(base)) is None:
-            kept_blends[surface.material] += 1
-            continue
-        surface.material = base
-        surface.world_vert_format = 0
-        changed.add(surface.index)
-    if changed:
-        report.warnings.append(f"BRUSH_MODEL_BLEND_BASE_LAYER {len(changed)} layered brush-model surfaces drawn "
-                               f"with their base layer (a layered brush-model blend drew black in T6)")
-    if kept_blends:
-        report.warnings.append(f"BRUSH_MODEL_BLEND_KEPT {dict(kept_blends)}: base layer material not found")
-    return frozenset(changed)
-
-
 @progress.phase('Convert world geometry')
 def stage_geometry(report: StageReport, world, clip, roots: list[Path], project_root: Path,
                    stock_waw=None) -> str | None:
@@ -1394,7 +1359,6 @@ def stage_geometry(report: StageReport, world, clip, roots: list[Path], project_
                                f"(blend weights) is written as white (re-extract gfxworld with the v5 T4 dumper)")
     else:
         blend_data = set()
-    base_layer_surfaces = brush_blends_to_base_layer(report, world, clip, roots)
     kept = [s for s in world.surfaces if s.material not in sky | tool_surfaces]
     if world.brush_model_count is None and len(clip.submodels) > 1:
         raise StageError('render dump lacks brush ownership; re-extract gfxworld with the v4 T4 dumper')
@@ -1416,8 +1380,7 @@ def stage_geometry(report: StageReport, world, clip, roots: list[Path], project_
             f"{sum(s.material in tool_surfaces for s in world.surfaces)} WaW editor-only surfaces "
             f"({', '.join(sorted(tool_surfaces))}) removed from the render world")
     world.surfaces = kept
-    mesh_of_surface = write_world_fbx(world, bsp / "map_gfx.fbx", frozenset(blend_data), frozenset(shadow_only),
-                                      base_layer_surfaces)
+    mesh_of_surface = write_world_fbx(world, bsp / "map_gfx.fbx", frozenset(blend_data), frozenset(shadow_only))
     report.content['shadow_only_surfaces'] = sum(s.material in shadow_only for s in world.surfaces)
     write_shadow_geometry(report, world, mesh_of_surface, bsp / "shadowgeom.json")
     slot_materials = write_collision_fbx(clip, bsp / "map_col.fbx")
