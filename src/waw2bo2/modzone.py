@@ -494,6 +494,10 @@ def menu_metadata(project_root: Path) -> dict:
         for field in ('icon', 'blit'):
             if not isinstance(data.get(field), str) or not data[field].strip():
                 raise ValueError(f'menu.json requires {field}')
+    from .mapmenu import coordinate
+    for field, limit in (('longitude', 180), ('latitude', 90)):
+        if field in data:
+            coordinate(data[field], field.title(), limit)
     return data
 
 
@@ -581,8 +585,16 @@ def stage_menu_assets(project_root: Path, project: str) -> list[str]:
     path.write_text('VERSION "1"\nCONFIG ""\nFILENOTES "Converted map menu"\n\n' +
                     ''.join(f'REFERENCE {key}\nLANG_ENGLISH {quote(value)}\n\n'
                             for key, value in values.items()) + 'ENDMARKER\n', encoding='utf-8')
+    assets = [f'localize,{asset}']
+    if data.get('loading_song'):
+        bank = data['loading_song']['bank']
+        from .weapons import output_name
+        output_name('loading sound bank', bank)
+        if not (project_root / 'soundbank' / (bank + '.aliases.csv')).is_file():
+            raise FileNotFoundError(f'loading song bank missing: {bank}')
+        assets.append(f'soundbank,{bank}')
     if not data.get('icon'):
-        return [f'localize,{asset}']
+        return assets
     names = list(dict.fromkeys([data['icon'], data['blit'],
         f'menu_{project}_map', f'menu_{project}_map_blur', f'menu_{project}_zclassic_default',
         f'loadscreen_{project}_zclassic_default', f'loadscreen_{project}_zclassic_', *data.get('materials', [])]))
@@ -598,7 +610,7 @@ def stage_menu_assets(project_root: Path, project: str) -> list[str]:
             streaming['streamingMode'][texture['image']] = 2
     streaming_file.write_text(json.dumps(streaming, indent=2) + '\n', encoding='utf-8')
     pack = data.get('image_pack', project + '_menu')
-    return [f'>level.ipak_read,{pack}', f'>ipak,{pack}', f'localize,{asset}'] + [f'material,{name}' for name in names]
+    return [f'>level.ipak_read,{pack}', f'>ipak,{pack}', *assets] + [f'material,{name}' for name in names]
 
 
 def stage_lobby_map_table(stock: Path, project_root: Path, project: str) -> Path:
@@ -653,7 +665,11 @@ def stage_lobby_map_table(stock: Path, project_root: Path, project: str) -> Path
         existing[5] = str(maps.index(existing))
     # Strings come from stage_menu_assets' localize asset, for every map.
     existing[3] = map_name_key(project)
-    existing[4] = menu_metadata(project_root).get('icon', existing[4])
+    metadata = menu_metadata(project_root)
+    existing[4] = metadata.get('icon', existing[4])
+    for column, field in ((16, 'longitude'), (17, 'latitude')):
+        if field in metadata:
+            existing[column] = str(metadata[field])
     existing[6] = 'WAW_MENU_' + project.upper() + '_DESC'
     result = project_root / "zm/mapstable.csv"
     result.parent.mkdir(parents=True, exist_ok=True)
