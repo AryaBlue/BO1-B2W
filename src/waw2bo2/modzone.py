@@ -196,7 +196,7 @@ def activate_mod_shaders(ff: Path, project: Path, work: Path, linker: Path, unli
     dump = work/'shader_baseline/dump'
     proc = captured([str(unlinker.resolve()), '--no-color', '--include-assets', 'material',
                            '--output-folder', str(dump), str(baseline)], capture_output=True, text=True)
-    (work/'shader_baseline/unlinker.log').write_text(proc.stdout+proc.stderr)
+    (work/'shader_baseline/unlinker.log').write_text(proc.stdout+proc.stderr, encoding='utf-8')
     if proc.returncode:
         raise RuntimeError('shader baseline material extraction failed')
     overlay = work/'shader_overlay'
@@ -266,7 +266,7 @@ def activate_mod_shaders(ff: Path, project: Path, work: Path, linker: Path, unli
         target = overlay / source.relative_to(project)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
-    zone = (work/'zone_source/mod.zone').read_text()
+    zone = (work/'zone_source/mod.zone').read_text(encoding='utf-8')
     # Raw weapon files live under mp/sp; loaded assets use engine-internal names.
     zone = re.sub(r'(?m)^weapon,(?:mp|sp)/', 'weapon,', zone)
     # The template's "fximpacttable,,ImpactFx" names the stock singleton the
@@ -278,20 +278,20 @@ def activate_mod_shaders(ff: Path, project: Path, work: Path, linker: Path, unli
     zone = re.sub(r'(?m)^fximpacttable,.*(?:\r?\n|$)', '', zone)
     source_root = work/'shader_zone_source'
     source_root.mkdir(exist_ok=True)
-    (source_root/'mod.zone').write_text(zone)
+    (source_root/'mod.zone').write_text(zone, encoding='utf-8')
     output = work/'shader_out'
     command = [str(linker.resolve()), '--no-color', '--base-folder', str(work),
                '--load', str(baseline), '--source-search-path', str(source_root),
                '--asset-search-path', str(overlay), '--output-folder', str(output), 'mod']
     proc = captured(command, capture_output=True, text=True, errors='replace')
-    (work/'shader_linker.log').write_text(proc.stdout+proc.stderr)
+    (work/'shader_linker.log').write_text(proc.stdout+proc.stderr, encoding='utf-8')
     linked = output/'mod.ff'
     if proc.returncode or not linked.is_file() or re.search(r'(?m)^ERROR:', proc.stdout):
         raise RuntimeError(f'bound shader mod relink failed ({proc.returncode}); see {work / "shader_linker.log"}')
     check = work/'shader_check'
     proc = captured([str(unlinker.resolve()), '--no-color', '--include-assets', 'material,techniqueset',
         '--output-folder', str(check), str(linked)], capture_output=True, text=True, errors='replace')
-    (work/'shader_check.log').write_text(proc.stdout+proc.stderr)
+    (work/'shader_check.log').write_text(proc.stdout+proc.stderr, encoding='utf-8')
     if proc.returncode:
         raise RuntimeError('bound shader mod roundtrip failed')
     for relative in bound:
@@ -747,7 +747,7 @@ def verify_lobby_tables(ff: Path, unlinker: Path, work: Path, project: str) -> N
     proc = captured([str(unlinker.resolve()), '--no-color', '--include-assets', 'stringtable',
                            '--output-folder', str(dump), str(ff.resolve())],
                           capture_output=True, text=True, errors='replace')
-    (work.resolve() / f"verify_{ff.stem}_lobby.log").write_text(proc.stdout + proc.stderr)
+    (work.resolve() / f"verify_{ff.stem}_lobby.log").write_text(proc.stdout + proc.stderr, encoding='utf-8')
     if proc.returncode:
         raise RuntimeError(f"cannot verify lobby tables in {ff}")
     for name in ('mapstable.csv', 'gametypestable.csv'):

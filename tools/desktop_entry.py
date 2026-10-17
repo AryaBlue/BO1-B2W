@@ -33,9 +33,8 @@ def main():
     # PyInstaller must dispatch spawned conversion workers before GUI/CLI parsing.
     import multiprocessing
     multiprocessing.freeze_support()
-    for stream in (sys.stdout, sys.stderr):
-        if stream is not None and hasattr(stream, 'reconfigure'):
-            stream.reconfigure(line_buffering=True, write_through=True)
+    from waw2bo2.progress import configure_console
+    configure_console()
     check_linux_dependencies(gui=sys.argv[1:3] != ['-m', 'waw2bo2.cli'])
     if Path(sys.executable).stem.lower() == 'all2raw':
         from waw2bo2.all2raw_cli import main as extract_main

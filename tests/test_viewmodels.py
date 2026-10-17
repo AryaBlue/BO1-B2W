@@ -23,9 +23,12 @@ class ViewmodelTests(unittest.TestCase):
             write('model_export/shared.gltf', {'materials':[{'name':'waw_material/metal'}]})
             path = root / 'weapons/gun'
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text('WEAPONFILE\\gunModel\\waw_xmodel/shared\\worldModel\\waw_xmodel/shared')
+            title = 'Caf\u00e9 \ufffd \u6d4b\u8bd5'
+            path.write_text('WEAPONFILE\\gunModel\\waw_xmodel/shared\\worldModel\\waw_xmodel/shared'
+                            '\\displayName\\' + title, encoding='utf-8')
             viewmodels.stage_shadow_variants(root)
             fields = weapons.read_info_file(path)
+            self.assertEqual(fields['displayName'], title)
             self.assertNotEqual(fields['gunModel'], fields['worldModel'])
             self.assertEqual(fields['worldModel'], 'waw_xmodel/shared')
             original = json.loads((root/'materials/waw_material/metal.json').read_text())
