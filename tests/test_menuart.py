@@ -77,3 +77,18 @@ class MenuArtworkTests(unittest.TestCase):
         stage_art(self.settings, project)
         data = json.loads((project / 'menu.json').read_text())
         self.assertEqual((data['title'], data['mode'], data['location']), ('zm_example', 'Nacht', 'Germany, 1945'))
+
+    def test_start_location_mode_list_is_localized(self):
+        # SelectStartLocZombie.lua shows ZMUI_<mode>_<map>_CAPS over <col7>_DESC_<location>
+        project = self.root / 'project'
+        (project / 'zm').mkdir(parents=True)
+        (project / 'zm/gametypestable.csv').write_text(
+            '0,zclassic,ZMUI_CLASSIC_CAPS,ZMUI_CLASSIC_DESC,playlist_tdm,0,YES,ZMUI_CLASSIC,YES,zclassic\n'
+            '6,20,zm_example,default,zclassic,0,left,YES\n')
+        self.settings.menu_mode = 'Japan'
+        stage_art(self.settings, project)
+        stage_menu_assets(project, 'zm_example')
+        text = (project / 'english/localizedstrings/menu_zm_example.str').read_text()
+        for key, value in (('ZMUI_ZCLASSIC_ZM_EXAMPLE_CAPS', 'JAPAN'), ('ZMUI_ZCLASSIC_ZM_EXAMPLE', 'Japan'),
+                           ('ZMUI_CLASSIC_DESC_DEFAULT', 'Survive the town.')):
+            self.assertIn(f'REFERENCE {key}\nLANG_ENGLISH "{value}"', text)

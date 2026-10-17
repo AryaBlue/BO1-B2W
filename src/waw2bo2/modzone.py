@@ -530,6 +530,29 @@ def gametype_name_keys(project_root: Path, project: str) -> list[str]:
             for key in (f'{prefix}_{project.upper()}_CAPS', f'{prefix}_{map_name_key(project)}_LOC_CAPS')]
 
 
+def start_location_option_strings(project_root: Path, project: str, strings: dict[str, str]) -> dict[str, str]:
+    """The mode list SelectStartLocZombie.lua builds for a start location.
+
+    Each option is "ZMUI_<mode ref>_<map>_CAPS" over "<gametype col7>_DESC_<location
+    ref>" (stock: ZMUI_ZCLASSIC_ZM_BURIED_CAPS, ZMUI_CLASSIC_DESC_PROCESSING; the
+    uncapitalized ZMUI_ZCLASSIC_ZM_BURIED too). Without them the raw keys showed.
+    """
+    table = project_root / 'zm/gametypestable.csv'
+    if not table.is_file():
+        return {}
+    rows = list(csv.reader(io.StringIO(table.read_text(encoding='utf-8-sig'))))
+    prefix = {r[1]: r[7] for r in rows if len(r) > 7 and r[0] == '0' and r[7]}
+    values = {}
+    for r in rows:
+        if len(r) > 4 and r[0] == '6' and r[2] == project:
+            location, mode = r[3], r[4]
+            values[f'ZMUI_{mode}_{project}_CAPS'.upper()] = strings['mode'].upper()
+            values[f'ZMUI_{mode}_{project}'.upper()] = strings['mode']
+            if mode in prefix:
+                values[f'{prefix[mode]}_DESC_{location}'.upper()] = strings['description']
+    return values
+
+
 def stage_menu_assets(project_root: Path, project: str) -> list[str]:
     """Localize the map's frontend strings and include authored materials in both zones."""
     data = menu_metadata(project_root)
@@ -544,6 +567,7 @@ def stage_menu_assets(project_root: Path, project: str) -> list[str]:
               f'{prefix}_DESC': strings['description'], name: strings['title'],
               f'{name}_CAPS': strings['title'].upper(), f'{name}_LOC': strings['location']}
     values.update((key, strings['mode'].upper()) for key in gametype_name_keys(project_root, project))
+    values.update(start_location_option_strings(project_root, project, strings))
     path.write_text('VERSION "1"\nCONFIG ""\nFILENOTES "Converted map menu"\n\n' +
                     ''.join(f'REFERENCE {key}\nLANG_ENGLISH {quote(value)}\n\n'
                             for key, value in values.items()) + 'ENDMARKER\n', encoding='utf-8')
