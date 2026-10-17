@@ -294,30 +294,6 @@ def neutralize_animations(tokens: list[gsc.Token], tree: str) -> None:
             tokens[i + 1].kind = gsc.STRING
 
 
-def bridge_generic_perk_hints(tokens: list[gsc.Token], script: gsc.Script) -> int:
-    """Use the source's priced hint selector when it supplies one.
-
-    WaW's generic perk prompt relies on prices painted on the machine. T6
-    has room for the full prompts already precached by the source framework.
-    Retain that framework's names and prices rather than inventing a table.
-    """
-    if 'vending_set_hintstring' not in script.functions:
-        return 0
-    fixes = 0
-    for ref in gsc.references(tokens):
-        if ref.name.lower() != 'sethintstring' or not ref.method:
-            continue
-        i = ref.index
-        if (i > 0 and tokens[i - 1].low == 'self'
-                and i + 3 < len(tokens) and tokens[i + 1].text == '('
-                and tokens[i + 2].text == '&"ZOMBIE_PERK_GENERIC"'
-                and tokens[i + 3].text == ')'):
-            tokens[i].text = 'vending_set_hintstring'
-            tokens[i + 2].text = 'self.script_noteworthy'
-            fixes += 1
-    return fixes
-
-
 def bridge_contact_kill_attacks(tokens: list[gsc.Token], script: gsc.Script) -> int:
     """Let source proximity/ragdoll kills own combat during their monitor.
 
@@ -1088,6 +1064,16 @@ class Translator:
             extracted = self.extract(core, name)
             if extracted:
                 return extracted
+        # A compat wrapper replaces every spelling of its call. WaW defines
+        # clientNotify in maps\_utility, so the source call reaches it through
+        # the include, and BO2's maps\mp\_utility::clientnotify never raises
+        # the "waw_client_" notify the server copies of client listeners
+        # (Shi No Numa's electric trap arcs) wait for.
+        if name in API["compat_wrappers"]:
+            compat = self.compat_name(name)
+            if compat:
+                self.report.rewrites[f"{core}::{name} -> compat wrapper"] += 1
+                return compat
         if any(self.api.defines(inc, name) for inc in included):
             self.report.rewrites[f"{core}::{name} -> included BO2 script"] += 1
             return None
@@ -1241,7 +1227,6 @@ class Translator:
                 self.report.rewrites['WaW playername field -> T6 name'] += 1
             if tokens[i].text.lower() == "zombie_hints" and tokens[i - 1].text == "." and tokens[i - 2].text.lower() == "level":
                 tokens[i].text = "waw2bo2_hints"
-        self.report.rewrites['source priced perk hints'] += bridge_generic_perk_hints(tokens, script)
         self.report.rewrites["zombie_weapons key lists without BO2-only entries"] += lower_zombie_weapon_keys(tokens)
         for ref in gsc.references(tokens):
             if neutralized_ranges is not None:
@@ -3295,6 +3280,12 @@ WAW_START_LOCATION = (
     '    if ( getdvar( #"ui_zm_mapstartlocation" ) == "" )\n'
     '        setdvar( "ui_zm_mapstartlocation", "default" );\n\n'
     '    level.scr_zm_map_start_location = getdvar( #"ui_zm_mapstartlocation" );\n')
+# WaW's round_spawn_failsafe kills a zombie that is stuck or below the world
+# and never returns it to the round (no zombie_total++ anywhere in WaW's
+# _zombiemode scripts). BO2 requeues every timed-out zombie, which put extra
+# zombies into rounds the source formula had already counted.
+WAW_FAILSAFE_NO_REQUEUE = ("level.put_timed_out_zombies_back_in_queue = 1;",
+                           "level.put_timed_out_zombies_back_in_queue = 0; // waw2bo2: WaW never requeues")
 WAW_ZOMBIE_VAR_HELPER = """
 waw2bo2_set_zombie_var( var, value, is_float, column, is_team_based )
 {
@@ -3472,6 +3463,9 @@ def stage_bo2_perk_support(out_root: Path, bo2_root: Path, *, bo2_stock_perks: b
     if bootstrap.count(WAW_START_LOCATION[0]) != 1:
         raise ValueError("BO2 server bootstrap start location read changed")
     bootstrap = bootstrap.replace(*WAW_START_LOCATION)
+    if bootstrap.count(WAW_FAILSAFE_NO_REQUEUE[0]) != 1:
+        raise ValueError("BO2 server bootstrap failsafe requeue changed")
+    bootstrap = bootstrap.replace(*WAW_FAILSAFE_NO_REQUEUE)
     bootstrap = waw_zombie_var_defaults(bootstrap)
     bootstrap = waw_pvp_attack_notify(bootstrap)
     bootstrap += WAW_ROUND_COUNTER_HELPER

@@ -167,6 +167,20 @@ class DogRoundTests(unittest.TestCase):
         fn = script.functions["waw_dog_spawn_location"]
         self.assertIn("level.enemy_dog_spawns", gsc.emit(script.tokens[fn.body_open:fn.body_close + 1]))
 
+    def test_ai_trigger_contacts_include_dogs(self):
+        # A WaW AI_AXIS trigger (the Betty's trigger_radius) fires for dogs;
+        # T6 getaiarray( "axis" ) leaves the zombie_dog actor out (measured).
+        script = gsc.parse((gscport.COMPAT_DIR / "_waw2bo2_compat.gsc").read_text(), "compat")
+        body = lambda name: gsc.emit(script.tokens[script.functions[name].body_open:
+                                                   script.functions[name].body_close + 1])
+        helper = body("waw_trigger_ai")
+        for team in ("axis", "allies", "neutral"):
+            self.assertIn(f'getaispeciesarray( "{team}", "all" )', helper)
+        self.assertNotIn("getaiarray", helper)
+        for caller in ("waw_radius_ai_contacts", "waw_linked_trigger_contacts"):
+            self.assertIn("waw_trigger_ai( flags )", body(caller))
+            self.assertNotIn("getaiarray", body(caller))
+
 
 if __name__ == "__main__":
     unittest.main()

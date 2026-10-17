@@ -29,8 +29,15 @@ class SourceChaseTests(unittest.TestCase):
             (out / '_waw2bo2_source_chase_policy.gsc').write_text('should_chase(result){return false;}')
             zombiebehavior.stage_native_support(root / 'out', root / 'bo2', definition)
             owned = (out / '_waw2bo2_spawner.gsc').read_text()
-            self.assertEqual(owned.count('::source_chases( native_result )'), 2)
+            self.assertEqual(owned.count('::source_chases( native_result )'), 3)
             self.assertNotIn('::source_chases()', owned)
+            # source is authoritative: T6's chaser/find_flesh checks never run
+            self.assertIn('return self maps\\mp\\waw\\_waw2bo2_zombie_behavior::source_chases( native_result );', owned)
+            # a forced-goal chaser's find_flesh spawn value is dropped before the window branch
+            reset = owned.index('native_result = undefined;')
+            self.assertLess(owned.index('native_result == "find_flesh"'), reset)
+            self.assertLess(reset, owned.index('go_window()'))
+            gsc.parse(owned, 'owned spawner')
             self.assertIn('self waittill("risen",native_result)', owned)
 
     def test_riser_event_local_is_a_policy_argument_not_an_unbound_local(self):

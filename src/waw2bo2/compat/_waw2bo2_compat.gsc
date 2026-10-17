@@ -88,8 +88,44 @@ init()
     level thread all_players_connected_bridge();
     level thread first_player_ready_bridge();
     level thread stuck_zombie_monitor();
+    level thread waw_window_paths();
     level thread power_bridge();
     level thread melee_wallbuy_costs();
+}
+
+// WaW keeps a boarded window shut to path-finding: its clip brush
+// disconnects the window's traversal until every chunk is destroyed and again
+// on the first repair (_zombiemode_blockers). T6's blocker_disconnect_paths
+// and blocker_connect_paths are empty, and blocker_init deletes the clip
+// beside a zbarrier, so zombies already in the playable area outside a window
+// (Shi No Numa's swamp walkways) walked its traversal through all six boards
+// (measured: find_flesh, zm_traverse_barrier, 6/6 closed). Same rule here.
+// Measured in T6: unlinknodes leaves a negotiation link in place; disabling
+// the inside end node cuts the traversal (findpath outside -> inside fails)
+// while the begin node and the attack spots outside stay reachable. That end
+// is the window's own node (paths.split_window_ends): T6 picks a disabled
+// nearest node anyway, so disabling the shared hub failed every path to a
+// player standing at the window.
+waw_window_paths()
+{
+    level endon( "end_game" );
+    while ( !isdefined( level.exterior_goals ) )
+        wait 0.05;
+    waittillframeend;
+    for ( ;; )
+    {
+        foreach ( goal in level.exterior_goals )
+        {
+            if ( !isdefined( goal ) || !isdefined( goal.zbarrier ) || !isdefined( goal.neg_start ) || !isdefined( goal.neg_end ) )
+                continue;
+            open = maps\mp\zombies\_zm_utility::all_chunks_destroyed( goal, goal.barrier_chunks );
+            if ( isdefined( goal.waw_path_open ) && goal.waw_path_open == open )
+                continue;
+            goal.waw_path_open = open;
+            setenablenode( goal.neg_end, open );
+        }
+        wait 0.05;
+    }
 }
 
 // BO2's melee wallbuy (_zm_melee_weapon::melee_weapon_think) charges
@@ -562,6 +598,23 @@ waw_spawn( classname, origin, flags, radius, height )
     return ent;
 }
 
+// Actors a WaW trigger's AI flags (1 axis, 2 allies, 4 neutral) respond to:
+// every species of the team, dogs included. T6 getaiarray( team ) returns
+// only the team's human species (measured: a zombie_dog is in
+// getaispeciesarray( "axis" ) but not in getaiarray( "axis" )), so dogs
+// never set off a Bouncing Betty.
+waw_trigger_ai( flags )
+{
+    candidates = [];
+    if ( flags & 1 )
+        candidates = arraycombine( candidates, getaispeciesarray( "axis", "all" ), 0, 0 );
+    if ( flags & 2 )
+        candidates = arraycombine( candidates, getaispeciesarray( "allies", "all" ), 0, 0 );
+    if ( flags & 4 )
+        candidates = arraycombine( candidates, getaispeciesarray( "neutral", "all" ), 0, 0 );
+    return candidates;
+}
+
 waw_radius_ai_contacts( flags )
 {
     self endon( "death" );
@@ -569,13 +622,7 @@ waw_radius_ai_contacts( flags )
     {
         // Allow the source caller to begin its waittill after spawn returns.
         wait 0.05;
-        candidates = [];
-        if ( flags & 1 )
-            candidates = arraycombine( candidates, getaiarray( "axis" ), 0, 0 );
-        if ( flags & 2 )
-            candidates = arraycombine( candidates, getaiarray( "allies" ), 0, 0 );
-        if ( flags & 4 )
-            candidates = arraycombine( candidates, getaiarray( "neutral" ), 0, 0 );
+        candidates = waw_trigger_ai( flags );
         foreach ( actor in candidates )
             if ( isdefined( actor ) && isalive( actor ) && actor istouching( self ) )
                 self notify( "trigger", actor );
@@ -1805,13 +1852,7 @@ waw_linked_trigger_contacts( parent )
         // trigger_off parks the volume far from its parent
         if ( abs( distance( self.origin, parent.origin ) - offset ) > 1000 )
             continue;
-        candidates = [];
-        if ( flags & 1 )
-            candidates = arraycombine( candidates, getaiarray( "axis" ), 0, 0 );
-        if ( flags & 2 )
-            candidates = arraycombine( candidates, getaiarray( "allies" ), 0, 0 );
-        if ( flags & 4 )
-            candidates = arraycombine( candidates, getaiarray( "neutral" ), 0, 0 );
+        candidates = waw_trigger_ai( flags );
         if ( !( flags & 8 ) )
             candidates = arraycombine( candidates, getplayers(), 0, 0 );
         // A fast rotor (the flogger, ~23 degrees a frame) can pass over an

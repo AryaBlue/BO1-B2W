@@ -383,9 +383,11 @@ def build_material(t4: dict, donor: dict, notes: list[str]) -> dict:
     out["constants"] = consts
     # Two-sided source materials (wires, foliage cards, the flogger's wire)
     # draw both faces; the donor's states cull back faces, so only one side
-    # showed. Keep the source's cull mode on every converted pass.
+    # showed. Keep the source's cull mode on every converted pass. The
+    # wireframe debug pass (polymodeLine, WaW technique 53) always culls back
+    # and is never drawn in game, so it does not count (chainlink fences).
     source_states = t4.get('stateBits', [])
-    color = [s for s in source_states if s.get('colorWriteRgb')]
+    color = [s for s in source_states if s.get('colorWriteRgb') and not s.get('polymodeLine')]
     if color and all(s.get('cullFace') == 'none' for s in color):
         for state in out.get('stateBits', []):
             if 'cullFace' in state:

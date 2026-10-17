@@ -1,5 +1,73 @@
 # WaW → BO2 Custom Map Converter Handoff
 
+## Shi No Numa comm room window targeting + local window cut, 2026-10-16
+
+Branch `snn-window-targeting` (worktree `work/wt_snn_window_target`; snn-window-grate + main merged
++ perk-prompt revert). Probes in `work/snn_bugs_20261016/probe_cut*.gsc`, `probe_verify_window.gsc`.
+Installed 2026-10-16 (backup `work/shi_no_numa_dlc2/build/installed_backup_20261016_window_target`).
+637 tests pass. User playtest pending; not merged.
+- Hut windows (pf6980/pf6989) are entered only by `southwest_building_spawners`: zombie_chaser WITH
+  script_forcegoal; WaW tests forcegoal first. T6 should_skip_teardown chased on the chaser string /
+  find_flesh spawn value, so nobody tore those windows. Source policy is now the whole predicate.
+- Perk machines: Shi No Numa's generic "Press &&1 to buy" is authored (prices on red stickers);
+  the priced-hint rewrite is reverted.
+- T6 window cut, measured: unlinknodes (both ways) and zbarrier DisconnectPaths do nothing; no
+  badplace in T6 ZM; spawnpathnode nodes are ignored by lookups; getnearestnode/findpath pick a
+  disabled nearest node, so disabling the shared inside hub broke every path to a player at the
+  window. Each window traversal now lands on its own end node at the hub origin (linked to it,
+  hub's vis; node entity added since GetNode resolves names via entities). Nearest stays the hub.
+  Game drops nodes to the floor on load. pathVis bit = lo*n+hi, LSB first.
+- Probes: teleport the player ONCE (user wants to move around during probes).
+
+## Shi No Numa missing window grate = one-sided materials, 2026-10-16
+
+Branch `snn-window-grate` (on `snn-barrier-trap-betty`), evidence `work/snn_window_grate_20261016`.
+- The "missing fence" near (9614, 650, -528) is world geometry, not an entity: `wc/chainlink_fence`
+  planes in the hut windows (x 9538/9542) plus `wc/trans_barbedwire_1`. WaW draws them two-sided; the
+  converted materials culled back faces, so from inside the hut they vanished.
+- Cause: build_material keeps cull none only if every colour-writing WaW state is cull none; WaW's
+  wireframe debug state (technique 53, polymodeLine; 17597/20000 cached WaW materials) culls back.
+  Line-mode states no longer count. 80 Shi No Numa materials become two-sided (fences, wire, netting,
+  foliage cards, rug, cracked glass, water, some weapons/perk bottles), all cull none in WaW.
+- Audit for other missing things: static models 6170/6170 staged by name+origin; every model-bearing
+  WaW entity staged except actor spawners (renamed classes); every world material staged except the sky.
+- Verified in game (shots/user_view.png at the user's HUD spot: fence and wire visible). 629 tests.
+  Installed 15:17; previous install in `work/shi_no_numa_dlc2/build/installed_backup_20261016_window_grate`.
+  Other converted maps need a rebuild to pick the fix up.
+
+## Shi No Numa playtest: window, trap FX, Betty vs dogs, round count, 2026-10-16
+
+Branch `snn-barrier-trap-betty` (worktree `work/wt_snn_bugs`), evidence `work/snn_bugs_20261016`.
+Installed 2026-10-16 (ff backup `work/shi_no_numa_dlc2/build/installed_backup_20261016_snn_bugs`).
+628 tests pass. Not pushed; user playtest pending.
+
+- Comm room window (pf6980, 7894 -1633): passive recorder (hut_watch.gsc) during the user's
+  rounds showed zombies already in `find_flesh` outside (swamp is playable) walking to the
+  begin node and playing `zm_traverse_barrier` with 6/6 boards closed. WaW's clip brush
+  disconnects a boarded window's traversal until all chunks are destroyed; T6's
+  `blocker_(dis)connect_paths` are empty and blocker_init deletes the clip next to a
+  zbarrier. Measured: `unlinknodes` leaves a negotiation link linked; `setenablenode(neg_end, 0)`
+  makes findpath outside->inside fail while begin/attack spots stay reachable. Compat
+  `waw_window_paths` enables the end node only while all chunks are destroyed. Verified:
+  boarded 0, torn 1, repaired 0. Not yet seen in live play.
+- Electric trap FX: WaW `clientNotify` is a maps\_utility script function, so it resolved to
+  BO2's maps\mp\_utility::clientnotify and never raised `waw_client_<msg>` for the server
+  copy of trap_fx_monitor. gscport now routes source framework functions named in
+  compat_wrappers to the wrapper (template scripts excepted). Verified: 5 arcs on 5 structs.
+- Betty vs dogs: compat AI-trigger emulation used `getaiarray(team)`, which excludes
+  zombie_dog (measured; `getaispeciesarray("axis")` includes it). Now `waw_trigger_ai` with
+  species "all" (radius and linked triggers). Verified: dog (350 hp) killed by a Betty.
+- Round count: the ported source formula is right (in game: 4, 9, 14, 19, 24 solo). The user's
+  7 on round 1 came from BO2's `put_timed_out_zombies_back_in_queue` requeueing failsafe kills;
+  WaW never requeues. The owned bootstrap sets it to 0. Spawn delay already follows WaW
+  (3, x0.95 per round). Left as is: WaW caps alive zombies at 32 (`get_enemy_count() > 31`),
+  BO2 at `zombie_ai_limit` 24 (only coop high rounds; T6 actor cap unmeasured); BO2's
+  `kill_trapped_zombies` recycle still requeues (rare door case).
+- Open: user reports a missing metal fence model in a window near (9614, 650, -528), yaw 184.
+- Probe gotchas: run_probe.ps1 must skip old console lines (stale DONE); a bare
+  `getstructarray` in a scripts/zm probe needs `common_scripts\utility::`; `nodescanpath` is
+  not a graph test, use `findpath`.
+
 ## Four v0.2.14 failure bundles: yard, library, hotelv2, projectx, 2026-10-16 (branch fix-failure-bundles-yard-library-hotel, not merged)
 
 - Bundles extracted into the session scratchpad only, nothing run from them.
@@ -201,8 +269,9 @@
   keeping attack slots outside and entry structs as repair triggers. Earlier
   live probe observed board opening and zombies entering. Final visual board
   alignment and absence of shell impact FX still need user confirmation.
-- Perk hints use the source's full selector/prices instead of the generic
-  prefix, with T6 activation-key bindings. Keep source hut unlock events.
+- Perk hints keep the source's generic prompt (Shi No Numa prices are on the
+  machines' red stickers; the 2026-10-16 revert removed the priced-hint
+  rewrite). Activation-key bindings stay. Keep source hut unlock events.
 - Flogger's sound thread contains the source's delayed kill; the unsupported
   `OkToSpawn()` stub broke its boolean guard. Runtime now admits up to four
   requests per server frame (T4's 800-byte snapshot counter has no GSC T6
