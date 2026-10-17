@@ -494,5 +494,90 @@ class NativeRunTests(unittest.TestCase):
         self.assertEqual(results, [])
 
 
+class PublishRetryTests(unittest.TestCase):
+    """Antivirus/indexers briefly hold freshly staged folders on Windows."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.source = self.root / 'staging'
+        self.source.mkdir()
+        (self.source / 'a.txt').write_text('a')
+        self.target = self.root / 'published'
+        # A fake clock advanced by sleep keeps the timeout test instant.
+        self.now = 0.0
+        self.sleeps = []
+        def sleep(seconds):
+            self.sleeps.append(seconds)
+            self.now += seconds
+        self.addCleanup(patch.stopall)
+        patch.object(all2raw.time, 'monotonic', side_effect=lambda: self.now).start()
+        patch.object(all2raw.time, 'sleep', side_effect=sleep).start()
+
+    def flaky(self, method, failures, winerror=5):
+        real = getattr(Path, method)
+        calls = []
+        def attempt(path, target):
+            calls.append(path)
+            if failures is None or len(calls) <= failures:
+                error = PermissionError(13, 'Access is denied')
+                error.winerror = winerror
+                raise error
+            return real(path, target)
+        patch.object(Path, method, attempt).start()
+        return calls
+
+    def test_rename_retries_until_the_holder_lets_go(self):
+        calls = self.flaky('rename', 3)
+        all2raw.publish(self.source, self.target)
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(self.sleeps), 3)
+        self.assertEqual((self.target / 'a.txt').read_text(), 'a')
+        self.assertFalse(self.source.exists())
+
+    def test_sharing_violation_is_retried_for_json_replace(self):
+        calls = self.flaky('replace', 2, winerror=32)
+        all2raw.write_json(self.root / 'pointer.json', {'folder': 'x'})
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(json.loads((self.root / 'pointer.json').read_text()), {'folder': 'x'})
+
+    def test_persistent_lock_raises_naming_both_paths(self):
+        calls = self.flaky('rename', None)
+        with self.assertRaises(PermissionError) as raised:
+            all2raw.publish(self.source, self.target)
+        self.assertIn(str(self.source), str(raised.exception))
+        self.assertIn(str(self.target), str(raised.exception))
+        self.assertGreater(len(calls), 3)
+        self.assertLessEqual(sum(self.sleeps), all2raw.PUBLISH_TIMEOUT)
+        self.assertTrue(self.source.is_dir())
+
+    def test_other_windows_errors_are_not_retried(self):
+        calls = self.flaky('rename', None, winerror=1920)
+        with self.assertRaises(PermissionError):
+            all2raw.publish(self.source, self.target)
+        self.assertEqual(len(calls), 1)
+
+    def test_extract_zone_survives_a_held_staging_folder(self):
+        calls = self.flaky('rename', 2)
+        tool = self.root / 'Unlinker.exe'
+        tool.write_bytes(b'tool')
+        ff = self.root / 'zone.ff'
+        ff.write_bytes(b'ff')
+        def native(command, log):
+            if '--list' in command:
+                log.write_text('')
+                return
+            output = Path(command[command.index('--output-folder') + 1])
+            (output / 'asset.txt').write_text('x')
+            log.write_text('')
+        with patch.object(all2raw, 'run', side_effect=native):
+            folder, data = all2raw.extract_zone(ff, tool, self.root / 'cache', '', assets=None,
+                                                image_format='DDS')
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(data['files'], ['asset.txt'])
+        self.assertTrue((folder / 'extraction.json').is_file())
+
+
 if __name__ == '__main__':
     unittest.main()
