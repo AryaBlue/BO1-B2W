@@ -3285,6 +3285,16 @@ WAW_SELF_DAMAGE_CAP = (
     "        if ( self.health > 75 && !( isdefined( self.is_zombie ) && self.is_zombie ) )\n"
     "            return 75;\n",
     "        // waw2bo2: WaW applies the player's own explosive damage in full.\n")
+# A map started directly (devmap, no lobby) leaves ui_zm_mapstartlocation
+# empty. The scripts read "" as "default", but the lobby the game returns to
+# after the match falls back to "transit" and asks Engine.GetGamemodesZombie
+# for (map, "transit"): no row, nil, and SelectStartLocZombie.lua's ipairs
+# raises an LUI error on "Map". Name the converted map's only location.
+WAW_START_LOCATION = (
+    '    level.scr_zm_map_start_location = getdvar( #"ui_zm_mapstartlocation" );\n',
+    '    if ( getdvar( #"ui_zm_mapstartlocation" ) == "" )\n'
+    '        setdvar( "ui_zm_mapstartlocation", "default" );\n\n'
+    '    level.scr_zm_map_start_location = getdvar( #"ui_zm_mapstartlocation" );\n')
 WAW_ZOMBIE_VAR_HELPER = """
 waw2bo2_set_zombie_var( var, value, is_float, column, is_team_based )
 {
@@ -3459,6 +3469,9 @@ def stage_bo2_perk_support(out_root: Path, bo2_root: Path, *, bo2_stock_perks: b
     if bootstrap.count(WAW_SELF_DAMAGE_CAP[0]) != 1:
         raise ValueError("BO2 server bootstrap explosive self-damage cap changed")
     bootstrap = bootstrap.replace(*WAW_SELF_DAMAGE_CAP)
+    if bootstrap.count(WAW_START_LOCATION[0]) != 1:
+        raise ValueError("BO2 server bootstrap start location read changed")
+    bootstrap = bootstrap.replace(*WAW_START_LOCATION)
     bootstrap = waw_zombie_var_defaults(bootstrap)
     bootstrap = waw_pvp_attack_notify(bootstrap)
     bootstrap += WAW_ROUND_COUNTER_HELPER
