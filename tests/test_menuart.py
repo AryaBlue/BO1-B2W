@@ -6,7 +6,7 @@ from PIL import Image
 from waw2bo2.launcher import Settings
 from waw2bo2.menuart import SIZES, read_art, stage_art, validate_art
 from waw2bo2.modzone import stage_menu_assets
-from waw2bo2.iwi import read_iwi_header
+from waw2bo2.iwi import FMT_DXT1, FMT_DXT5, read_iwi_header
 
 
 class MenuArtworkTests(unittest.TestCase):
@@ -35,7 +35,10 @@ class MenuArtworkTests(unittest.TestCase):
             pixels = (project / 'images' / f'menu_zm_example_{role}.iwi').read_bytes()
             header = read_iwi_header(pixels)
             self.assertEqual((header['width'], header['height']), size)
-            self.assertEqual(pixels[64:68], bytes((23, 45, 67, 0 if role == 'blit' else 255)))
+            # block-compressed like the Nuketown art: a 2048 RGBA backdrop
+            # (16 MB) failed to allocate at startup
+            self.assertEqual(header['format'], FMT_DXT5 if role in ('blit', 'icon') else FMT_DXT1)
+            self.assertEqual(len(pixels) - 64, size[0] * size[1] // (1 if role in ('blit', 'icon') else 2))
         stream = json.loads((project / 'images/streaming.json').read_text())
         self.assertTrue(all(value == 2 for value in stream['streamingMode'].values()))
         self.assertIn('Example Town', (project / 'english/localizedstrings/menu_zm_example.str').read_text())

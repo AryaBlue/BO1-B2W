@@ -1,14 +1,18 @@
 """Desktop-authored menu artwork, using the measured T6 menu canvases."""
 from __future__ import annotations
 
+import io
 import json
-import struct
 from functools import lru_cache
 from pathlib import Path
 from PIL import Image
-from .iwi import FMT_RGBA, FLAG_NOMIPMAPS
+from .iwi import dds_to_iwi
 
 SIZES = {'blit': (512, 256), 'large': (2048, 2048), 'blur': (2048, 2048)}
+# Block compression per role, as in the Nuketown menu art that loads: DXT1 for
+# the opaque backdrops, DXT5 where alpha matters. Uncompressed RGBA made each
+# 2048 backdrop 16 MB, an image the game refused to allocate at startup.
+DXT = {'blit': 'DXT5', 'icon': 'DXT5', 'large': 'DXT1', 'blur': 'DXT1'}
 
 
 def read_art(path: str, role: str) -> Image.Image:
@@ -55,6 +59,13 @@ def material(image: str) -> dict:
                                            'filter': 'linear', 'mipMap': 'disabled'}, 'semantic': '2D'}]}
 
 
+def compressed_iwi(image: Image.Image, pixel_format: str) -> bytes:
+    """Single-level block-compressed IWI27 (menus draw at a fixed size)."""
+    dds = io.BytesIO()
+    image.convert('RGB' if pixel_format == 'DXT1' else 'RGBA').save(dds, 'DDS', pixel_format=pixel_format)
+    return dds_to_iwi(dds.getvalue())
+
+
 def stage_art(settings, root: Path) -> None:
     validate_art(settings)
     metadata = root / 'menu.json'
@@ -89,10 +100,7 @@ def stage_art(settings, root: Path) -> None:
         for folder in ('materials', 'images'):
             (root / folder).mkdir(parents=True, exist_ok=True)
         for role, image in images.items():
-            pixels = image.tobytes('raw', 'RGBA')
-            header = b'IWi\x1b' + struct.pack('<bbHHHf', FMT_RGBA, FLAG_NOMIPMAPS, image.width, image.height, 1, 0.0)
-            header += bytes(16) + struct.pack('<8I', 64 + len(pixels), *([0] * 7))
-            (root / 'images' / f'menu_{settings.project}_{role}.iwi').write_bytes(header + pixels)
+            (root / 'images' / f'menu_{settings.project}_{role}.iwi').write_bytes(compressed_iwi(image, DXT[role]))
             generated.append(f'images/menu_{settings.project}_{role}.iwi')
         for suffix, role in bindings.items():
             name = (f'loadscreen_{settings.project}_' + suffix.split(':')[1] if ':' in suffix
