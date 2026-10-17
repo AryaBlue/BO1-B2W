@@ -158,6 +158,7 @@
   ],
   "function_renames": {
     "set_zombie_var": "maps\\mp\\waw\\_waw2bo2_compat::waw_set_zombie_var",
+    "enemy_is_dog": "maps\\mp\\waw\\_waw2bo2_compat::waw_enemy_is_dog",
     "get_number_variants": "maps\\mp\\waw\\_waw2bo2_compat::waw_get_number_variants",
     "include_powerup": "maps\\mp\\zombies\\_zm_powerups::include_zombie_powerup",
     "enable_trigger": "maps\\mp\\waw\\_waw2bo2_compat::waw_enable_trigger",
@@ -177,6 +178,7 @@
   },
   "compat_wrappers": [
     "clientnotify",
+    "gettagorigin",
     "newhudelem",
     "newclienthudelem",
     "physicslaunch",

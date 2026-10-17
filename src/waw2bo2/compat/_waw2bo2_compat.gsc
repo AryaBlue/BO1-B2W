@@ -367,12 +367,59 @@ waw_ragdoll_doomed()
         self dodamage( self.health + 666, self.origin );
 }
 
+// WaW _zombiemode_utility::enemy_is_dog tests self.type == "dog"; a T6
+// zombie dog's type is "zombie_dog" (measured), and _zm_ai_dogs sets isdog.
+// Without this the Tesla chain treats dogs as zombies and asks them for
+// zombie bones (j_spineupper), which ends the arc thread.
+waw_enemy_is_dog()
+{
+    if ( isdefined( self.isdog ) && self.isdog )
+        return true;
+    return isdefined( self.type ) && ( self.type == "dog" || self.type == "zombie_dog" );
+}
+
+// T6 dogs use BO2's zombie_wolf, whose skeleton differs from WaW's: WaW's
+// Tesla arc asks the target for the source's bone (j_spineupper on a dog,
+// j_spine1 on a zombie). A missing tag is a runtime error and leaves the
+// arc's target position undefined, so that link of the chain never damages
+// its target. A bone the model (or an attached model) lacks gives the origin.
+waw_gettagorigin( tag )
+{
+    if ( !isdefined( self.model ) || self.model == "" || waw_model_has_tag( self.model, tag ) )
+        return self gettagorigin( tag );
+    for ( i = 0; i < self getattachsize(); i++ )
+    {
+        if ( waw_model_has_tag( self getattachmodelname( i ), tag ) )
+            return self gettagorigin( tag );
+    }
+    return self.origin;
+}
+
+waw_model_has_tag( model, tag )
+{
+    if ( !isdefined( level.waw_model_tags ) )
+        level.waw_model_tags = [];
+    if ( !isdefined( level.waw_model_tags[model] ) )
+    {
+        tags = [];
+        count = getnumparts( model );
+        for ( i = 0; i < count; i++ )
+            tags[tolower( getpartname( model, i ) )] = 1;
+        level.waw_model_tags[model] = tags;
+    }
+    return isdefined( level.waw_model_tags[model][tolower( tag )] );
+}
+
 // WaW scripts damage their ragdolled actor again after a wait; T6 has
 // already removed it at the earlier death (see waw_ragdoll_doomed).
 waw_dodamage( amount, origin, attacker, inflictor, hitloc, mod, flags, weapon )
 {
     if ( !isdefined( self ) )
         return;
+    // WaW's Tesla takes the origin from the arc's source enemy, which a dog's
+    // exploding death may already have removed; T6 dodamage needs a vector.
+    if ( !isdefined( origin ) )
+        origin = self.origin;
     if ( isdefined( weapon ) )
         self dodamage( amount, origin, attacker, inflictor, hitloc, mod, flags, weapon );
     else if ( isdefined( flags ) )
