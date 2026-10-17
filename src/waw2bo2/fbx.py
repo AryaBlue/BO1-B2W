@@ -89,7 +89,8 @@ def _layer_uv_sets(world: GfxWorld, used: dict[int, int], owner: dict, world_ver
 
 
 def write_world_fbx(world: GfxWorld, path: Path, blend_data_materials: frozenset[str] = frozenset(),
-                    shadow_only_materials: frozenset[str] = frozenset()) -> dict[int, int]:
+                    shadow_only_materials: frozenset[str] = frozenset(),
+                    white_surfaces: frozenset[int] = frozenset()) -> dict[int, int]:
     """Write the WaW world as merged meshes (see merge_surfaces), preserving UV seams and materials.
 
     The T6 BSP loader expects Blender-style right-handed Y-up coordinates and
@@ -126,7 +127,7 @@ def write_world_fbx(world: GfxWorld, path: Path, blend_data_materials: frozenset
             colors = []
             uvs = []
             lightmap_uvs = []
-            for v in verts:
+            for absolute, v in zip(used, verts):
                 positions.extend((v.xyz[0], v.xyz[2], -v.xyz[1]))
                 n = (v.normal[0], v.normal[2], -v.normal[1])
                 t = (v.tangent[0], v.tangent[2], -v.tangent[1])
@@ -140,7 +141,9 @@ def write_world_fbx(world: GfxWorld, path: Path, blend_data_materials: frozenset
                 # vertex colour; alpha drives the layer blend of WaW "*" materials
                 # layered WaW surfaces keep their blend weight in the vertex
                 # colour (green); drawn as their base layer it must not tint
-                colors.extend((1.0, 1.0, 1.0, 1.0) if surface.material in blend_data_materials else v.color)
+                # (white_surfaces: brush-model blends switched to their base layer)
+                colors.extend((1.0, 1.0, 1.0, 1.0) if surface.material in blend_data_materials
+                              or owner[absolute].index in white_surfaces else v.color)
                 uvs.extend((v.uv[0], 1.0 - v.uv[1]))
                 lightmap_uvs.extend((v.lightmap_uv[0], 1.0 - v.lightmap_uv[1]))
             # The bridge reverses every triangle (it assumes Blender's CCW
