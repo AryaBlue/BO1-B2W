@@ -82,7 +82,9 @@ class PerkOwnershipTests(unittest.TestCase):
                 '#include maps\\mp\\zombies\\_zm_perks;\n'
                 'init() { maps\\mp\\zombies\\_zm_perks::init(); '
                 'maps\\mp\\zombies\\_zm_score::init();\n'
-                '    level.gamedifficulty = getgametypesetting( "zmDifficulty" );\n}\n'
+                '    level.gamedifficulty = getgametypesetting( "zmDifficulty" );\n'
+                + gscport.WAW_START_LOCATION[0] +
+                '    level.put_timed_out_zombies_back_in_queue = 1;\n}\n'
                 'round_think()\n{\n    setroundsplayed( level.round_number );\n'
                 '    for (;;)\n    {\n        level.round_number++;\n\n'
                 '        if ( 255 < level.round_number )\n            level.round_number = 255;\n\n'
@@ -103,6 +105,10 @@ class PerkOwnershipTests(unittest.TestCase):
             self.assertIn('self notify( "weapon_pvp_attack", eattacker, maps\\mp\\waw\\_waw2bo2_compat::'
                           'waw_weapon_name( sweapon ), idamage, smeansofdeath );', owned_zm)
             self.assertIn('WaW applies the player', owned_zm)
+            self.assertIn('setdvar( "ui_zm_mapstartlocation", "default" );', owned_zm)
+            # WaW's failsafe never returns a killed zombie to the round
+            self.assertIn('level.put_timed_out_zombies_back_in_queue = 0;', owned_zm)
+            self.assertNotIn('level.put_timed_out_zombies_back_in_queue = 1;', owned_zm)
             self.assertNotIn('perk_machine_spawn_init();', text)
             self.assertNotIn('array_thread(x,::buy)', text)
             self.assertNotIn('unpause_machine();', text)

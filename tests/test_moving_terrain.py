@@ -12,7 +12,7 @@ class MovingTerrainTests(unittest.TestCase):
         return SimpleNamespace(
             vertices=[(0, 0, 0), (10, 0, 0), (0, 10, 0)],
             indices=[0, 1, 2, 0, 1, 2], triangle_materials=[0, 0],
-            materials=[SimpleNamespace(content_flags=32)],
+            materials=[SimpleNamespace(content_flags=1)],
             submodels=[None, None],
             aabb_trees=[(0, 0, 0), (0, 0, 1)],
             partitions=[(0, 1), (1, 1)], leaf_roots=[(0, 1, 32)],

@@ -6,7 +6,7 @@ from pathlib import Path
 import struct
 
 from .world import CollisionWorld, GfxWorld, layer_format, layer_stride
-from . import oneway
+from . import hulls, oneway
 
 
 def _quoted(value: str) -> str:
@@ -230,6 +230,19 @@ def collision_triangle_models(collision: CollisionWorld) -> list[int]:
     return owners
 
 
+# CONTENTS_WATER. Stock BO2 keeps water out of terrain collision: its water
+# materials (zm_prison ocean, clip_water; zm_tomb clip_water) appear only on
+# brushes, never on a collision triangle, and T6 bullets stop on a triangle
+# they can trace. WaW also carries the water as brushes; its water surface
+# triangles cap those volumes (Shi No Numa: 209 of 244; the rest lie outside
+# the playable area).
+CONTENTS_WATER = 0x20
+
+
+def water_only(contents: int) -> bool:
+    return contents & 0xFFFFFFFF & ~hulls.NON_COLLIDING_CONTENTS == CONTENTS_WATER
+
+
 def collision_slot_models(collision: CollisionWorld) -> list[int]:
     per_triangle, materials = collision_material_slots(collision)
     models = [0] * len(materials)
@@ -246,7 +259,7 @@ def collision_material_slots(collision: CollisionWorld) -> tuple[list[int | None
     measured map only 51% of the triangles are solid; the rest are missile/shot
     clip (0x2080), player/monster clip or glass. Triangles without a recorded
     material or without contents never collide in WaW and are left out (slot
-    None). One-sided traversal sheets are also omitted: the user requested
+    None), as are water-only triangles (the water brushes stay). One-sided traversal sheets are also omitted: the user requested
     open passages because T6 cannot reproduce their WaW collision behavior.
     Dumps without the table keep one solid slot (material -1)."""
     if not collision.triangle_materials:
@@ -256,7 +269,7 @@ def collision_material_slots(collision: CollisionWorld) -> tuple[list[int | None
     per_triangle: list[int | None] = []
     removed = {s["triangle"] for s in oneway.one_way_sheets(collision)} if getattr(collision, "vertices", None) else set()
     for triangle, material in enumerate(collision.triangle_materials):
-        if triangle in removed or material == 0xFFFF or not collision.materials[material].content_flags:
+        if triangle in removed or material == 0xFFFF or not collision.materials[material].content_flags                 or water_only(collision.materials[material].content_flags):
             per_triangle.append(None)
             continue
         per_triangle.append(slots.setdefault((material, models[triangle]), len(slots)))

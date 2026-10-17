@@ -6,7 +6,7 @@ from PIL import Image
 from waw2bo2.launcher import Settings
 from waw2bo2.menuart import SIZES, read_art, stage_art, validate_art
 from waw2bo2.modzone import stage_menu_assets
-from waw2bo2.iwi import read_iwi_header
+from waw2bo2.iwi import FMT_DXT1, FMT_DXT5, read_iwi_header
 
 
 class MenuArtworkTests(unittest.TestCase):
@@ -35,7 +35,10 @@ class MenuArtworkTests(unittest.TestCase):
             pixels = (project / 'images' / f'menu_zm_example_{role}.iwi').read_bytes()
             header = read_iwi_header(pixels)
             self.assertEqual((header['width'], header['height']), size)
-            self.assertEqual(pixels[64:68], bytes((23, 45, 67, 0 if role == 'blit' else 255)))
+            # block-compressed like the Nuketown art: a 2048 RGBA backdrop
+            # (16 MB) failed to allocate at startup
+            self.assertEqual(header['format'], FMT_DXT5 if role in ('blit', 'icon') else FMT_DXT1)
+            self.assertEqual(len(pixels) - 64, size[0] * size[1] // (1 if role in ('blit', 'icon') else 2))
         stream = json.loads((project / 'images/streaming.json').read_text())
         self.assertTrue(all(value == 2 for value in stream['streamingMode'].values()))
         self.assertIn('Example Town', (project / 'english/localizedstrings/menu_zm_example.str').read_text())
@@ -74,3 +77,18 @@ class MenuArtworkTests(unittest.TestCase):
         stage_art(self.settings, project)
         data = json.loads((project / 'menu.json').read_text())
         self.assertEqual((data['title'], data['mode'], data['location']), ('zm_example', 'Nacht', 'Germany, 1945'))
+
+    def test_start_location_mode_list_is_localized(self):
+        # SelectStartLocZombie.lua shows ZMUI_<mode>_<map>_CAPS over <col7>_DESC_<location>
+        project = self.root / 'project'
+        (project / 'zm').mkdir(parents=True)
+        (project / 'zm/gametypestable.csv').write_text(
+            '0,zclassic,ZMUI_CLASSIC_CAPS,ZMUI_CLASSIC_DESC,playlist_tdm,0,YES,ZMUI_CLASSIC,YES,zclassic\n'
+            '6,20,zm_example,default,zclassic,0,left,YES\n')
+        self.settings.menu_mode = 'Japan'
+        stage_art(self.settings, project)
+        stage_menu_assets(project, 'zm_example')
+        text = (project / 'english/localizedstrings/menu_zm_example.str').read_text()
+        for key, value in (('ZMUI_ZCLASSIC_ZM_EXAMPLE_CAPS', 'JAPAN'), ('ZMUI_ZCLASSIC_ZM_EXAMPLE', 'Japan'),
+                           ('ZMUI_CLASSIC_DESC_DEFAULT', 'Survive the town.')):
+            self.assertIn(f'REFERENCE {key}\nLANG_ENGLISH "{value}"', text)

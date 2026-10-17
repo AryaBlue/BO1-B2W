@@ -223,6 +223,30 @@ class FrameworkHookTests(unittest.TestCase):
         self.assertNotIn("SetVolFog", core)
         self.assertIn("waw2bo2_client_fx_0();", core)
 
+    def test_utility_clientnotify_reaches_the_compat_wrapper(self):
+        # Shi No Numa's trap script includes maps\_utility, which defines
+        # clientNotify; BO2's maps\mp\_utility::clientnotify never raised the
+        # "waw_client_" notify, so the trap's server-side arcs never played.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                "maps/testmap.gsc": "#include maps\\_utility;\nmain()\n{\n\tmaps\\_zombiemode::main();\n"
+                                    "\tclientNotify( self.target );\n\tlevel clientNotify( \"TGH\" );\n}\n",
+                "maps/_utility.gsc": "clientNotify(event)\n{\n\tif(level.clientscripts)\n\t{\n"
+                                     "\t\tmaps\\_utility::setClientSysState(\"levelNotify\", event);\n\t}\n}\n",
+            }
+            for name, text in files.items():
+                (root / "src" / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / "src" / name).write_text(text, encoding="utf-8")
+            api = _api()
+            api.builtins.update({"clientnotify": (1, 1)})
+            api.scripts["maps\\mp\\_utility"] = {"clientnotify": 1}
+            report = gscport.port_map(gscport.Sources([root / "src"], [], None), api, "testmap", root / "out")
+            main = (root / "out/maps/mp/waw/testmap.gsc").read_text(encoding="utf-8")
+        self.assertIn(f'{gscport.COMPAT}::waw_clientnotify( self.target )', main)
+        self.assertIn(f'level {gscport.COMPAT}::waw_clientnotify( "TGH" )', main)
+        self.assertEqual(report.rewrites[r"maps\_utility::clientnotify -> compat wrapper"], 2)
+
     def test_framework_zombie_var_defaults_reach_bo2_init(self):
         # WaW's _zombiemode::init_levelvars: zombie_spawn_delay 3 (BO2 2.0)
         _, _, report = self.port({

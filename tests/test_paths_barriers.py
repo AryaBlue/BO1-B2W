@@ -77,6 +77,7 @@ class BarrierTests(unittest.TestCase):
                 goal,
                 {"classname": "node_negotiation_begin", "targetname": "traverse", "target": "in1", "origin": "0 12.4 0"},
                 {"classname": "node_negotiation_begin", "targetname": "traverse", "target": "out1", "origin": "5 5 0"},
+                {"classname": "node_negotiation_end", "targetname": "in1", "origin": "0 90 0"},
             ]}))
             (bsp / "paths.json").write_text(json.dumps({"nodes": [
                 {"type": 17, "targetname": "traverse", "target": "in1", "origin": [0, 12.40002, 0]},
@@ -86,9 +87,58 @@ class BarrierTests(unittest.TestCase):
             ]}))
             self.assertEqual(entities.link_barrier_traversals(bsp), [])
             nodes = json.loads((bsp / "paths.json").read_text())["nodes"]
-            self.assertEqual([n["targetname"] for n in nodes], ["win1", "in1", "traverse", "out1"])
+            self.assertEqual([n["targetname"] for n in nodes],
+                             ["win1", "in1", "traverse", "out1", "in1_waw2bo2_window"])
+            self.assertEqual(nodes[0]["target"], "in1_waw2bo2_window")
             ents = json.loads((bsp / "entities.json").read_text())["entities"]
-            self.assertEqual([e["targetname"] for e in ents], ["exterior_goal", "win1", "traverse"])
+            self.assertEqual([e["targetname"] for e in ents],
+                             ["exterior_goal", "win1", "traverse", "in1", "in1_waw2bo2_window"])
+            self.assertEqual(ents[1]["target"], "in1_waw2bo2_window")
+            self.assertEqual(ents[2]["target"], "out1")
+            self.assertEqual((ents[4]["classname"], ents[4]["origin"]), ("node_negotiation_end", "0 90 0"))
+
+    def test_window_traversal_lands_on_its_own_end_below_the_hub(self):
+        flags = 40
+        def link(node, negotiation=0):
+            return {"node": node, "dist": 10.0, "disconnectCount": 0, "negotiationLink": negotiation, "flags": flags}
+        nodes = [
+            {"type": 17, "targetname": "win", "target": "hub", "origin": [0, 0, 0], "links": [link(1, 1), link(2)]},
+            {"type": 18, "targetname": "hub", "target": "", "origin": [0, 70, 0], "links": [link(3)]},
+            {"type": 0, "targetname": "", "target": "", "origin": [50, -40, 0], "links": [link(0)]},
+            {"type": 0, "targetname": "", "target": "", "origin": [0, 200, 0], "links": [link(1)]},
+        ]
+        count = len(nodes)
+        # arbitrary visibility, hub (1) sees 3 but not 2
+        seen = {(0, 1), (0, 2), (1, 3), (2, 3)}
+        vis = bytearray((count * (count - 1) + 7) // 8)
+        for lo, hi in seen:
+            k = lo * count + hi
+            vis[k >> 3] |= 1 << (k & 7)
+        data = {"nodeCount": count, "visBytes": len(vis), "pathVis": vis.hex(), "nodes": nodes}
+        self.assertEqual(paths.split_window_ends(data, [0]), [("hub", "hub_waw2bo2_window")])
+        new = data["nodes"][4]
+        self.assertEqual((data["nodeCount"], new["type"], new["origin"]), (5, 18, [0, 70, 0]))
+        self.assertEqual([(l["node"], l["negotiationLink"]) for l in new["links"]], [(1, 0)])
+        self.assertEqual([(l["node"], l["negotiationLink"]) for l in nodes[0]["links"]], [(4, 1), (2, 0)])
+        self.assertEqual(nodes[0]["target"], "hub_waw2bo2_window")
+        self.assertEqual(nodes[1]["links"], [link(3)])  # the hub keeps its inside links
+        out = bytes.fromhex(data["pathVis"])
+        self.assertEqual(data["visBytes"], (5 * 4 + 7) // 8)
+        for a in range(count):
+            for b in range(count):
+                self.assertEqual(paths.vis_bit(out, 5, a, b), paths.vis_bit(bytes(vis), count, a, b))
+        # the new end sees what its hub sees
+        self.assertEqual([paths.vis_bit(out, 5, 4, x) for x in range(4)], [1, 1, 0, 1])
+
+
+class WaterCollisionTests(unittest.TestCase):
+    def test_water_only_triangles_leave_collision_but_water_with_clip_stays(self):
+        from waw2bo2 import fbx
+        self.assertTrue(fbx.water_only(0x08000020))   # WaW water surface (detail + water)
+        self.assertTrue(fbx.water_only(0x20))
+        self.assertFalse(fbx.water_only(0x20A0))      # water + missile/shot clip: stock keeps it
+        self.assertFalse(fbx.water_only(0x08000001))  # detail solid
+        self.assertFalse(fbx.water_only(0))
 
 
 if __name__ == "__main__":

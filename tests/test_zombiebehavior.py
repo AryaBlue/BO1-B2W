@@ -330,6 +330,14 @@ class ZombieBehaviorTests(unittest.TestCase):
         bind = parsed.functions['bind_spawn_location']
         text = gsc.emit(parsed.tokens[bind.body_open:bind.body_close])
         self.assertLess(text.index('isdefined( self.spawn_point_override )'), text.index('spots ='))
+        # a riser the source spawns itself (Shi No Numa's door-opening
+        # <hut>_initial_zombies) rises at WaW's random( level.zombie_rise_spawners )
+        self.assertLess(text.index('isdefined( self.spawn_point_override )'), text.index('self.script_string == "riser"'))
+        self.assertIn('self.spawn_point_override = rise_point( level.zombie_rise_spawners[randomint( '
+                      'level.zombie_rise_spawners.size )], self )', text)
+        point = gsc.emit(parsed.tokens[parsed.functions['rise_point'].body_open:parsed.functions['rise_point'].body_close])
+        self.assertIn('point.script_noteworthy = "riser_location"', point)
+        self.assertIn('point.script_string = "find_flesh"', point)
         self.assertIn('matching[matching.size] = candidate', runtime)
         self.assertIn('if ( matching.size )', runtime)
         self.assertIn('level.round_spawn_func == maps\\mp\\zombies\\_zm::round_spawning', runtime)

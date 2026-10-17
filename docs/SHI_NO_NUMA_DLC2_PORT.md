@@ -114,12 +114,13 @@ preserves the existing positions, indices, static models and brush ownership.
 
 ## Perk prompts and traps, 2026-10-14
 
-The generic perk prompt now uses the source framework's existing
-`vending_set_hintstring` selector when that selector is present. WaW used the
-generic prefix with prices painted on the machines; the port now shows the
-source's full named purchase prompts and prices. Localization translates the
-activation placeholder in use hints to T6's input binding while retaining
-ordinary HUD formatting arguments and the source unlock conditions.
+Shi No Numa's machines deliberately show only the generic "Press &&1 to buy"
+prompt in WaW: each machine carries its perk and price on a red sticker. An
+earlier rewrite replaced that prompt with the framework's named, priced
+`vending_set_hintstring` text; it was reverted on 2026-10-16 because it changed
+authored source behavior. Localization still translates the activation
+placeholder in use hints to T6's input binding while retaining ordinary HUD
+formatting arguments and the source unlock conditions.
 
 The flogger launches a living ragdoll and delegates its delayed kill to
 `play_imp_sound`. Its unsupported `OkToSpawn()` predicate returned undefined,

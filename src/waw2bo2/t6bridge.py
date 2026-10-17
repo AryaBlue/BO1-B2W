@@ -29,13 +29,14 @@ import re
 import shutil
 import struct
 from collections import Counter
+from functools import lru_cache
 from dataclasses import dataclass, field
 from pathlib import Path
 from .resources import resource_root
 from . import clientport, progress, viewmodels, zombiebehavior
 
 from . import assetresolve, audio, entities, wawtext, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, materialisolation, oneway, paths, projectilecollision, scorebehavior, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones
-from .fbx import collision_material_slots, collision_slot_models, write_collision_fbx, write_world_fbx
+from .fbx import collision_material_slots, collision_slot_models, water_only, write_collision_fbx, write_world_fbx
 from .world import layer_formats_from_strides, read_collision, read_gfx_world
 
 REQUIRED_WORLD_IMAGES = {
@@ -776,6 +777,27 @@ def _strip_bad_skins(gltf: dict) -> bool:
     return True
 
 
+def _drop_shadow_only_surfaces(gltf: dict, shadow_only) -> list[str]:
+    """Remove the primitives drawn with a WaW onlyCastShadow material (tree
+    gobo cards: black RGB, alpha leaf mask). WaW never draws them; T6 has no
+    model shadow-only pass for them (the cut-out drops the shadow-map slot),
+    so kept they render as black leaves. A LOD made only of such surfaces is
+    left untouched. Returns the removed material names."""
+    names = [m.get("name", "") for m in gltf.get("materials", [])]
+    meshes = gltf.get("meshes", [])
+    used = {p.get("material") for m in meshes for p in m.get("primitives", [])}
+    hidden = {i for i in used if isinstance(i, int) and i < len(names) and shadow_only(names[i])}
+    if not hidden or hidden == used:
+        return []
+    for mesh in meshes:
+        mesh["primitives"] = [p for p in mesh.get("primitives", []) if p.get("material") not in hidden]
+    # a node whose mesh lost every primitive stays as a plain transform
+    for node in gltf.get("nodes", []):
+        if "mesh" in node and not meshes[node["mesh"]]["primitives"]:
+            del node["mesh"]
+    return sorted(names[i] for i in hidden)
+
+
 def _gltf_game_bounds(path: Path):
     """Model-space bounds of a GLTF LOD in game axes.
 
@@ -813,6 +835,12 @@ def stage_models(report: StageReport, world, project: str, stage: Path, project_
     targets.update({name: name for name in extra_models})
     # the skybox is staged by stage_skybox (T6 needs a sky technique)
     materials: set[str] = set()
+    material_roots = roots or [stage]
+
+    @lru_cache(maxsize=None)
+    def shadow_only(name: str) -> bool:
+        src = _find(material_roots, techsets.oat_material_path(name))
+        return src is not None and techsets.only_casts_shadow(_load_json(src))
     for src_name, dst_name in progress.items('Models', sorted(targets.items()), name=lambda pair: pair[0]):
         src_root = next((r for r in (roots or [stage]) if (r / "xmodel" / f"{src_name}.json").exists()), None)
         if src_root is None:
@@ -837,6 +865,11 @@ def stage_models(report: StageReport, world, project: str, stage: Path, project_
             if bad_nodes:
                 report.warnings.append(f"xmodel {src_name}: {bad_nodes} node transform(s) with NaN components "
                                        f"neutralized ({lod['file']})")
+                changed = True
+            hidden = _drop_shadow_only_surfaces(data, shadow_only)
+            if hidden:
+                report.content.setdefault("shadow_only_model_surfaces", []).append(
+                    {"model": src_name, "lod": lod["file"], "materials": hidden})
                 changed = True
             if changed:
                 dst_file.write_text(json.dumps(data), encoding="utf-8")
@@ -1305,12 +1338,13 @@ def stage_geometry(report: StageReport, world, clip, roots: list[Path], project_
     for name in {s.material for s in world.surfaces}:
         src = _find(roots, techsets.oat_material_path(name))
         if src is not None:
-            technique = _load_json(src).get("techniqueSet")
+            material = _load_json(src)
+            technique = material.get("techniqueSet")
             if technique in SKY_TECHSETS:
                 sky.add(name)
             elif technique in NON_RENDER_TECHSETS:
                 tool_surfaces.add(name)
-            elif techsets.parse(technique or '').unlit_kind == 'shadowcaster':
+            elif techsets.parse(technique or '').unlit_kind == 'shadowcaster' or techsets.only_casts_shadow(material):
                 shadow_only.add(name)
             elif len(techsets.parse(technique or "").layers) > 1:
                 blend_data.add(name)
@@ -1372,6 +1406,8 @@ def stage_geometry(report: StageReport, world, clip, roots: list[Path], project_
                                                 if entry.get("model", 0)})
     summary["collision_triangles_noncolliding_dropped"] = sum(
         1 for m in clip.triangle_materials if m == 0xFFFF or not clip.materials[m].content_flags)
+    summary["collision_triangles_water_dropped"] = sum(
+        1 for m in clip.triangle_materials if m != 0xFFFF and water_only(clip.materials[m].content_flags))
     sheets = oneway.one_way_sheets(clip)
     summary["collision_triangles_one_sided_removed"] = len(sheets)
     if sheets:

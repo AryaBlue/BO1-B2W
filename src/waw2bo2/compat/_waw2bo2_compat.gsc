@@ -88,8 +88,44 @@ init()
     level thread all_players_connected_bridge();
     level thread first_player_ready_bridge();
     level thread stuck_zombie_monitor();
+    level thread waw_window_paths();
     level thread power_bridge();
     level thread melee_wallbuy_costs();
+}
+
+// WaW keeps a boarded window shut to path-finding: its clip brush
+// disconnects the window's traversal until every chunk is destroyed and again
+// on the first repair (_zombiemode_blockers). T6's blocker_disconnect_paths
+// and blocker_connect_paths are empty, and blocker_init deletes the clip
+// beside a zbarrier, so zombies already in the playable area outside a window
+// (Shi No Numa's swamp walkways) walked its traversal through all six boards
+// (measured: find_flesh, zm_traverse_barrier, 6/6 closed). Same rule here.
+// Measured in T6: unlinknodes leaves a negotiation link in place; disabling
+// the inside end node cuts the traversal (findpath outside -> inside fails)
+// while the begin node and the attack spots outside stay reachable. That end
+// is the window's own node (paths.split_window_ends): T6 picks a disabled
+// nearest node anyway, so disabling the shared hub failed every path to a
+// player standing at the window.
+waw_window_paths()
+{
+    level endon( "end_game" );
+    while ( !isdefined( level.exterior_goals ) )
+        wait 0.05;
+    waittillframeend;
+    for ( ;; )
+    {
+        foreach ( goal in level.exterior_goals )
+        {
+            if ( !isdefined( goal ) || !isdefined( goal.zbarrier ) || !isdefined( goal.neg_start ) || !isdefined( goal.neg_end ) )
+                continue;
+            open = maps\mp\zombies\_zm_utility::all_chunks_destroyed( goal, goal.barrier_chunks );
+            if ( isdefined( goal.waw_path_open ) && goal.waw_path_open == open )
+                continue;
+            goal.waw_path_open = open;
+            setenablenode( goal.neg_end, open );
+        }
+        wait 0.05;
+    }
 }
 
 // BO2's melee wallbuy (_zm_melee_weapon::melee_weapon_think) charges
@@ -331,12 +367,59 @@ waw_ragdoll_doomed()
         self dodamage( self.health + 666, self.origin );
 }
 
+// WaW _zombiemode_utility::enemy_is_dog tests self.type == "dog"; a T6
+// zombie dog's type is "zombie_dog" (measured), and _zm_ai_dogs sets isdog.
+// Without this the Tesla chain treats dogs as zombies and asks them for
+// zombie bones (j_spineupper), which ends the arc thread.
+waw_enemy_is_dog()
+{
+    if ( isdefined( self.isdog ) && self.isdog )
+        return true;
+    return isdefined( self.type ) && ( self.type == "dog" || self.type == "zombie_dog" );
+}
+
+// T6 dogs use BO2's zombie_wolf, whose skeleton differs from WaW's: WaW's
+// Tesla arc asks the target for the source's bone (j_spineupper on a dog,
+// j_spine1 on a zombie). A missing tag is a runtime error and leaves the
+// arc's target position undefined, so that link of the chain never damages
+// its target. A bone the model (or an attached model) lacks gives the origin.
+waw_gettagorigin( tag )
+{
+    if ( !isdefined( self.model ) || self.model == "" || waw_model_has_tag( self.model, tag ) )
+        return self gettagorigin( tag );
+    for ( i = 0; i < self getattachsize(); i++ )
+    {
+        if ( waw_model_has_tag( self getattachmodelname( i ), tag ) )
+            return self gettagorigin( tag );
+    }
+    return self.origin;
+}
+
+waw_model_has_tag( model, tag )
+{
+    if ( !isdefined( level.waw_model_tags ) )
+        level.waw_model_tags = [];
+    if ( !isdefined( level.waw_model_tags[model] ) )
+    {
+        tags = [];
+        count = getnumparts( model );
+        for ( i = 0; i < count; i++ )
+            tags[tolower( getpartname( model, i ) )] = 1;
+        level.waw_model_tags[model] = tags;
+    }
+    return isdefined( level.waw_model_tags[model][tolower( tag )] );
+}
+
 // WaW scripts damage their ragdolled actor again after a wait; T6 has
 // already removed it at the earlier death (see waw_ragdoll_doomed).
 waw_dodamage( amount, origin, attacker, inflictor, hitloc, mod, flags, weapon )
 {
     if ( !isdefined( self ) )
         return;
+    // WaW's Tesla takes the origin from the arc's source enemy, which a dog's
+    // exploding death may already have removed; T6 dodamage needs a vector.
+    if ( !isdefined( origin ) )
+        origin = self.origin;
     if ( isdefined( weapon ) )
         self dodamage( amount, origin, attacker, inflictor, hitloc, mod, flags, weapon );
     else if ( isdefined( flags ) )
@@ -562,6 +645,23 @@ waw_spawn( classname, origin, flags, radius, height )
     return ent;
 }
 
+// Actors a WaW trigger's AI flags (1 axis, 2 allies, 4 neutral) respond to:
+// every species of the team, dogs included. T6 getaiarray( team ) returns
+// only the team's human species (measured: a zombie_dog is in
+// getaispeciesarray( "axis" ) but not in getaiarray( "axis" )), so dogs
+// never set off a Bouncing Betty.
+waw_trigger_ai( flags )
+{
+    candidates = [];
+    if ( flags & 1 )
+        candidates = arraycombine( candidates, getaispeciesarray( "axis", "all" ), 0, 0 );
+    if ( flags & 2 )
+        candidates = arraycombine( candidates, getaispeciesarray( "allies", "all" ), 0, 0 );
+    if ( flags & 4 )
+        candidates = arraycombine( candidates, getaispeciesarray( "neutral", "all" ), 0, 0 );
+    return candidates;
+}
+
 waw_radius_ai_contacts( flags )
 {
     self endon( "death" );
@@ -569,13 +669,7 @@ waw_radius_ai_contacts( flags )
     {
         // Allow the source caller to begin its waittill after spawn returns.
         wait 0.05;
-        candidates = [];
-        if ( flags & 1 )
-            candidates = arraycombine( candidates, getaiarray( "axis" ), 0, 0 );
-        if ( flags & 2 )
-            candidates = arraycombine( candidates, getaiarray( "allies" ), 0, 0 );
-        if ( flags & 4 )
-            candidates = arraycombine( candidates, getaiarray( "neutral" ), 0, 0 );
+        candidates = waw_trigger_ai( flags );
         foreach ( actor in candidates )
             if ( isdefined( actor ) && isalive( actor ) && actor istouching( self ) )
                 self notify( "trigger", actor );
@@ -1805,13 +1899,7 @@ waw_linked_trigger_contacts( parent )
         // trigger_off parks the volume far from its parent
         if ( abs( distance( self.origin, parent.origin ) - offset ) > 1000 )
             continue;
-        candidates = [];
-        if ( flags & 1 )
-            candidates = arraycombine( candidates, getaiarray( "axis" ), 0, 0 );
-        if ( flags & 2 )
-            candidates = arraycombine( candidates, getaiarray( "allies" ), 0, 0 );
-        if ( flags & 4 )
-            candidates = arraycombine( candidates, getaiarray( "neutral" ), 0, 0 );
+        candidates = waw_trigger_ai( flags );
         if ( !( flags & 8 ) )
             candidates = arraycombine( candidates, getplayers(), 0, 0 );
         // A fast rotor (the flogger, ~23 degrees a frame) can pass over an

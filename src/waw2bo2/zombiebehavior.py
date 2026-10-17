@@ -437,9 +437,33 @@ bind_spawn_location()
 {{
     if ( isdefined( self.spawn_point_override ) )
         return;
-    // Plain WaW spawners use their own origin. Risers keep BO2's zone selection.
-    if ( isdefined( self.script_string ) && self.script_string == "riser" )
+    // Plain WaW spawners use their own origin.
+    if ( isdefined( self.script_string ) && self.script_string == "{membership['riser_actor_value']}" )
+    {{
+        // WaW do_zombie_rise: a riser rises at random( level.{rise_field} )
+        // when the map keeps that list (Shi No Numa: the rise structs of the
+        // zones players are in), as choose_spawn_location does for round
+        // spawns. Source scripts also spawn risers themselves (Shi No Numa's
+        // <hut>_initial_zombies when a door opens): with no point chosen, T6
+        // would take any active zone location. With the list empty WaW's
+        // riser stays at its spawner. Maps without the list keep BO2's zone
+        // selection.
+        if ( !isdefined( level.{rise_field} ) )
+            return;
+        if ( level.{rise_field}.size )
+        {{
+            self.spawn_point_override = rise_point( level.{rise_field}[randomint( level.{rise_field}.size )], self );
+            return;
+        }}
+        point = spawnstruct();
+        point.origin = self.origin;
+        point.angles = self.angles;
+        point.script_noteworthy = "{definition['plain_spawn_location']}";
+        point.target = self.target;
+        point.targetname = self.targetname;
+        self.spawn_point_override = point;
         return;
+    }}
     if ( !isdefined( level.zombie_spawn_locations ) )
         return;
     spots = level.zombie_spawn_locations;
@@ -452,6 +476,21 @@ bind_spawn_location()
             return;
         }}
     }}
+}}
+
+rise_point( anchor, actor )
+{{
+    point = spawnstruct();
+    point.origin = anchor.origin;
+    point.angles = anchor.angles;
+    point.script_noteworthy = "{membership['native_riser_location']}";
+    // T6 reads any other string as a barrier id; WaW riser_door goes to the
+    // nearest windows, the native no-string default.
+    if ( isdefined( anchor.script_noteworthy ) && anchor.script_noteworthy == "{membership['native_chaser_value']}" )
+        point.script_string = "{membership['native_chaser_value']}";
+    point.target = actor.target;
+    point.targetname = actor.targetname;
+    return point;
 }}
 
 spawn_zombie( spawner, target_name, spawn_point, round_number )
@@ -623,10 +662,16 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
     if has_policy:
         if len(skip.params) != 1:
             raise ValueError(f'{native}: expected one chase/entrance event argument')
-        script.tokens[skip.body_open].text += ('\n    if ( self ' + RUNTIME +
-            '::source_chases( ' + skip.params[0] + ' ) )\n        return true;\n')
+        # The source alone decides chase vs. window. T6's own zombie_chaser
+        # and find_flesh checks would override WaW's script_forcegoal, which
+        # WaW tests first (Shi No Numa's hut chasers tear their windows).
+        script.tokens[skip.body_open].text += ('\n    return self ' + RUNTIME +
+            '::source_chases( ' + skip.params[0] + ' );\n')
     # A source chaser's optional target is an intermediate path node, not a
     # forced barricade. Let the native chase branch consume that node first.
+    # A zombie_chaser's spawn point hands T6 the chase value; when the source
+    # sends that actor to a window instead, drop the value so the native
+    # entrance branches (target, then nearest windows) run.
     think = script.functions.get('zombie_think')
     if has_policy and think:
         result = _rise_result(script, think, definition['source_chase']['rise_event'])
@@ -638,6 +683,10 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
                 cond = ''.join(t.low for t in script.tokens[i + 2:end])
                 if cond == f'!isdefined({result.lower()})&&isdefined(self.target)&&self.target!=""':
                     script.tokens[end].text = ' && !self ' + RUNTIME + '::source_chases( ' + result + ' ) )'
+                    chaser = definition['source_membership']['native_chaser_value']
+                    script.tokens[i].text = (
+                        f'if ( isdefined( {result} ) && {result} == "{chaser}" && '
+                        f'!self {RUNTIME}::source_chases( {result} ) )\n        {result} = undefined;\n\n    if')
                     break
     core = out_root / 'maps/mp/waw/_waw2bo2_core.gsc'
     if core.is_file() and 'waw_tesla_init()' in core.read_text(encoding='utf-8'):
