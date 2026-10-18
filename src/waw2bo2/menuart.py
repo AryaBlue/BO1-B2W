@@ -174,10 +174,13 @@ def stage_art(settings, root: Path) -> None:
             images['location'] = Image.new('RGBA', (512, 256))
         images['complete'] = complete.resize((2048, 2048), Image.Resampling.LANCZOS)
         images['icon'] = complete.resize((256, 256), Image.Resampling.LANCZOS)
+        if getattr(settings, 'menu_icon', ''):
+            # Optional authored globe signpost icon (mapstable column 4), transparent like stock.
+            images['icon'] = Image.open(settings.menu_icon).convert('RGBA').resize((256, 256), Image.Resampling.LANCZOS)
         loading = 'complete'
         if getattr(settings, 'menu_loading', ''):
             # Optional full-screen loading art; stored like the other 2048 canvases.
-            images['loading'] = Image.open(settings.menu_loading).convert('RGB').resize((2048, 2048), Image.Resampling.LANCZOS)
+            images['loading'] = Image.open(settings.menu_loading).convert('RGBA').resize((2048, 2048), Image.Resampling.LANCZOS)
             loading = 'loading'
         bindings = {'map': 'large', 'map_blur': 'blur', 'blit': 'blit', 'icon': 'icon',
                     'zclassic_default': 'complete'}

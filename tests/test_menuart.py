@@ -111,6 +111,19 @@ class MenuArtworkTests(unittest.TestCase):
         blit.paste((255, 0, 0, 255), (120, 0, 160, 30))   # top-right corner block
         self.assertEqual(blit_center(blit), [480, -240])
 
+    def test_authored_icon_and_loading_art_replace_derived_images(self):
+        self.aligned_artwork()
+        Image.new('RGBA', (64, 64), (200, 0, 0, 128)).save(self.root / 'icon.png')
+        Image.new('RGB', (160, 90), (0, 200, 0)).save(self.root / 'loading.png')
+        self.settings.menu_icon, self.settings.menu_loading = str(self.root / 'icon.png'), str(self.root / 'loading.png')
+        stage_art(self.settings, self.root / 'project')
+        data = json.loads((self.root / 'project/menu.json').read_text())
+        self.assertEqual(data['texture_report']['icon']['format'], 'DXT5')
+        self.assertEqual(data['texture_report']['loading']['format'], 'DXT1')
+        for suffix in ('zclassic_default', 'zclassic_'):
+            binding = json.loads((self.root / f'project/materials/loadscreen_zm_example_{suffix}.json').read_text())
+            self.assertEqual(binding['textures'][0]['image'], 'menu_zm_example_loading')
+
     def test_replacing_aligned_with_stock_removes_runtime(self):
         self.aligned_artwork()
         project = self.root / 'project'
