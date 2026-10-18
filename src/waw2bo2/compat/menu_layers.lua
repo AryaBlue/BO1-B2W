@@ -9,10 +9,14 @@ local originalUp = map.MoveUpAnim
 local originalDown = map.MoveDownAnim
 local foreground = nil
 local currentMaterial = nil
+-- The engine raises streamed_image_ready once per streamed image. Selecting
+-- the same map again (focus swaps the background to Blur) must reuse it.
+local readyMaterial = nil
 
 map.Init = function(element, material)
     originalInit(element, material)
     currentMaterial = nil
+    readyMaterial = nil
     foreground = LUI.UIImage.new()
     foreground:setLeftRight(true, true, 0, 0)
     foreground:setTopBottom(true, true, 0, 0)
@@ -23,13 +27,20 @@ end
 map.SwitchToMapDirect = function(scale, blurred, duration)
     local name = CoD.Zombie.GetUIMapName()
     local material = UIExpression.TableLookup(nil, "zm/waw_menu_layers.csv", 0, name, 1)
-    currentMaterial = nil
-    foreground:setAlpha(0)
-    if material ~= nil and material ~= "" then
+    if material == nil or material == "" then
+        currentMaterial = nil
+        foreground:setAlpha(0)
+    elseif material == readyMaterial then
         currentMaterial = material
+        foreground:setAlpha(1)
+    else
+        currentMaterial = material
+        readyMaterial = nil
+        foreground:setAlpha(0)
         foreground:setImage(RegisterMaterial(material))
         foreground:registerEventHandler("streamed_image_ready", function(element, event)
             if currentMaterial == material then
+                readyMaterial = material
                 element:setAlpha(1)
             end
         end)

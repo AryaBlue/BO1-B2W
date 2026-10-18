@@ -154,7 +154,8 @@ def stage_art(settings, root: Path) -> None:
             edge = images['blit'].getchannel('A').point(lambda a: 255 if 0 < a < 255 else 0)
             images['large'].putalpha(ImageChops.lighter(images['large'].getchannel('A'), edge))
             images['blur'].putalpha(images['large'].getchannel('A'))
-            images['location'] = Image.new('RGBA', (4, 4))
+            # Stock Blit size: a 4x4 streamed image showed the missing-image checkerboard.
+            images['location'] = Image.new('RGBA', (512, 256))
         images['complete'] = complete.resize((2048, 2048), Image.Resampling.LANCZOS)
         images['icon'] = complete.resize((256, 256), Image.Resampling.LANCZOS)
         bindings = {'map': 'large', 'map_blur': 'blur', 'blit': 'blit', 'icon': 'icon',

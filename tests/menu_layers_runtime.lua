@@ -41,14 +41,16 @@ stock.SwitchToMapDirect(2, false, 500)
 assert(background.scale == 1 and background.image == 'large' and front.image == 'custom_blit')
 front.handlers.streamed_image_ready(front, {})
 assert(front.alpha == 1)
+-- Focus re-selects the same map; the engine does not raise the event again.
+local ready = front.handlers.streamed_image_ready
+front.handlers.streamed_image_ready = nil
 stock.SwitchToMapDirect(2, true, 500)
-front.handlers.streamed_image_ready(front, {})
 assert(background.scale == 1 and background.image == 'blur' and front.alpha == 1)
 stock.MoveDownAnim(100)
 assert(background.scale == 0.5)
 stock.MoveUpAnim(100)
 assert(background.scale == 1)
-local stale = front.handlers.streamed_image_ready
+local stale = ready
 selected = 'stock'
 stock.SwitchToMapDirect(2, false, 500)
 assert(background.scale == 2 and front.alpha == 0)
@@ -58,4 +60,7 @@ stock.MoveUpAnim(100)
 assert(background.scale == 2)
 stock.DefaultAnim(0)
 assert(background.scale == 1 and front.alpha == 0)
+selected = 'custom'
+stock.SwitchToMapDirect(2, false, 500)
+assert(background.scale == 1 and front.alpha == 1 and front.handlers.streamed_image_ready == nil)
 print('Menu layer runtime transitions passed')

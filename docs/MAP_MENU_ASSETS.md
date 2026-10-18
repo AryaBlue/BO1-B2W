@@ -39,7 +39,8 @@ GameMapZombie. The installed game's original bytecode is preserved under
 full-size child of the background, so both share transforms and alpha. It halves
 the stock selection zoom for full-frame artwork and keeps the foreground sharp
 when the background changes to Blur. Stock maps retain their original zoom.
-The separate stock location icon uses a transparent 4-pixel material to avoid a
+The separate stock location icon uses a transparent 512 × 256 material (a 4 × 4
+streamed image drew the missing-image checkerboard) to avoid a
 second, small copy of the foreground. Switching to stock artwork removes these
 generated overrides. Both frontend zones register the runtime and layer table.
 
