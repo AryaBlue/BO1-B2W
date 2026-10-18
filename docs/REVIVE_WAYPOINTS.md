@@ -13,6 +13,16 @@ disconnect, or a change in viewer eligibility. The bridge also handles late
 joiners and multiple downed teammates. Source HUDs for custom fake bodies
 remain under their original scripts' control.
 
+## Size
+
+T6 ignores the hud element's width as a pixel size for waypoints: it draws
+type-15 (setwaypoint) elements at `waypointIconWidth * width / 8`, where 8 is
+BO2's own objpoint shader size. An in-game probe at 1080p measured
+`setshader` 8, 16, 32 and 64 as roughly 75, 150, 300 and 600 pixels, with 8
+matching a 36x36 2D element. WaW draws its native revive icon at the plain
+36-unit `waypointIconWidth`, so the marker uses an 8x8 shader. The former
+32x32 shader made it four times too large.
+
 The material is precached during compatibility initialization. HUD dependency
 discovery includes compatibility script references, so maps do not have to
 name the material in their own scripts to stage it.
