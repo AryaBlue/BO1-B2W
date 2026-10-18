@@ -57,6 +57,22 @@ def composite_art(images: dict[str, Image.Image], *, blurred: bool = False) -> I
     return background
 
 
+def blit_center(blit: Image.Image) -> list[int]:
+    """Centre of the Blit's opaque area in the 1280 x 720 menu space (origin at
+    the screen centre), where aligned artwork is drawn full-frame. Placing the
+    start location there puts the selection on the Blit's object."""
+    alpha = blit.getchannel('A').resize((160, 90), Image.Resampling.BOX)
+    total = x_sum = y_sum = 0
+    for index, value in enumerate(alpha.getdata()):
+        y, x = divmod(index, alpha.width)
+        total += value
+        x_sum += value * (x + 0.5)
+        y_sum += value * (y + 0.5)
+    if not total:
+        return [0, 0]
+    return [round((x_sum / total / alpha.width - 0.5) * 1280), round((y_sum / total / alpha.height - 0.5) * 720)]
+
+
 def validate_art(settings) -> None:
     paths = [getattr(settings, 'menu_' + role) for role in SIZES]
     if any(paths):
@@ -134,7 +150,7 @@ def stage_art(settings, root: Path) -> None:
     # Always emit branding, including text-only/default builds. The stock UI
     # synthesizes location/mode keys even when no artwork was uploaded.
     data = {**{k: v for k, v in previous.items() if k not in
-               ('icon', 'blit', 'desktop_files', 'loading_song', 'layer_layout', 'layer_rawfiles', 'layer_materials', 'texture_report')},
+               ('icon', 'blit', 'desktop_files', 'loading_song', 'layer_layout', 'layer_rawfiles', 'layer_materials', 'texture_report', 'start_location')},
             'title': settings.menu_title.strip() or settings.project,
             'description': settings.menu_description.strip() or f'{settings.project}: World at War custom map',
             'longitude': coordinates[0], 'latitude': coordinates[1],
@@ -152,18 +168,23 @@ def stage_art(settings, root: Path) -> None:
             # at a time; a separately streamed full-canvas Blit showed unfocused
             # but vanished on focus, leaving Blur's cutout black. Map is
             # Large + Blit; Map Blur is the focused view, sharp Blit over Blur.
+            data['start_location'] = blit_center(images['blit'])
             images = {'large': complete, 'blur': composite_art(images, blurred=True), 'blit': images['blit']}
             images = {role: image.resize((2048, 2048), Image.Resampling.LANCZOS) for role, image in images.items()}
             images['location'] = Image.new('RGBA', (512, 256))
         images['complete'] = complete.resize((2048, 2048), Image.Resampling.LANCZOS)
         images['icon'] = complete.resize((256, 256), Image.Resampling.LANCZOS)
+        loading = 'complete'
+        if getattr(settings, 'menu_loading', ''):
+            # Optional full-screen loading art; stored like the other 2048 canvases.
+            images['loading'] = Image.open(settings.menu_loading).convert('RGB').resize((2048, 2048), Image.Resampling.LANCZOS)
+            loading = 'loading'
         bindings = {'map': 'large', 'map_blur': 'blur', 'blit': 'blit', 'icon': 'icon',
                     'zclassic_default': 'complete'}
-        bindings.update({'loadscreen:' + suffix: 'complete' for suffix in ('zclassic_default', 'zclassic_')})
+        bindings.update({'loadscreen:' + suffix: loading for suffix in ('zclassic_default', 'zclassic_')})
         if aligned:
-            # Names read back through gametypestable lookups must fit a 32-byte
-            # buffer: menu_<project>_location (32 here) was cut short and drew
-            # the default checkerboard material.
+            # Transparent stock location image (gametypestable column 6): the
+            # baked map already shows the Blit in place.
             bindings['loc'] = 'location'
         for folder in ('materials', 'images'):
             (root / folder).mkdir(parents=True, exist_ok=True)

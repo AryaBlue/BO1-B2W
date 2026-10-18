@@ -51,6 +51,7 @@ class Settings:
     menu_blit: str = ''
     menu_large: str = ''
     menu_blur: str = ''
+    menu_loading: str = ''
     menu_longitude: str = '0'
     menu_latitude: str = '0'
     loading_song: str = ''

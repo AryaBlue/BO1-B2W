@@ -91,6 +91,8 @@ class MenuArtworkTests(unittest.TestCase):
         self.assertIn('stringtable,zm/waw_menu_layers.csv', entries)
         self.assertIn('material,menu_zm_example_blit', entries)
         self.assertEqual(data['blit'], 'menu_zm_example_loc')
+        # The fixture's Blit square is centred on the canvas.
+        self.assertEqual(data['start_location'], [0, 0])
         self.assertLess(len(data['blit']), 32)
         self.assertIn('material,menu_zm_example_loc', entries)
         report = data['texture_report']['blit']
@@ -102,6 +104,12 @@ class MenuArtworkTests(unittest.TestCase):
         for suffix in ('zclassic_default',):
             binding = json.loads((self.root / f'project/materials/loadscreen_zm_example_{suffix}.json').read_text())
             self.assertEqual(binding['textures'][0]['image'], 'menu_zm_example_complete')
+
+    def test_blit_center_is_in_menu_units_from_the_screen_centre(self):
+        from waw2bo2.menuart import blit_center
+        blit = Image.new('RGBA', (160, 90))
+        blit.paste((255, 0, 0, 255), (120, 0, 160, 30))   # top-right corner block
+        self.assertEqual(blit_center(blit), [480, -240])
 
     def test_replacing_aligned_with_stock_removes_runtime(self):
         self.aligned_artwork()
