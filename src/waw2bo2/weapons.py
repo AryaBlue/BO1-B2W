@@ -198,7 +198,11 @@ def convert(name: str, source: dict[str, str], t4_schema: dict[str, str], t6_sch
         # T4 stores alias pointers; T6 stores their names. This is a semantic
         # conversion, not a generic permission to coerce arbitrary fields.
         sound_name = src_type == "CSPFT_SOUND" and dst_type == "CSPFT_STRING"
-        if dst_type is None or (src_type != dst_type and not sound_name):
+        # T6 streams some materials (adsOverlayShader, the sniper scope); the
+        # field still names a material, so it is the same reference. Dropped,
+        # a WaW scope zoomed with no overlay.
+        streamed_material = src_type == "CSPFT_MATERIAL" and dst_type == "CSPFT_MATERIAL_STREAM"
+        if dst_type is None or (src_type != dst_type and not sound_name and not streamed_material):
             if value not in ("", "0", "0.0"):
                 out.unsupported[key] = {"value": value, "source_type": src_type, "target_type": dst_type}
             continue
@@ -274,6 +278,14 @@ def convert(name: str, source: dict[str, str], t4_schema: dict[str, str], t6_sch
             out.fields["adsZoomFov2"] = out.fields["adsZoomFov3"] = value
             out.translations[key] = {"source": value, "target": "adsZoomFov1/2/3",
                                      "reason": "T6 per-zoom-level ADS FOV; WaW has one"}
+    # T6 scales the scope overlay by adsOverlayAlphaScale, a field WaW lacks
+    # (0 when omitted: an invisible scope). Every stock BO2 weapon with an
+    # overlay sets 1 (11/11 in raw/weapons/mp); WaW draws its overlay opaque.
+    if out.fields.get("adsOverlayShader") and "adsOverlayAlphaScale" not in source \
+            and "adsOverlayAlphaScale" in t6_schema:
+        out.fields["adsOverlayAlphaScale"] = "1"
+        out.translations["adsOverlayAlphaScale"] = {"source": None, "target": "1",
+            "reason": "T6-only overlay alpha scale; WaW draws the scope overlay opaque"}
     # WaW selects offhands by class. T6 additionally needs a slot; leaving its
     # new field at None produces an offhand the grenade inventory cannot own.
     slot = {"Frag Grenade": "Lethal grenade", "Smoke Grenade": "Tactical grenade",

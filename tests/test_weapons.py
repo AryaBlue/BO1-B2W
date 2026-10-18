@@ -41,6 +41,21 @@ class WeaponTests(unittest.TestCase):
         self.assertEqual(convert("empty", "0", "").fields["sharedAmmoCapName"], "")
         self.assertIn("sharedAmmoCapName", custom.translations)
 
+    def test_waw_scope_overlay_reaches_t6_streamed_overlay(self):
+        # WaW ptrs41_zombie: adsOverlayShader scope_overlay_mp (CSPFT_MATERIAL);
+        # T6 streams it and scales it by adsOverlayAlphaScale (stock snipers: 1)
+        t4 = {"adsOverlayShader": "CSPFT_MATERIAL", "adsOverlayReticle": "WFT_OVERLAYRETICLE"}
+        t6 = {"adsOverlayShader": "CSPFT_MATERIAL_STREAM", "adsOverlayReticle": "WFT_OVERLAYRETICLE",
+              "adsOverlayAlphaScale": "CSPFT_FLOAT"}
+        out = weapons.convert("ptrs41_zombie", {"adsOverlayShader": "scope_overlay_mp",
+                                                "adsOverlayReticle": "crosshair"}, t4, t6)
+        self.assertEqual(out.fields["adsOverlayShader"], "waw_material/scope_overlay_mp")
+        self.assertEqual(out.fields["adsOverlayAlphaScale"], "1")
+        self.assertIn("scope_overlay_mp", out.dependencies["material"])
+        self.assertNotIn("adsOverlayShader", out.unsupported)
+        plain = weapons.convert("gun", {"adsOverlayReticle": "none"}, t4, t6)
+        self.assertNotIn("adsOverlayAlphaScale", plain.fields)
+
     def test_waw_offhand_class_gets_t6_inventory_slot(self):
         schema = {"offhandClass": "WFT_OFFHAND_CLASS"}
         for cls, slot in (("Frag Grenade", "Lethal grenade"),
