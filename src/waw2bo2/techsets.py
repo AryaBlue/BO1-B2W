@@ -344,6 +344,11 @@ def build_material(t4: dict, donor: dict, notes: list[str]) -> dict:
     # The donor's thermal-vision variant belongs to its own (BO2) model; WaW
     # has none, and most stock T6 materials omit the field.
     out.pop("thermalMaterial", None)
+    # Game flag 0x4 is "nomarks" in both games (T6 MTL_GAMEFLAG_NO_MARKS; in
+    # Shi No Numa WaW sets it on exactly the water, foliage, glass, sky, wire
+    # and shadowcaster materials). Decals follow the source, not the donor.
+    flags = [f for f in out.get("gameFlags", []) if f not in ("4", "NO_MARKS")]
+    out["gameFlags"] = flags + ["NO_MARKS"] if "4" in t4.get("gameFlags", []) else flags
     src_tex ={t["name"]: t for t in t4.get("textures", []) if t.get("name") and t.get("image")}
     used = set()
     textures = []
