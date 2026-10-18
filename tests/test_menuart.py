@@ -6,7 +6,7 @@ import wave
 from PIL import Image
 from waw2bo2.launcher import Settings
 from waw2bo2.mapmenu import validate_settings
-from waw2bo2.menuart import SIZES, read_art, stage_art, validate_art
+from waw2bo2.menuart import SIZES, read_art, stage_art, validate_art, load_artwork, composite_art, compressed_iwi
 from waw2bo2.modzone import stage_menu_assets
 from waw2bo2.iwi import FMT_DXT1, FMT_DXT5, read_iwi_header
 
@@ -45,10 +45,10 @@ class MenuArtworkTests(unittest.TestCase):
         self.assertTrue(all(value == 2 for value in stream['streamingMode'].values()))
         self.assertIn('Example Town', (project / 'english/localizedstrings/menu_zm_example.str').read_text())
 
-    def test_wrong_resolution_and_opaque_blit_are_rejected(self):
+    def test_wrong_resolution_warns_and_opaque_blit_is_rejected(self):
         path = self.root / 'bad.png'
         Image.new('RGBA', (256, 256)).save(path)
-        with self.assertRaisesRegex(ValueError, '512 × 256'):
+        with self.assertWarnsRegex(UserWarning, '512 × 256'):
             read_art(str(path), 'blit')
         Image.new('RGB', SIZES['blit']).save(path)
         with self.assertRaisesRegex(ValueError, 'transparent'):
@@ -58,6 +58,82 @@ class MenuArtworkTests(unittest.TestCase):
         self.settings.menu_large = 'large.png'
         with self.assertRaisesRegex(ValueError, 'all three'):
             validate_art(self.settings)
+
+    def aligned_artwork(self):
+        for role in SIZES:
+            image = Image.new('RGBA', (128, 72), (25, 50, 100, 255))
+            if role == 'blit':
+                image.putalpha(0)
+            for y in range(20, 52):
+                for x in range(40, 88):
+                    image.putpixel((x, y), (200, 100, 50, 255 if role == 'blit' else 0))
+            image.save(self.root / (role + '.png'))
+            setattr(self.settings, 'menu_' + role, str(self.root / (role + '.png')))
+        from waw2bo2.menulayers import RUNTIME
+        self.settings.bo2 = str(self.root / 'bo2')
+        source = Path(self.settings.bo2) / 'raw' / RUNTIME
+        source.parent.mkdir(parents=True)
+        from waw2bo2 import menulayers
+        compiled = Path(menulayers.__file__).parent / 'compat/menu_layers.luac'
+        source.write_bytes(compiled.read_bytes()[:16] + b'stock-fixture')
+
+    def test_aligned_layers_preserve_hole_and_register_native_runtime(self):
+        self.aligned_artwork()
+        validate_art(self.settings)
+        image = composite_art(load_artwork(self.settings))
+        self.assertEqual(image.getpixel((60, 30)), (200, 100, 50, 255))
+        self.assertEqual(image.getpixel((10, 10)), (25, 50, 100, 255))
+        stage_art(self.settings, self.root / 'project')
+        data = json.loads((self.root / 'project/menu.json').read_text())
+        entries = stage_menu_assets(self.root / 'project', self.settings.project)
+        self.assertIn('rawfile,ui_mp/t6/zombie/gamemapzombie.lua', entries)
+        self.assertIn('rawfile,ui_mp/t6/zombie/waw_gamemap_base.lua', entries)
+        self.assertIn('stringtable,zm/waw_menu_layers.csv', entries)
+        self.assertIn('material,menu_zm_example_blit', entries)
+        self.assertEqual(data['blit'], 'menu_zm_example_location')
+        for role in ('large', 'blur', 'blit'):
+            report = data['texture_report'][role]
+            self.assertEqual(report['format'], 'DXT5')
+            self.assertEqual(report['bytes'], 2048 * 2048 + 64)
+        self.assertEqual(data['texture_report']['complete']['format'], 'DXT1')
+        self.assertLess(sum(r['bytes'] for r in data['texture_report'].values()), 16 * 1024 * 1024)
+        for suffix in ('zclassic_default',):
+            binding = json.loads((self.root / f'project/materials/loadscreen_zm_example_{suffix}.json').read_text())
+            self.assertEqual(binding['textures'][0]['image'], 'menu_zm_example_complete')
+
+    def test_replacing_aligned_with_stock_removes_runtime(self):
+        self.aligned_artwork()
+        project = self.root / 'project'
+        stage_art(self.settings, project)
+        self.artwork()
+        stage_art(self.settings, project)
+        self.assertFalse((project / 'ui_mp/t6/zombie/gamemapzombie.lua').exists())
+        self.assertFalse((project / 'zm/waw_menu_layers.csv').exists())
+        self.assertNotIn('layer_layout', json.loads((project / 'menu.json').read_text()))
+
+    def test_mixed_canvas_upload_warns_but_previews_and_exports(self):
+        self.aligned_artwork()
+        Image.new('RGBA', (129, 72)).save(self.settings.menu_blur)
+        with self.assertWarnsRegex(UserWarning, 'canvas sizes differ'):
+            validate_art(self.settings)
+        images = load_artwork(self.settings)
+        self.assertEqual(composite_art(images).size, (128, 72))
+        self.assertEqual(composite_art(images, blurred=True).size, (128, 72))
+        with self.assertWarnsRegex(UserWarning, 'canvas sizes differ'):
+            stage_art(self.settings, self.root / 'project')
+        data = json.loads((self.root / 'project/menu.json').read_text())
+        self.assertEqual(data['layer_layout'], 'aligned')
+        for role in ('large', 'blur', 'blit'):
+            self.assertEqual(data['texture_report'][role]['width'], 2048)
+            self.assertLess(data['texture_report'][role]['bytes'], 16 * 1024 * 1024)
+
+    def test_compressor_rejects_lost_alpha_and_16_mib_texture(self):
+        with self.assertRaisesRegex(ValueError, 'DXT5'):
+            compressed_iwi(Image.new('RGBA', (8, 8)), 'DXT1')
+        with self.assertRaisesRegex(ValueError, 'smaller than 16'):
+            compressed_iwi(Image.new('RGBA', (4096, 4096)), 'DXT5')
+        with self.assertRaisesRegex(ValueError, 'DXT1 or DXT5'):
+            compressed_iwi(Image.new('RGB', (8, 8)), 'DXT3')
 
     def test_text_only_and_clear_keep_default_branding_without_art(self):
         self.artwork()

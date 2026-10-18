@@ -15,7 +15,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 import webbrowser
 from PIL import Image, ImageTk
-from .menuart import SIZES, read_art
+from .menuart import SIZES, read_art, artwork_warning, composite_art
 
 from .launcher import (BuildPaths, ProcessRunner, Settings, build_command, cli_command,
                        discover, map_fastfiles, perform_build, perform_extract_all, preflight, project_name, user_directory)
@@ -296,6 +296,8 @@ class Launcher(ttk.Frame):
         uploads = self._group(tab, 'Upload map images')
         uploads.grid(row=1, column=0, sticky='nsew', padx=(0, 10), pady=(8, 0))
         self.upload_labels = {}
+        ttk.Label(uploads, text='Aligned layers: upload three images with identical dimensions.\nStock artwork: use the sizes below.',
+                  style='Muted.TLabel', wraplength=410).pack(anchor='w', pady=(0, 6))
         for role, (w, h) in SIZES.items():
             ttk.Label(uploads, text=f'{role.title()} — {w} × {h} px' + (' · transparent PNG / TGA' if role == 'blit' else ' · PNG / JPG / TGA'),
                       font=('Segoe UI', 9, 'bold')).pack(anchor='w')
@@ -305,13 +307,13 @@ class Launcher(ttk.Frame):
             self.upload_labels[role].pack(side='left', fill='x', expand=True)
             self._button(row, 'Upload…', lambda r=role: self._choose_art(r)).pack(side='right')
         self._button(uploads, 'Clear artwork', self._clear_art).pack(anchor='w', pady=(3, 0))
-        ttk.Label(uploads, text='Large supplies loading art and the 256 × 256 lobby thumbnail.\nUpload all three; no automatic cropping or blur.',
+        ttk.Label(uploads, text='Large + Blit supply loading art and the lobby thumbnail.\nUpload all three; matching canvases retain their alignment and transparency.',
                   style='Muted.TLabel', wraplength=410, font=('Segoe UI', 9)).pack(anchor='w', pady=(6, 0))
         preview = self._group(tab, 'In-game artwork preview')
         preview.grid(row=0, column=1, rowspan=2, sticky='nsew')
         self.preview_mode = tk.StringVar(value='Map selection')
         modes = ttk.Combobox(preview, state='readonly', textvariable=self.preview_mode,
-                            values=['Map selection', 'Large', 'Blur', 'Blit', 'Lobby thumbnail', 'Loading screen'])
+                            values=['Map selection', 'Focused selection', 'Large', 'Blur', 'Blit', 'Lobby thumbnail', 'Loading screen'])
         modes.pack(fill='x')
         modes.bind('<<ComboboxSelected>>', lambda _: self._art_preview())
         self.preview_canvas = tk.Canvas(preview, width=360, height=225, bg='#151a20', highlightthickness=0)
@@ -335,12 +337,12 @@ class Launcher(ttk.Frame):
         self._save()
 
     def _choose_art(self, role):
-        path = filedialog.askopenfilename(parent=self.root, title=f'Upload {role.title()} ({SIZES[role][0]} × {SIZES[role][1]} px)',
+        path = filedialog.askopenfilename(parent=self.root, title=f'Upload {role.title()} — aligned canvas or stock artwork',
                                           filetypes=[('Map images', '*.png *.jpg *.jpeg *.tga'), ('All files', '*.*')])
         if not path:
             return
         try:
-            read_art(path, role)
+            read_art(path, role, check_size=False)
         except (OSError, ValueError) as error:
             messagebox.showerror('Invalid map image', str(error), parent=self.root)
             return
@@ -361,24 +363,23 @@ class Launcher(ttk.Frame):
                 stat = Path(path).stat()
                 key = (path, stat.st_mtime_ns, stat.st_size)
                 if self.art_cache.get(role, (None,))[0] != key:
-                    self.art_cache[role] = (key, read_art(path, role))
+                    self.art_cache[role] = (key, read_art(path, role, check_size=False))
                 images[role] = self.art_cache[role][1]
             except (OSError, ValueError) as error:
                 errors.append(str(error))
         mode = self.preview_mode.get()
+        warning = artwork_warning(images) if len(images) == 3 else None
         role = {'Large': 'large', 'Blur': 'blur', 'Blit': 'blit', 'Lobby thumbnail': 'large',
-                'Loading screen': 'large', 'Map selection': 'large'}[mode]
+                'Loading screen': 'large', 'Map selection': 'large', 'Focused selection': 'blur'}[mode]
         image = images.get(role)
         width, height = max(360, canvas.winfo_width()), max(225, canvas.winfo_height())
         if image is not None:
             image = image.copy()
-            if mode == 'Map selection' and 'blit' in images:
-                # Measured stock Blit-to-Large projection (MAP_MENU_ASSETS.md).
-                overlay = images['blit'].resize((320, 284), Image.Resampling.LANCZOS)
-                image.alpha_composite(overlay, (864, 882))
+            if len(images) == 3 and not errors and mode in ('Map selection', 'Focused selection', 'Lobby thumbnail', 'Loading screen'):
+                image = composite_art(images, blurred=mode == 'Focused selection')
             if mode == 'Lobby thumbnail':
                 image = image.resize((256, 256), Image.Resampling.LANCZOS)
-            if mode in ('Map selection', 'Loading screen'):
+            if mode in ('Map selection', 'Focused selection', 'Loading screen'):
                 image = image.resize((width - 20, max(80, (width - 20) * 9 // 16)), Image.Resampling.LANCZOS)
             image.thumbnail((width - 20, height - 78), Image.Resampling.LANCZOS)
             self.preview_photo = ImageTk.PhotoImage(image, master=self.root)
@@ -390,7 +391,8 @@ class Launcher(ttk.Frame):
         canvas.create_text(12, height - 66, anchor='nw', text=title.upper(), fill='white', font=('Segoe UI', 11, 'bold'), width=width - 24)
         canvas.create_text(12, height - 42, anchor='nw', text=description, fill='#b4c1cb', width=width - 24, font=('Segoe UI', 9))
         missing = [r.title() for r in SIZES if r not in images]
-        self.art_status.configure(text='\n'.join(errors) if errors else ('Still needed: ' + ', '.join(missing) if missing else 'All three images match the required resolutions.'))
+        self.art_status.configure(text='\n'.join(errors) if errors else ('Still needed: ' + ', '.join(missing) if missing else
+                                  ('Warning: ' + warning if warning else 'All three images use a supported layout.')))
 
     def _scrollable(self, page):
         """A frame filling `page` that scrolls once its content no longer fits."""
