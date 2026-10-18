@@ -1,20 +1,59 @@
 # Authored BO2 map menus
 
 The desktop launcher has a **Map Details & Artwork** tab. Enter the title and
-description and upload Blit (512 × 256, transparent PNG/TGA), Large (2048 × 2048),
-and Blur (2048 × 2048). Large and Blur accept PNG, JPEG, or TGA. All three images
-are required when using custom artwork; incorrect sizes and opaque Blits are
-rejected. Text can also be customized without uploading artwork.
+description and upload all three images. Two layouts are supported:
+
+- **Aligned layers:** all three inputs have identical canvas dimensions. Large
+  contains the background and its transparent cutout; Blit fills that cutout at
+  the same coordinates; Blur contains the blurred background. Use PNG/TGA to
+  preserve alpha. The converter resizes all three together to 2048 square for
+  storage; the menu displays them at the screen aspect ratio.
+- **Stock layout:** Blit is 512 × 256, Large and Blur are 2048 × 2048. Existing
+  Nuketown-style placement, documented below, is retained.
+
+Mixed dimensions produce a non-blocking warning in the launcher and build log.
+They use full-canvas placement and are resized to the same export dimensions;
+objects may not line up or may appear distorted. Preview and conversion remain
+available. Opaque Blits are rejected because they lack the required transparency.
+Text can also be customized without uploading artwork.
 
 The preview selector shows map selection, individual canvases, the lobby
-thumbnail, and the loading screen. The three-upload workflow uses Large for
-loading artwork and resamples it to 256 × 256 for the lobby thumbnail. It does
-not crop uploaded artwork or generate Blur. Map selection overlays Blit using
-the measured projection below. These are layout approximations; stock menu
+thumbnail, and the loading screen. The lobby thumbnail is 256 × 256. The converter
+does not generate Blur. Aligned selection overlays the same full canvases; Focused
+selection overlays sharp Blit over Blur. Loading art and the thumbnail use the
+completed Large + Blit image. Stock selection uses the measured projection below.
+These are layout approximations; stock menu
 projection and final framing still require an in-game check.
 
 The build exports native T6 IWI textures and materials and carries the title,
 description, and artwork through both frontend zones and the packaged mod.
+Opaque textures use DXT1; textures with alpha use DXT5. Blit and the icon retain
+DXT5 for compatibility. Export checks the native IWI format and byte count and
+rejects any texture reaching 16 MiB. Each 2048-square DXT5 IWI is 4,194,368 bytes
+including its header; DXT1 is 2,097,216 bytes. `menu.json` records each texture's
+format, dimensions and byte count in `texture_report`.
+
+Aligned layouts register `zm/waw_menu_layers.csv` and a compiled T6 wrapper for
+GameMapZombie. The installed game's original bytecode is preserved under
+`ui_mp/t6/zombie/waw_gamemap_base.lua`. The wrapper attaches the real Blit as a
+full-size child of the background, so both share transforms and alpha. It halves
+the stock selection zoom for full-frame artwork and keeps the foreground sharp
+when the background changes to Blur. Stock maps retain their original zoom.
+The separate stock location icon uses a transparent 4-pixel material to avoid a
+second, small copy of the foreground. Switching to stock artwork removes these
+generated overrides. Both frontend zones register the runtime and layer table.
+
+The checked-in `compat/menu_layers.lua` and `.luac` have paired SHA-256 hashes;
+staging rejects stale bytecode or a mismatching VM header. Recompile changes with
+`python tools/compile_menu_layers.py /path/to/hksc`, using hksc configured with
+`--game=t6 --multi-plat`, targeting Windows 32-bit. The compiler is a development
+tool only; users do not need it installed. `tests/menu_layers_runtime.lua` checks
+focus, zoom, stock-map return and stale streaming callbacks with a stub UI.
+The checked-in bytecode was built with
+[hksc](https://github.com/Jake-NotTheMuss/hksc) revision
+`afa5ace6b2d11891b094ca637ccc772b9ef4ea59`. On MinGW that revision needs the
+`lua_str2ui64` macro to accept the unused third length argument and `assert.h`
+included when building the optional decompiler. No compiler is bundled.
 
 A staged project can carry `menu.json` with `title`, `description`, `icon`,
 and `blit` strings. The last two name authored materials. Additional material

@@ -254,7 +254,7 @@ def activate_mod_shaders(ff: Path, project: Path, work: Path, linker: Path, unli
     # Stringtables must also override loaded/stock assets. The linker's
     # independent search paths are sorted, so adding a project path beside
     # BO2's raw path is insufficient to guarantee source priority.
-    for name in ('mapstable.csv', 'gametypestable.csv', 'zm_statstable.csv'):
+    for name in ('mapstable.csv', 'gametypestable.csv', 'zm_statstable.csv', 'waw_menu_layers.csv'):
         source = project / 'zm' / name
         if source.is_file():
             target = overlay / 'zm' / name
@@ -597,7 +597,13 @@ def stage_menu_assets(project_root: Path, project: str) -> list[str]:
         return assets
     names = list(dict.fromkeys([data['icon'], data['blit'],
         f'menu_{project}_map', f'menu_{project}_map_blur', f'menu_{project}_zclassic_default',
-        f'loadscreen_{project}_zclassic_default', f'loadscreen_{project}_zclassic_', *data.get('materials', [])]))
+        f'loadscreen_{project}_zclassic_default', f'loadscreen_{project}_zclassic_', *data.get('materials', []), *data.get('layer_materials', [])]))
+    if data.get('layer_layout') == 'aligned':
+        from .menulayers import RUNTIME, BASE, TABLE
+        for name in (BASE, RUNTIME, TABLE):
+            if not (project_root / name).is_file():
+                raise FileNotFoundError(f'aligned menu runtime missing: {name}')
+        assets += [f'rawfile,{BASE}', f'rawfile,{RUNTIME}', f'stringtable,{TABLE}']
     streaming_file = project_root / 'images/streaming.json'
     streaming = json.loads(streaming_file.read_text()) if streaming_file.is_file() else {'streamingMode': {}}
     for name in names:

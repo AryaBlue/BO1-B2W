@@ -3,27 +3,58 @@ from __future__ import annotations
 
 import io
 import json
+import warnings
 from functools import lru_cache
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageChops
 from .iwi import dds_to_iwi
 
 SIZES = {'blit': (512, 256), 'large': (2048, 2048), 'blur': (2048, 2048)}
-# Block compression per role, as in the Nuketown menu art that loads: DXT1 for
-# the opaque backdrops, DXT5 where alpha matters. Uncompressed RGBA made each
-# 2048 backdrop 16 MB, an image the game refused to allocate at startup.
-DXT = {'blit': 'DXT5', 'icon': 'DXT5', 'large': 'DXT1', 'blur': 'DXT1'}
+# Uncompressed RGBA made each 2048 backdrop 16 MB and failed allocation in T6.
+MAX_TEXTURE_BYTES = 16 * 1024 * 1024
 
 
-def read_art(path: str, role: str) -> Image.Image:
+def read_art(path: str, role: str, *, check_size: bool = True) -> Image.Image:
     with Image.open(path) as source:
-        if source.size != SIZES[role]:
+        if check_size and source.size != SIZES[role]:
             w, h = SIZES[role]
-            raise ValueError(f'{role.title()} requires {w} × {h} pixels; selected image is {source.width} × {source.height}.')
+            warnings.warn(f'{role.title()} differs from the stock {w} × {h} canvas; it will be resized for export.', UserWarning, stacklevel=2)
         image = source.convert('RGBA')
     if role == 'blit' and image.getextrema()[3][0] == 255:
         raise ValueError('Blit needs a transparent background. Choose a PNG or TGA with alpha transparency.')
     return image
+
+
+def artwork_layout(images: dict[str, Image.Image]) -> str:
+    if len({image.size for image in images.values()}) == 1:
+        return 'aligned'
+    if all(images[role].size == size for role, size in SIZES.items()):
+        return 'stock'
+    return 'aligned'
+
+
+def artwork_warning(images: dict[str, Image.Image]) -> str | None:
+    if len({image.size for image in images.values()}) == 1 or artwork_layout(images) == 'stock':
+        return None
+    return ('Layer canvas sizes differ. They will be resized to the same canvas, but objects may not line up '
+            'and the result may look distorted. You can still preview and build.')
+
+
+def load_artwork(settings) -> dict[str, Image.Image]:
+    images = {role: read_art(getattr(settings, 'menu_' + role), role, check_size=False) for role in SIZES}
+    artwork_layout(images)
+    return images
+
+
+def composite_art(images: dict[str, Image.Image], *, blurred: bool = False) -> Image.Image:
+    background = images['blur' if blurred else 'large'].copy()
+    if artwork_layout(images) == 'aligned':
+        # Use Large as the preview canvas, matching the normalized full-frame export.
+        background = background.resize(images['large'].size, Image.Resampling.LANCZOS)
+        background.alpha_composite(images['blit'].resize(background.size, Image.Resampling.LANCZOS))
+    else:
+        background.alpha_composite(images['blit'].resize((320, 284), Image.Resampling.LANCZOS), (864, 882))
+    return background
 
 
 def validate_art(settings) -> None:
@@ -31,14 +62,14 @@ def validate_art(settings) -> None:
     if any(paths):
         if not all(paths):
             raise ValueError('Choose all three images: Blit, Large, and Blur.')
-        for role, path in zip(SIZES, paths):
-            stat = Path(path).stat()
-            _validate_file(path, role, stat.st_mtime_ns, stat.st_size)
+        warning = _validate_files(tuple((path, Path(path).stat().st_mtime_ns, Path(path).stat().st_size) for path in paths))
+        if warning:
+            warnings.warn(warning, UserWarning, stacklevel=2)
 
 
 @lru_cache(maxsize=24)
-def _validate_file(path, role, modified, size):
-    read_art(path, role)
+def _validate_files(files):
+    return artwork_warning({role: read_art(path, role, check_size=False) for role, (path, _, _) in zip(SIZES, files)})
 
 
 def material(image: str) -> dict:
@@ -61,9 +92,21 @@ def material(image: str) -> dict:
 
 def compressed_iwi(image: Image.Image, pixel_format: str) -> bytes:
     """Single-level block-compressed IWI27 (menus draw at a fixed size)."""
+    if pixel_format not in ('DXT1', 'DXT5'):
+        raise ValueError('Menu textures must use DXT1 or DXT5.')
+    if pixel_format == 'DXT1' and image.convert('RGBA').getextrema()[3][0] < 255:
+        raise ValueError('Transparent menu textures require DXT5.')
+    expected = ((image.width + 3) // 4) * ((image.height + 3) // 4) * (8 if pixel_format == 'DXT1' else 16) + 64
+    if expected >= MAX_TEXTURE_BYTES:
+        raise ValueError('Each menu texture must be smaller than 16 MiB.')
     dds = io.BytesIO()
     image.convert('RGB' if pixel_format == 'DXT1' else 'RGBA').save(dds, 'DDS', pixel_format=pixel_format)
-    return dds_to_iwi(dds.getvalue())
+    pixels = dds_to_iwi(dds.getvalue())
+    from .iwi import read_iwi_header, FMT_DXT1, FMT_DXT5
+    header = read_iwi_header(pixels)
+    if header['format'] != (FMT_DXT1 if pixel_format == 'DXT1' else FMT_DXT5) or len(pixels) != expected:
+        raise ValueError('Unexpected menu texture encoding or size.')
+    return pixels
 
 
 def stage_art(settings, root: Path) -> None:
@@ -78,6 +121,8 @@ def stage_art(settings, root: Path) -> None:
             relative = Path(name)
             if len(relative.parts) == 2 and relative.parts[0] in ('images', 'materials') and relative.suffix in ('.iwi', '.json'):
                 (root / relative).unlink(missing_ok=True)
+        from .menulayers import clear_runtime
+        clear_runtime(root, previous)
     if not any((settings.menu_title, settings.menu_description, getattr(settings, 'menu_mode', ''),
                 getattr(settings, 'menu_location', ''), settings.menu_blit, settings.loading_song, any(coordinates))):
         # Remove only metadata previously created by this launcher.
@@ -89,7 +134,7 @@ def stage_art(settings, root: Path) -> None:
     # Always emit branding, including text-only/default builds. The stock UI
     # synthesizes location/mode keys even when no artwork was uploaded.
     data = {**{k: v for k, v in previous.items() if k not in
-               ('icon', 'blit', 'desktop_files', 'loading_song')},
+               ('icon', 'blit', 'desktop_files', 'loading_song', 'layer_layout', 'layer_rawfiles', 'layer_materials', 'texture_report')},
             'title': settings.menu_title.strip() or settings.project,
             'description': settings.menu_description.strip() or f'{settings.project}: World at War custom map',
             'longitude': coordinates[0], 'latitude': coordinates[1],
@@ -99,16 +144,32 @@ def stage_art(settings, root: Path) -> None:
             data[key] = getattr(settings, 'menu_' + key)
     generated = []
     if settings.menu_blit:
-        images = {role: read_art(getattr(settings, 'menu_' + role), role) for role in SIZES}
-        # The three-upload workflow derives lobby and loading artwork from Large.
-        images['icon'] = images['large'].resize((256, 256), Image.Resampling.LANCZOS)
+        images = load_artwork(settings)
+        aligned = artwork_layout(images) == 'aligned'
+        complete = composite_art(images)
+        if aligned:
+            images = {role: image.resize((2048, 2048), Image.Resampling.LANCZOS) for role, image in images.items()}
+            # At interpolated edges the background must still cover the screen.
+            # Both layers share source RGB there; retain partial coverage without an alpha seam.
+            edge = images['blit'].getchannel('A').point(lambda a: 255 if 0 < a < 255 else 0)
+            images['large'].putalpha(ImageChops.lighter(images['large'].getchannel('A'), edge))
+            images['blur'].putalpha(images['large'].getchannel('A'))
+            images['location'] = Image.new('RGBA', (4, 4))
+        images['complete'] = complete.resize((2048, 2048), Image.Resampling.LANCZOS)
+        images['icon'] = complete.resize((256, 256), Image.Resampling.LANCZOS)
         bindings = {'map': 'large', 'map_blur': 'blur', 'blit': 'blit', 'icon': 'icon',
-                    'zclassic_default': 'large'}
-        bindings.update({'loadscreen:' + suffix: 'large' for suffix in ('zclassic_default', 'zclassic_')})
+                    'zclassic_default': 'complete'}
+        bindings.update({'loadscreen:' + suffix: 'complete' for suffix in ('zclassic_default', 'zclassic_')})
+        if aligned:
+            bindings['location'] = 'location'
         for folder in ('materials', 'images'):
             (root / folder).mkdir(parents=True, exist_ok=True)
+        report = {}
         for role, image in images.items():
-            (root / 'images' / f'menu_{settings.project}_{role}.iwi').write_bytes(compressed_iwi(image, DXT[role]))
+            fmt = 'DXT5' if image.getextrema()[3][0] < 255 or role in ('blit', 'icon') else 'DXT1'
+            pixels = compressed_iwi(image, fmt)
+            (root / 'images' / f'menu_{settings.project}_{role}.iwi').write_bytes(pixels)
+            report[role] = {'format': fmt, 'bytes': len(pixels), 'width': image.width, 'height': image.height}
             generated.append(f'images/menu_{settings.project}_{role}.iwi')
         for suffix, role in bindings.items():
             name = (f'loadscreen_{settings.project}_' + suffix.split(':')[1] if ':' in suffix
@@ -116,6 +177,10 @@ def stage_art(settings, root: Path) -> None:
             (root / 'materials' / (name + '.json')).write_text(json.dumps(material(f'menu_{settings.project}_{role}'), indent=2), encoding='utf-8')
             generated.append(f'materials/{name}.json')
         data.update(icon=f'menu_{settings.project}_icon', blit=f'menu_{settings.project}_blit')
+        data['texture_report'] = report
+        if aligned:
+            from .menulayers import stage_runtime
+            data.update(stage_runtime(Path(settings.bo2), root, settings.project))
     data['desktop_files'] = generated
     song = stage_song(settings, root)
     if song:
