@@ -716,6 +716,13 @@ def stage_lobby_gametype_table(stock: Path, project_root: Path, project: str) ->
     # checkerboard) at their corner position. Put the map's row ahead of them.
     rows.remove(entry)
     rows.insert(next(i for i, r in enumerate(rows) if r and r[0] == '5'), entry)
+    # File order alone did not win in game (the box stayed at zm_bus_test's
+    # -320,-240): give those unlisted test maps their own location name so the
+    # converted map holds the only category 5 row with its location.
+    clashing = {r[2] for r in rows if len(r) > 3 and r[0] == '5' and r[3] == entry[3] and r[2] != project}
+    for r in rows:
+        if len(r) > 3 and r[0] in ('5', '6') and r[2] in clashing and r[3] == entry[3]:
+            r[3] = r[2]
     center = menu_metadata(project_root).get('start_location')
     if center:
         # Aligned artwork: selection on the Blit's object, Nuketown's offsets
