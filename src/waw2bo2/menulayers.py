@@ -38,4 +38,4 @@ def stage_runtime(bo2: Path, root: Path, project: str) -> dict:
     (root / TABLE).parent.mkdir(parents=True, exist_ok=True)
     (root / TABLE).write_text(rows.getvalue(), encoding='utf-8')
     return {'layer_layout': 'aligned', 'layer_rawfiles': [BASE, RUNTIME],
-            'layer_materials': [f'menu_{project}_blit'], 'blit': f'menu_{project}_location'}
+            'layer_materials': [f'menu_{project}_blit'], 'blit': f'menu_{project}_loc'}

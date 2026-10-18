@@ -90,12 +90,14 @@ class MenuArtworkTests(unittest.TestCase):
         self.assertIn('rawfile,ui_mp/t6/zombie/waw_gamemap_base.lua', entries)
         self.assertIn('stringtable,zm/waw_menu_layers.csv', entries)
         self.assertIn('material,menu_zm_example_blit', entries)
-        self.assertEqual(data['blit'], 'menu_zm_example_location')
-        for role in ('large', 'blur', 'blit'):
-            report = data['texture_report'][role]
-            self.assertEqual(report['format'], 'DXT5')
-            self.assertEqual(report['bytes'], 2048 * 2048 + 64)
-        self.assertEqual(data['texture_report']['complete']['format'], 'DXT1')
+        self.assertEqual(data['blit'], 'menu_zm_example_loc')
+        self.assertLess(len(data['blit']), 32)
+        self.assertIn('material,menu_zm_example_loc', entries)
+        report = data['texture_report']['blit']
+        self.assertEqual((report['format'], report['bytes']), ('DXT5', 2048 * 2048 + 64))
+        # Both states are baked: the cutout is filled in Map and in Map Blur.
+        for role in ('large', 'blur', 'complete'):
+            self.assertEqual(data['texture_report'][role]['format'], 'DXT1')
         self.assertLess(sum(r['bytes'] for r in data['texture_report'].values()), 16 * 1024 * 1024)
         for suffix in ('zclassic_default',):
             binding = json.loads((self.root / f'project/materials/loadscreen_zm_example_{suffix}.json').read_text())

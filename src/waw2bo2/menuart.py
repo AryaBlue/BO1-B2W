@@ -6,7 +6,7 @@ import json
 import warnings
 from functools import lru_cache
 from pathlib import Path
-from PIL import Image, ImageChops
+from PIL import Image
 from .iwi import dds_to_iwi
 
 SIZES = {'blit': (512, 256), 'large': (2048, 2048), 'blur': (2048, 2048)}
@@ -148,13 +148,12 @@ def stage_art(settings, root: Path) -> None:
         aligned = artwork_layout(images) == 'aligned'
         complete = composite_art(images)
         if aligned:
+            # Bake both menu states. Stock maps stream one full-screen map image
+            # at a time; a separately streamed full-canvas Blit showed unfocused
+            # but vanished on focus, leaving Blur's cutout black. Map is
+            # Large + Blit; Map Blur is the focused view, sharp Blit over Blur.
+            images = {'large': complete, 'blur': composite_art(images, blurred=True), 'blit': images['blit']}
             images = {role: image.resize((2048, 2048), Image.Resampling.LANCZOS) for role, image in images.items()}
-            # At interpolated edges the background must still cover the screen.
-            # Both layers share source RGB there; retain partial coverage without an alpha seam.
-            edge = images['blit'].getchannel('A').point(lambda a: 255 if 0 < a < 255 else 0)
-            images['large'].putalpha(ImageChops.lighter(images['large'].getchannel('A'), edge))
-            images['blur'].putalpha(images['large'].getchannel('A'))
-            # Stock Blit size: a 4x4 streamed image showed the missing-image checkerboard.
             images['location'] = Image.new('RGBA', (512, 256))
         images['complete'] = complete.resize((2048, 2048), Image.Resampling.LANCZOS)
         images['icon'] = complete.resize((256, 256), Image.Resampling.LANCZOS)
@@ -162,7 +161,10 @@ def stage_art(settings, root: Path) -> None:
                     'zclassic_default': 'complete'}
         bindings.update({'loadscreen:' + suffix: 'complete' for suffix in ('zclassic_default', 'zclassic_')})
         if aligned:
-            bindings['location'] = 'location'
+            # Names read back through gametypestable lookups must fit a 32-byte
+            # buffer: menu_<project>_location (32 here) was cut short and drew
+            # the default checkerboard material.
+            bindings['loc'] = 'location'
         for folder in ('materials', 'images'):
             (root / folder).mkdir(parents=True, exist_ok=True)
         report = {}

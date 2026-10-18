@@ -33,23 +33,27 @@ rejects any texture reaching 16 MiB. Each 2048-square DXT5 IWI is 4,194,368 byte
 including its header; DXT1 is 2,097,216 bytes. `menu.json` records each texture's
 format, dimensions and byte count in `texture_report`.
 
-Aligned layouts register `zm/waw_menu_layers.csv` and a compiled T6 wrapper for
-GameMapZombie. The installed game's original bytecode is preserved under
-`ui_mp/t6/zombie/waw_gamemap_base.lua`. The wrapper attaches the real Blit as a
-full-size child of the background, so both share transforms and alpha. It halves
-the stock selection zoom for full-frame artwork and keeps the foreground sharp
-when the background changes to Blur. Stock maps retain their original zoom.
-The separate stock location icon uses a transparent 512 × 256 material (a 4 × 4
-streamed image drew the missing-image checkerboard) to avoid a
-second, small copy of the foreground. Switching to stock artwork removes these
-generated overrides. Both frontend zones register the runtime and layer table.
+Aligned layouts bake both menu states at build time: Map is Large with Blit
+composited over it, and Map Blur is the focused view, sharp Blit over Blur. Stock
+maps stream one full-screen map image at a time; an earlier design that streamed
+the full-canvas Blit as a separate foreground showed it unfocused but lost it on
+focus, leaving Blur's cutout black. Aligned layouts also register
+`zm/waw_menu_layers.csv` and a compiled T6 wrapper for GameMapZombie whose only
+job is to halve the stock selection zoom for full-frame artwork; stock maps keep
+their original zoom. The installed game's original bytecode is preserved under
+`ui_mp/t6/zombie/waw_gamemap_base.lua`. The stock location icon (gametypestable
+column 6) uses a transparent 512 × 256 material named `menu_<project>_loc`: names
+read back through those table lookups must fit a 32-byte buffer, and
+`menu_<project>_location` was cut short and drew the default checkerboard.
+Switching to stock artwork removes these generated overrides. Both frontend zones
+register the runtime and layer table.
 
 The checked-in `compat/menu_layers.lua` and `.luac` have paired SHA-256 hashes;
 staging rejects stale bytecode or a mismatching VM header. Recompile changes with
 `python tools/compile_menu_layers.py /path/to/hksc`, using hksc configured with
 `--game=t6 --multi-plat`, targeting Windows 32-bit. The compiler is a development
 tool only; users do not need it installed. `tests/menu_layers_runtime.lua` checks
-focus, zoom, stock-map return and stale streaming callbacks with a stub UI.
+zoom and stock-map return with a stub UI.
 The checked-in bytecode was built with
 [hksc](https://github.com/Jake-NotTheMuss/hksc) revision
 `afa5ace6b2d11891b094ca637ccc772b9ef4ea59`. On MinGW that revision needs the
