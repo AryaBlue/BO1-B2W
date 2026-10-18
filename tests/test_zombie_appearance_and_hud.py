@@ -151,6 +151,14 @@ class ZombieAppearanceAndHudTests(unittest.TestCase):
         bought = script.functions['waw_stock_solo_revive_bought']
         self.assertIn('self.lives = 1;', gsc.emit(script.tokens[bought.body_open:bought.body_close + 1]))
 
+    def test_revive_waypoint_uses_t6_objpoint_base_size(self):
+        source = (gscport.COMPAT_DIR / '_waw2bo2_compat.gsc').read_text()
+        script = gsc.parse(source, 'compat')
+        fn = script.functions['waw_revive_waypoints']
+        body = gsc.emit(script.tokens[fn.body_open:fn.body_close + 1])
+        # T6 draws waypoints at waypointIconWidth * width / 8: 32 was 4x WaW
+        self.assertIn('setshader( "waypoint_revive", 8, 8 )', body)
+
     def test_actor_scripts_can_resolve_stock_mod_tools_sources_after_map_overrides(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

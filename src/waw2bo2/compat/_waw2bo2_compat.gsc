@@ -1745,7 +1745,10 @@ waw_revive_waypoints()
                 marker.hud.archived = 1;
                 marker.hud.hidewheninmenu = 1;
                 marker.hud.immunetodemogamehudsettings = 1;
-                marker.hud setshader( "waypoint_revive", 32, 32 );
+                // T6 draws a waypoint at waypointIconWidth * width / 8 (8 is
+                // BO2's own objpoint size); WaW's native revive icon is the
+                // plain 36-unit waypointIconWidth, so 8x8 matches it.
+                marker.hud setshader( "waypoint_revive", 8, 8 );
                 marker.hud setwaypoint( 1 );
                 markers[markers.size] = marker;
             }
