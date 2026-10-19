@@ -14,9 +14,8 @@ import time
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 import webbrowser
-from PIL import Image, ImageTk
-from .menuart import SIZES, read_art, artwork_warning, composite_art
 
+from .gui_artwork import ARTWORK_KEYS, ArtworkTab
 from .launcher import (BuildPaths, ProcessRunner, Settings, build_command, cli_command,
                        discover, map_fastfiles, perform_build, perform_extract_all, preflight, project_name, user_directory)
 from .resources import resource_root
@@ -31,7 +30,7 @@ COLORS = {'bg': '#ededed', 'ink': '#242b32', 'muted': '#626b73', 'accent': '#246
           'console': '#11171d', 'green': '#217444', 'amber': '#ac680b', 'red': '#af3434'}
 
 
-class Launcher(ttk.Frame):
+class Launcher(ArtworkTab, ttk.Frame):
     def __init__(self, root: tk.Tk, *, settings: Settings | None = None, settings_path: Path | None = None):
         super().__init__(root)
         self.root = root
@@ -50,6 +49,7 @@ class Launcher(ttk.Frame):
         self.vars = {key: tk.StringVar(value=getattr(self.settings, key)) for key in
                      ('waw', 'bo2', 'waw_tools', 't4', 't6', 'decoder', 'work', 'fastfile', 'project',
                       'menu_title', 'menu_description', 'menu_mode', 'menu_location', 'menu_blit', 'menu_large', 'menu_blur',
+                      'menu_icon', 'menu_preview', 'menu_loading', 'menu_location_point',
                       'menu_longitude', 'menu_latitude', 'loading_song')}
         self.art_cache = {}
         self.source_fx = tk.BooleanVar(value=self.settings.source_fx)
@@ -67,7 +67,7 @@ class Launcher(ttk.Frame):
         self.pack(fill='both', expand=True)
         for variable in self.vars.values():
             variable.trace_add('write', lambda *_: self._refresh())
-        for key in ('menu_title', 'menu_description', 'menu_mode', 'menu_location', 'menu_blit', 'menu_large', 'menu_blur', 'project'):
+        for key in ARTWORK_KEYS:
             self.vars[key].trace_add('write', lambda *_: self._art_preview())
         self._art_preview()
         self.source_fx.trace_add('write', lambda *_: self._refresh())
@@ -256,143 +256,6 @@ class Launcher(ttk.Frame):
         self.install_button.pack(fill='x', pady=(8, 5))
         self.launch_button = self._button(checklist, 'Launch Map', self._launch)
         self.launch_button.pack(fill='x')
-
-    def _artwork(self):
-        tab = self.art_tab
-        tab.columnconfigure(0, weight=1)
-        tab.columnconfigure(1, weight=1)
-        details = self._group(tab, 'In-game map details')
-        details.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
-        for key, label in [('menu_title', 'Map title'), ('menu_description', 'Map description'),
-                           ('menu_mode', 'Mode name (replaces TRANZIT under the map name)'),
-                           ('menu_location', 'Location (loading screen, under the map name)')]:
-            ttk.Label(details, text=label).pack(anchor='w')
-            entry = ttk.Entry(details, textvariable=self.vars[key])
-            entry.pack(fill='x', pady=(3, 8))
-            self.action_widgets.append(entry)
-        ttk.Label(details, text='Shown in map selection, the lobby, and the mod list.\nBlank fields use the BO2 map name.',
-                  style='Muted.TLabel', wraplength=330).pack(anchor='w')
-        position = ttk.Frame(details)
-        position.pack(fill='x', pady=(8, 4))
-        for key, label in [('menu_longitude', 'Longitude (−180 to 180)'), ('menu_latitude', 'Latitude (−90 to 90)')]:
-            column = ttk.Frame(position)
-            column.pack(side='left', fill='x', expand=True, padx=(0, 6))
-            ttk.Label(column, text=label).pack(anchor='w')
-            entry = ttk.Entry(column, textvariable=self.vars[key], width=16)
-            entry.pack(fill='x')
-            self.action_widgets.append(entry)
-        ttk.Label(details, text='Load the mod, then use Custom Games → Change Map to select it on the globe.',
-                  style='Muted.TLabel', wraplength=330).pack(anchor='w', pady=(2, 6))
-        ttk.Label(details, text='Loading song — your audio file').pack(anchor='w')
-        entry = ttk.Entry(details, textvariable=self.vars['loading_song'])
-        entry.pack(fill='x', pady=3)
-        self.action_widgets.append(entry)
-        buttons = ttk.Frame(details)
-        buttons.pack(fill='x')
-        self._button(buttons, 'Upload song…', self._choose_song).pack(side='left')
-        self._button(buttons, 'Clear song', lambda: self.vars['loading_song'].set('')).pack(side='left', padx=5)
-        ttk.Label(details, text='MP3, WAV, FLAC, OGG or M4A. Packaged with the map and played while loading solo or co-op.',
-                  style='Muted.TLabel', wraplength=330).pack(anchor='w', pady=(4, 0))
-        uploads = self._group(tab, 'Upload map images')
-        uploads.grid(row=1, column=0, sticky='nsew', padx=(0, 10), pady=(8, 0))
-        self.upload_labels = {}
-        ttk.Label(uploads, text='Aligned layers: upload three images with identical dimensions.\nStock artwork: use the sizes below.',
-                  style='Muted.TLabel', wraplength=410).pack(anchor='w', pady=(0, 6))
-        for role, (w, h) in SIZES.items():
-            ttk.Label(uploads, text=f'{role.title()} — {w} × {h} px' + (' · transparent PNG / TGA' if role == 'blit' else ' · PNG / JPG / TGA'),
-                      font=('Segoe UI', 9, 'bold')).pack(anchor='w')
-            row = ttk.Frame(uploads)
-            row.pack(fill='x', pady=(3, 6))
-            self.upload_labels[role] = ttk.Label(row, text='No image selected', width=18, style='Muted.TLabel')
-            self.upload_labels[role].pack(side='left', fill='x', expand=True)
-            self._button(row, 'Upload…', lambda r=role: self._choose_art(r)).pack(side='right')
-        self._button(uploads, 'Clear artwork', self._clear_art).pack(anchor='w', pady=(3, 0))
-        ttk.Label(uploads, text='Large + Blit supply loading art and the lobby thumbnail.\nUpload all three; matching canvases retain their alignment and transparency.',
-                  style='Muted.TLabel', wraplength=410, font=('Segoe UI', 9)).pack(anchor='w', pady=(6, 0))
-        preview = self._group(tab, 'In-game artwork preview')
-        preview.grid(row=0, column=1, rowspan=2, sticky='nsew')
-        self.preview_mode = tk.StringVar(value='Map selection')
-        modes = ttk.Combobox(preview, state='readonly', textvariable=self.preview_mode,
-                            values=['Map selection', 'Focused selection', 'Large', 'Blur', 'Blit', 'Lobby thumbnail', 'Loading screen'])
-        modes.pack(fill='x')
-        modes.bind('<<ComboboxSelected>>', lambda _: self._art_preview())
-        self.preview_canvas = tk.Canvas(preview, width=360, height=225, bg='#151a20', highlightthickness=0)
-        self.preview_canvas.pack(fill='both', expand=True, pady=8)
-        self.preview_canvas.bind('<Configure>', lambda _: self._art_preview())
-        self.art_status = ttk.Label(preview, text='', wraplength=330, style='Muted.TLabel')
-        self.art_status.pack(anchor='w')
-        ttk.Label(preview, text='Approximate stock layout. Verify final framing in game.',
-                  style='Muted.TLabel', wraplength=410, font=('Segoe UI', 9)).pack(anchor='w', pady=(4, 0))
-
-    def _choose_song(self):
-        path = filedialog.askopenfilename(parent=self.root, title='Upload loading song',
-            filetypes=[('Audio files', '*.mp3 *.wav *.flac *.ogg *.m4a'), ('All files', '*.*')])
-        if path:
-            self.vars['loading_song'].set(path)
-            self._save()
-
-    def _clear_art(self):
-        for role in SIZES:
-            self.vars['menu_' + role].set('')
-        self._save()
-
-    def _choose_art(self, role):
-        path = filedialog.askopenfilename(parent=self.root, title=f'Upload {role.title()} — aligned canvas or stock artwork',
-                                          filetypes=[('Map images', '*.png *.jpg *.jpeg *.tga'), ('All files', '*.*')])
-        if not path:
-            return
-        try:
-            read_art(path, role, check_size=False)
-        except (OSError, ValueError) as error:
-            messagebox.showerror('Invalid map image', str(error), parent=self.root)
-            return
-        self.vars['menu_' + role].set(path)
-        self._save()
-
-    def _art_preview(self):
-        canvas = self.preview_canvas
-        canvas.delete('all')
-        images, errors = {}, []
-        for role in SIZES:
-            path = self.vars['menu_' + role].get()
-            name = Path(path).name
-            self.upload_labels[role].configure(text=(name[:24] + '…' if len(name) > 25 else name) or 'No image selected')
-            if not path:
-                continue
-            try:
-                stat = Path(path).stat()
-                key = (path, stat.st_mtime_ns, stat.st_size)
-                if self.art_cache.get(role, (None,))[0] != key:
-                    self.art_cache[role] = (key, read_art(path, role, check_size=False))
-                images[role] = self.art_cache[role][1]
-            except (OSError, ValueError) as error:
-                errors.append(str(error))
-        mode = self.preview_mode.get()
-        warning = artwork_warning(images) if len(images) == 3 else None
-        role = {'Large': 'large', 'Blur': 'blur', 'Blit': 'blit', 'Lobby thumbnail': 'large',
-                'Loading screen': 'large', 'Map selection': 'large', 'Focused selection': 'blur'}[mode]
-        image = images.get(role)
-        width, height = max(360, canvas.winfo_width()), max(225, canvas.winfo_height())
-        if image is not None:
-            image = image.copy()
-            if len(images) == 3 and not errors and mode in ('Map selection', 'Focused selection', 'Lobby thumbnail', 'Loading screen'):
-                image = composite_art(images, blurred=mode == 'Focused selection')
-            if mode == 'Lobby thumbnail':
-                image = image.resize((256, 256), Image.Resampling.LANCZOS)
-            if mode in ('Map selection', 'Focused selection', 'Loading screen'):
-                image = image.resize((width - 20, max(80, (width - 20) * 9 // 16)), Image.Resampling.LANCZOS)
-            image.thumbnail((width - 20, height - 78), Image.Resampling.LANCZOS)
-            self.preview_photo = ImageTk.PhotoImage(image, master=self.root)
-            canvas.create_image(width // 2, 8, anchor='n', image=self.preview_photo)
-        else:
-            canvas.create_text(width // 2, 55, text=f'Upload {role.title()} to preview {mode.lower()}', fill='#abb8c3', width=width - 24)
-        title = self.vars['menu_title'].get() or self.vars['project'].get() or 'YOUR MAP TITLE'
-        description = self.vars['menu_description'].get() or 'Your map description appears here.'
-        canvas.create_text(12, height - 66, anchor='nw', text=title.upper(), fill='white', font=('Segoe UI', 11, 'bold'), width=width - 24)
-        canvas.create_text(12, height - 42, anchor='nw', text=description, fill='#b4c1cb', width=width - 24, font=('Segoe UI', 9))
-        missing = [r.title() for r in SIZES if r not in images]
-        self.art_status.configure(text='\n'.join(errors) if errors else ('Still needed: ' + ', '.join(missing) if missing else
-                                  ('Warning: ' + warning if warning else 'All three images use a supported layout.')))
 
     def _scrollable(self, page):
         """A frame filling `page` that scrolls once its content no longer fits."""

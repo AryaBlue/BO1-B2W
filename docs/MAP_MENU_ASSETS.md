@@ -25,6 +25,27 @@ completed Large + Blit image. Stock selection uses the measured projection below
 These are layout approximations; stock menu
 projection and final framing still require an in-game check.
 
+### Launcher section
+
+**Map Details & Artwork** collects every optional menu input on one page: the
+in-game text (map name, description, mode line, location), the three map
+selection layers and the start-location point, the globe icon, lobby preview
+and loading screen images, the globe position and the loading song. Its
+preview draws five in-game screens in BO2's 1280 × 720 menu space
+(`menupreviews.py`), using the BO2 install's own menu textures when present
+(`raw/images`: `globe_map_zm`, `menu_zm_background_main`, `menu_zm_map_frame`,
+stock signposts and `raw/zm/mapstable.csv`; nothing from the game ships):
+
+- **Globe:** an orthographic globe textured with `globe_map_zm`, the stock maps'
+  signposts and yours. Drag to spin; click to set longitude/latitude. BO2 stores
+  longitude with the geographic sign flipped (zm_prison 122 is San Francisco).
+- **Map selection / Focused selection:** the composited layers, the 400 × 200
+  start-location box and the option list (map name in orange brackets and the
+  description). Click to place the start location on aligned artwork.
+- **Lobby:** the Custom Games preview frame filled by the lobby picture, with
+  the map name and mode line.
+- **Loading screen:** the loading image with the map name and location.
+
 The build exports native T6 IWI textures and materials and carries the title,
 description, and artwork through both frontend zones and the packaged mod.
 Opaque textures use DXT1; textures with alpha use DXT5. Blit and the icon retain
