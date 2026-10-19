@@ -104,12 +104,17 @@ class DesktopUITests(unittest.TestCase):
         self.app.tabs.select(self.app.art_tab)
         self.app.vars['menu_title'].set('My Custom Map')
         self.app.vars['menu_description'].set('Survive here.')
+        self.app.vars['menu_location'].set('Berlin, 1945')
         self.app.preview_mode.set('Loading screen')
-        self.app._art_preview()
-        texts = [self.app.preview_canvas.itemcget(item, 'text') for item in self.app.preview_canvas.find_all()
-                 if self.app.preview_canvas.type(item) == 'text']
-        self.assertIn('MY CUSTOM MAP', texts)
-        self.assertIn('Survive here.', texts)
+        from waw2bo2 import menupreviews
+        with patch.object(menupreviews, 'loading', wraps=menupreviews.loading) as loading:
+            self.app._art_preview()
+        self.assertEqual(loading.call_args.args[2:], ('My Custom Map', 'Berlin, 1945'))
+        self.app.preview_mode.set('Map selection')
+        with patch.object(menupreviews, 'map_selection', wraps=menupreviews.map_selection) as selection:
+            self.app._art_preview()
+        self.assertEqual(selection.call_args.args[1:3], ('My Custom Map', 'Survive here.'))
+        self.assertEqual(len(self.app.preview_canvas.find_all()), 1)   # the rendered screen
         self.assertEqual(self.app._snapshot().menu_title, 'My Custom Map')
 
     def test_extract_all_is_available_without_a_selected_map(self):
