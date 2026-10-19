@@ -223,6 +223,70 @@ class FrameworkHookTests(unittest.TestCase):
         self.assertNotIn("SetVolFog", core)
         self.assertIn("waw2bo2_client_fx_0();", core)
 
+    def test_entity_and_sound_client_listeners_run_on_the_server(self):
+        # Der Riese: power-on lamp swaps, pad wire sparks with a fake sound
+        # entity, client-internal notifies, an effect another client script loads
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            files = {
+                "maps/testmap.gsc": "main()\n{\n\tmaps\\_zombiemode::main();\n\tclientnotify( \"pl1\" );\n}\n",
+                "clientscripts/testmap_fx.csc":
+                    "main()\n{\n\tlevel thread lamps( \"smodel_light\", \"lamp_on\" );\n"
+                    "\tlevel thread wire( \"pw0\", \"t01\" );\n\tlevel thread lit( \"t01\" );\n"
+                    "\tlevel thread hud();\n\tlevel thread ptr();\n\tlevel thread lit2();\n}\n"
+                    "lamps( name, model )\n{\n\tlevel waittill( \"pl1\" );\n\tplayers = getlocalplayers();\n"
+                    "\tfor ( p = 0; p < players.size; p++ )\n\t{\n\t\tlamps = GetEntArray( p, name, \"targetname\" );\n"
+                    "\t\tfor ( i = 0; i < lamps.size; i++ )\n\t\t\tlamps[i] SetModel( model );\n\t}\n}\n"
+                    "wire( msg, done )\n{\n\tlevel waittill( msg );\n\tmover = Spawn( 0, (1,2,3), \"script_model\" );\n"
+                    "\tmover SetModel( \"tag_origin\" );\n\tPlayFxOnTag( 0, level._effect[\"spark\"], mover, \"tag_origin\" );\n"
+                    "\tsnd = spawnfakeent( 0 );\n\tsetfakeentorg( 0, snd, mover.origin );\n"
+                    "\tplayloopsound( 0, snd, \"spark_loop\" );\n\tplaysound( 0, \"spark_hit\", mover.origin );\n"
+                    "\tlevel endon( \"stop\" );\n\tmover MoveTo( (4,5,6), 0.1 );\n\trealwait( 0.1 );\n"
+                    "\tdeletefakeent( 0, snd );\n\tlevel notify( done );\n}\n"
+                    "lit( msg )\n{\n\tlevel waittill( msg );\n\tprintln( glow() );\n}\n"
+                    "lit2()\n{\n\tlevel waittill( \"pl1\" );\n\tprintln( glow() );\n}\n"
+                    "glow()\n{\n\treturn \"lit\";\n}\n"
+                    "hud()\n{\n\tlevel waittill( \"pl1\" );\n\tSetClientHudThing( 0 );\n}\n"
+                    "ptr()\n{\n\tlevel waittill( \"tae\" );\n\tself thread [[ level.funcs[0] ]]( 0 );\n}\n",
+                "clientscripts/testmap.csc":
+                    "main()\n{\n\tlevel._effect[\"spark\"] = loadfx( \"maps/zombie/fx_spark\" );\n}\n",
+            }
+            for name, text in files.items():
+                (root / "src" / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / "src" / name).write_text(text, encoding="utf-8")
+            api = _api()
+            api.builtins.update({"clientnotify": (1, 1)})
+            report = gscport.port_map(gscport.Sources([root / "src"], [], None), api, "testmap", root / "out")
+            core = (root / "out/maps/mp/waw/_waw2bo2_core.gsc").read_text(encoding="utf-8")
+        compat = gscport.COMPAT
+        self.assertIn('GetEntArray( name, "targetname" )', core)
+        self.assertIn("lamps[i] SetModel( model );", core)
+        self.assertIn(f'{compat}::waw_client_spawn( (1,2,3), "script_model" )', core)
+        self.assertIn('PlayFxOnTag( level.waw_effect["spark"], mover, "tag_origin" )', core)
+        self.assertIn(f"snd = {compat}::waw_client_spawnfakeent( );", core)
+        self.assertIn(f"{compat}::waw_client_setfakeentorg( snd, mover.origin )", core)
+        self.assertIn(f'{compat}::waw_client_playloopsound( snd, "spark_loop" )', core)
+        self.assertIn(f'{compat}::waw_playsoundatposition( "spark_hit", mover.origin )', core)
+        self.assertIn("wait( 0.1 );", core)
+        # one client namespace: the internal t01 notify reaches the waiting listener
+        self.assertIn('level notify( "waw_client_" + done )', core)
+        self.assertIn('level endon( "waw_client_" + "stop" )', core)
+        self.assertIn('level waittill( "waw_client_" + msg )', core)
+        self.assertIn(f'level.waw_effect["spark"] = {compat}::waw_loadfx( "maps/zombie/fx_spark" )', core)
+        self.assertIn('level thread waw2bo2_testmap_fx__lamps( "smodel_light", "lamp_on" );', core)
+        # a client-only call keeps its listener on the client, reported
+        self.assertNotIn("SetClientHudThing", core)
+        self.assertIn("CSC SetClientHudThing in client listener hud (client-only)", report.unsupported)
+        # the client-only entities these listeners name (stage networks them)
+        self.assertIn("smodel_light", report.client_listener_strings)
+        self.assertNotIn("SetClientHudThing", report.client_listener_strings)
+        # a helper two listeners share is defined once (T6 rejects a duplicate)
+        self.assertEqual(core.count("\nwaw2bo2_testmap_fx__glow()"), 1)
+        self.assertIn("level thread waw2bo2_testmap_fx__lit2();", core)
+        # a function pointer's target is unknown: that listener stays client-side too
+        self.assertNotIn("waw2bo2_testmap_fx__ptr", core)
+        self.assertIn("CSC function pointer call in client listener ptr (client-only)", report.unsupported)
+
     def test_utility_clientnotify_reaches_the_compat_wrapper(self):
         # Shi No Numa's trap script includes maps\_utility, which defines
         # clientNotify; BO2's maps\mp\_utility::clientnotify never raised the

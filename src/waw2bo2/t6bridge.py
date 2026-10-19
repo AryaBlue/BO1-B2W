@@ -1579,6 +1579,11 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
                                       stock_waw, source_waw, bo2_stock_perks=bo2_stock_perks,
                                       waw_stock_map=waw_stock_map,
                                       stock_variant_roots=[r / "raw" for r in (waw_mod_tools, waw_root) if r is not None])
+        listened = set(report.scripts.get("client_listener_strings", [])) if report.scripts else set()
+        networked = entities.network_client_models(project_root / "BSP" / "entities.json", listened)             if listened and (project_root / "BSP" / "entities.json").is_file() else []
+        if networked:
+            report.warnings.append(f"CLIENT_MODELS_NETWORKED {', '.join(networked)}: client-side script_models "
+                                   f"driven by WaW client listeners, which the port runs on the server")
         fx_names = list(report.scripts.get("fx", [])) if report.scripts else []
         # Weapons first: their resolution widens the roots (stock WaW dumps for
         # script models too) and their effects join the map zone's conversion.

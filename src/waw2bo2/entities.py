@@ -464,6 +464,29 @@ def strip_models(entities_json: Path, names: set[str]) -> int:
     return count
 
 
+# script_model spawnflag 2: a client-side model, created by each client and
+# never by the server, in WaW and in T6 alike (measured in T6: GetEntArray on
+# the server finds Der Riese's flag-0 lamp and none of its flag-2 lamps).
+CLIENT_SIDE_MODEL = 2
+
+
+def network_client_models(entities_json: Path, names: set[str]) -> list[str]:
+    """Make the client-side script_models with a targetname in ``names`` server
+    entities (networked to every client). WaW client listeners drive them
+    (Der Riese's power-on lamps); the port runs those listeners on the server,
+    where a client-side model does not exist. Returns the targetnames changed."""
+    data = json.loads(entities_json.read_text(encoding="utf-8"))
+    changed = Counter()
+    for ent in data["entities"]:
+        flags = int(ent.get("spawnflags", "0") or 0)
+        if ent.get("classname") == "script_model" and flags & CLIENT_SIDE_MODEL and ent.get("targetname") in names:
+            ent["spawnflags"] = str(flags & ~CLIENT_SIDE_MODEL)
+            changed[ent["targetname"]] += 1
+    if changed:
+        entities_json.write_text(json.dumps(data, indent=1) + "\n", encoding="utf-8")
+    return [f"{name} ({count})" for name, count in sorted(changed.items())]
+
+
 def map_wall_buys(entities_json: Path, table: dict[str, str]) -> list[str]:
     """Point WaW wall buys at the weapons mod.ff carries (``table``: WaW name ->
     BO2 name, "" = not carried). A wall buy for an uncarried weapon is removed:
