@@ -15,7 +15,7 @@ class SourceChaseTests(unittest.TestCase):
             native.parent.mkdir(parents=True)
             native.write_text(
                 'zombie_spawn_init(){ self init_zombie_run_cycle(); self thread zombie_think(); }'
-                'do_zombie_spawn(){spot=random(spots);}'
+                'do_zombie_spawn(){spot=random(spots); if(isdefined(spot.target)) self.target=spot.target;}'
                 'should_skip_teardown(native_result){return false;}'
                 'zombie_think(){native_result=undefined; self waittill("risen",native_result);'
                 'if(!isdefined(native_result)&&isdefined(self.target)&&self.target!=""){go_window();}}\n'

@@ -732,6 +732,22 @@ def stage_native_support(out_root: Path, bo2_root: Path, definition: dict) -> No
     script.tokens[selections[0].index - 2].text = (
         'if ( isdefined( self.spawn_point_override ) )\n'
         '        spot = self.spawn_point_override;\n    else\n        spot')
+    # WaW zombie_think measures its nearest windows from the actor's own
+    # spawner target (get_desired_origin). A converted location carries exactly
+    # that target, or none. T6 copies it only when defined, so an actor created
+    # from another spawner kept that spawner's target: Der Riese start-room
+    # zombies measured from outside_up_spawners_goal_0 across the map, picked
+    # unreachable windows and idled on bad_path. The location's target wins,
+    # including its absence.
+    words = [t.low for t in script.tokens]
+    copy = ['if', '(', 'isdefined', '(', 'spot', '.', 'target', ')', ')',
+            'self', '.', 'target', '=', 'spot', '.', 'target', ';']
+    copies = [i for i in range(location.body_open, location.body_close)
+              if words[i:i + len(copy)] == copy]
+    if len(copies) != 1:
+        raise ValueError(f'{native}: expected one spawn location target copy')
+    for token in script.tokens[copies[0]:copies[0] + 9]:
+        token.text = ''
     # Local calls/pointers still resolve to the copied callback implementation.
     for ref in gsc.references(script.tokens):
         if ref.qualifier == native:
