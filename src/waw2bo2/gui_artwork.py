@@ -134,8 +134,10 @@ class ArtworkTab:
                   'Check final framing in game.', style='Muted.TLabel', wraplength=640, font=('Segoe UI', 9)).pack(anchor='w', pady=(4, 0))
 
     def _preview_resized(self, event):
-        for label in (self.art_hint, self.art_status, self.art_note):
-            label.configure(wraplength=max(240, event.width - 8))
+        for name in ('art_hint', 'art_status', 'art_note'):
+            label = getattr(self, name, None)   # resize can fire while the tab is still being built
+            if label is not None:
+                label.configure(wraplength=max(240, event.width - 8))
         self._art_preview()
 
     # ------------------------------------------------------------- inputs
