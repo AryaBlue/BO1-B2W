@@ -24,6 +24,22 @@ class AnimationSoundTests(unittest.TestCase):
         two, _ = animnotes.add_sound_events(original, {'flip': 'waw/gun_two'})
         self.assertNotEqual(one, two)
 
+    def test_native_sound_name_containing_mapped_key_is_untouched(self):
+        prefix = struct.pack('<HH', 17, 60) + b'opaque motion\0\0'
+        original = prefix + b'\x01sndnt#evt_bottle_break\0' + struct.pack('<H', 57)
+        self.assertEqual(animnotes.add_sound_events(
+            original, {'bottle_break': 'waw/bottle_break'}), (original, []))
+
+    def test_native_sound_and_mapped_event_keep_their_frames(self):
+        prefix = struct.pack('<HH', 17, 60) + b'opaque motion\0\0'
+        original = (prefix + b'\x02sndnt#evt_bottle_break\0' + struct.pack('<H', 57)
+                    + b'flip\0' + struct.pack('<H', 59))
+        converted, added = animnotes.add_sound_events(
+            original, {'bottle_break': 'waw/bottle_break', 'flip': 'waw/switch'})
+        self.assertEqual(converted, prefix + b'\x03' + original[len(prefix) + 1:]
+                         + b'sndnt#waw/switch\0' + struct.pack('<H', 59))
+        self.assertEqual(added, [{'source': 'flip', 'sound': 'waw/switch', 'frame': 59}])
+
     def test_frame_high_byte_equal_to_remaining_count_is_not_a_second_section(self):
         # Hotel: frame 331 (4B 01) before the last note also parses as "1 note"
         # running to the end of the file; the full section must still win.
@@ -41,3 +57,8 @@ class AnimationSoundTests(unittest.TestCase):
         self.assertEqual(animnotes.add_sound_events(original, {'unmatched': 'waw/unused'}), (original, []))
         with self.assertRaises(weapons.WeaponError):
             animnotes.add_sound_events(b'\x12\x00' + original[2:], {'flip': 'waw/switch'})
+
+    def test_malformed_notification_section_is_still_rejected(self):
+        original, _ = self.raw()
+        with self.assertRaisesRegex(weapons.WeaponError, 'no valid notification suffix'):
+            animnotes.add_sound_events(original[:-1], {'flip': 'waw/switch'})

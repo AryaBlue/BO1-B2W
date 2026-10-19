@@ -598,6 +598,24 @@ class PlaybackBankTests(unittest.TestCase):
         self.assertEqual(rows, [])
         self.assertIn("curves", errors[0]["reason"])
 
+    def test_voice_counts_fit_native_linker_range_and_report_changes(self):
+        document = self.bound()
+        source = document["aliases"][0]["source"]
+        for count in (0, 2, 128, 256):
+            with self.subTest(count=count):
+                source.update(limitType=3, entityLimitType=0,
+                              limitCount=count, entityLimitCount=count)
+                rows, errors = sounds.t6_alias_rows(document)
+                self.assertEqual(errors, [])
+                changes = sounds.clamp_t6_ranges(rows)
+                self.assertEqual((rows[0]["LimitCount"], rows[0]["EntityLimitCount"]),
+                                 (str(min(count, 128)), str(min(count, 128))))
+                self.assertEqual((rows[0]["LimitType"], rows[0]["EntityLimitType"]), ("priority", "none"))
+                limits = [c for c in changes if c["column"] in ("LimitCount", "EntityLimitCount")]
+                self.assertEqual(len(limits), 2 if count > 128 else 0)
+                for change in limits:
+                    self.assertEqual((change["source"], change["t6"], change["why"]), (256, 128, "range"))
+
     def test_weapon_dependencies_share_a_category_even_with_custom_full_volume_bus(self):
         document = self.bound()
         document["aliases"][0]["bus"].update(name="full_vol", volumeMod=1)

@@ -32,7 +32,10 @@ def add_sound_events(raw: bytes, sound_map: dict[str, str]) -> tuple[bytes, list
                 break
             notes.append((name, frame))
             pos = end + 3
-        if len(notes) == count and pos == len(raw) and any(name in keys for name, _ in notes):
+        # A mapped key may only occur inside a native sndnt# event name.
+        # Validate the section independently, then match whole event names
+        # below; a substring is not evidence of a malformed animation.
+        if len(notes) == count and pos == len(raw):
             candidates.append((start, notes))
     # Every candidate ends at the end of the file, so a shorter one is a tail of
     # the longest: a frame's high byte that equals the remaining note count
