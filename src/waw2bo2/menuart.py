@@ -200,8 +200,13 @@ def stage_art(settings, root: Path) -> None:
             # Optional full-screen loading art; stored like the other 2048 canvases.
             images['loading'] = Image.open(settings.menu_loading).convert('RGBA').resize((2048, 2048), Image.Resampling.LANCZOS)
             loading = 'loading'
+        preview = 'complete'
+        if getattr(settings, 'menu_preview', ''):
+            # Optional lobby map preview (menu_<project>_zclassic_default).
+            images['preview'] = Image.open(settings.menu_preview).convert('RGBA').resize((2048, 2048), Image.Resampling.LANCZOS)
+            preview = 'preview'
         bindings = {'map': 'large', 'map_blur': 'blur', 'blit': 'blit', 'icon': 'icon',
-                    'zclassic_default': 'complete'}
+                    'zclassic_default': preview}
         bindings.update({'loadscreen:' + suffix: loading for suffix in ('zclassic_default', 'zclassic_')})
         if aligned:
             # Stock location image (gametypestable column 6): the Blit cut at
