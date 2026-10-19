@@ -57,20 +57,36 @@ def composite_art(images: dict[str, Image.Image], *, blurred: bool = False) -> I
     return background
 
 
-def blit_center(blit: Image.Image) -> list[int]:
-    """Centre of the Blit's opaque area in the 1280 x 720 menu space (origin at
-    the screen centre), where aligned artwork is drawn full-frame. Placing the
-    start location there puts the selection on the Blit's object."""
-    alpha = blit.getchannel('A').resize((160, 90), Image.Resampling.BOX)
-    total = x_sum = y_sum = 0
-    for index, value in enumerate(alpha.getdata()):
-        y, x = divmod(index, alpha.width)
-        total += value
-        x_sum += value * (x + 0.5)
-        y_sum += value * (y + 0.5)
-    if not total:
-        return [0, 0]
-    return [round((x_sum / total / alpha.width - 0.5) * 1280), round((y_sum / total / alpha.height - 0.5) * 720)]
+# Start-location box in the 1280 x 720 menu space (SelectStartLocZombie's
+# default StartLocInfoWidth/Height); aligned artwork is drawn full-frame.
+START_BOX = (400, 200)
+
+
+def blit_window(blit: Image.Image, point: tuple[float, float] | None = None) -> tuple[list[int], Image.Image]:
+    """The 400 x 200 menu-space start-location box, as its centre (menu units
+    from the screen centre) and the Blit pixels inside it. The stock
+    start-location image (gametypestable column 6) is drawn in that box and
+    pulses when selected, so it must be the Blit cut at that position.
+
+    `point` (canvas pixels) centres the box on the authored subject; without
+    it the box goes where the Blit is densest, which can be scenery (Shi No
+    Numa's cutout includes a whole wall)."""
+    cols, rows = round(START_BOX[0] / 1280 * 160), round(START_BOX[1] / 720 * 90)
+    if point is not None:
+        left = min(max(round(point[0] / blit.width * 160 - cols / 2), 0), 160 - cols)
+        top = min(max(round(point[1] / blit.height * 90 - rows / 2), 0), 90 - rows)
+    else:
+        values = list(blit.getchannel('A').resize((160, 90), Image.Resampling.BOX).getdata())
+        best, (left, top) = -1, (0, 0)
+        for y0 in range(0, 90 - rows + 1):
+            for x0 in range(0, 160 - cols + 1):
+                total = sum(sum(values[(y0 + y) * 160 + x0:(y0 + y) * 160 + x0 + cols]) for y in range(rows))
+                if total > best:
+                    best, (left, top) = total, (x0, y0)
+    center = [round((left + cols / 2) / 160 * 1280 - 640), round((top + rows / 2) / 90 * 720 - 360)]
+    box = tuple(round(v) for v in (left / 160 * blit.width, top / 90 * blit.height,
+                                   (left + cols) / 160 * blit.width, (top + rows) / 90 * blit.height))
+    return center, blit.crop(box)
 
 
 def validate_art(settings) -> None:
@@ -168,10 +184,12 @@ def stage_art(settings, root: Path) -> None:
             # at a time; a separately streamed full-canvas Blit showed unfocused
             # but vanished on focus, leaving Blur's cutout black. Map is
             # Large + Blit; Map Blur is the focused view, sharp Blit over Blur.
-            data['start_location'] = blit_center(images['blit'])
+            point = getattr(settings, 'menu_location_point', '')
+            point = tuple(float(v) for v in point.split(',')) if point else None
+            data['start_location'], location = blit_window(images['blit'], point)
             images = {'large': complete, 'blur': composite_art(images, blurred=True), 'blit': images['blit']}
             images = {role: image.resize((2048, 2048), Image.Resampling.LANCZOS) for role, image in images.items()}
-            images['location'] = Image.new('RGBA', (512, 256))
+            images['location'] = location.resize((512, 256), Image.Resampling.LANCZOS)
         images['complete'] = complete.resize((2048, 2048), Image.Resampling.LANCZOS)
         images['icon'] = complete.resize((256, 256), Image.Resampling.LANCZOS)
         if getattr(settings, 'menu_icon', ''):
@@ -186,8 +204,8 @@ def stage_art(settings, root: Path) -> None:
                     'zclassic_default': 'complete'}
         bindings.update({'loadscreen:' + suffix: loading for suffix in ('zclassic_default', 'zclassic_')})
         if aligned:
-            # Transparent stock location image (gametypestable column 6): the
-            # baked map already shows the Blit in place.
+            # Stock location image (gametypestable column 6): the Blit cut at
+            # the start-location box, drawn and pulsed over the same spot.
             bindings['loc'] = 'location'
         for folder in ('materials', 'images'):
             (root / folder).mkdir(parents=True, exist_ok=True)

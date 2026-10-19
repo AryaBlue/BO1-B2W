@@ -91,8 +91,8 @@ class MenuArtworkTests(unittest.TestCase):
         self.assertIn('stringtable,zm/waw_menu_layers.csv', entries)
         self.assertIn('material,menu_zm_example_blit', entries)
         self.assertEqual(data['blit'], 'menu_zm_example_loc')
-        # The fixture's Blit square is centred on the canvas.
-        self.assertEqual(data['start_location'], [0, 0])
+        self.assertEqual(len(data['start_location']), 2)
+        self.assertEqual(data['texture_report']['location']['width'], 512)
         self.assertLess(len(data['blit']), 32)
         self.assertIn('material,menu_zm_example_loc', entries)
         report = data['texture_report']['blit']
@@ -105,11 +105,14 @@ class MenuArtworkTests(unittest.TestCase):
             binding = json.loads((self.root / f'project/materials/loadscreen_zm_example_{suffix}.json').read_text())
             self.assertEqual(binding['textures'][0]['image'], 'menu_zm_example_complete')
 
-    def test_blit_center_is_in_menu_units_from_the_screen_centre(self):
-        from waw2bo2.menuart import blit_center
-        blit = Image.new('RGBA', (160, 90))
-        blit.paste((255, 0, 0, 255), (120, 0, 160, 30))   # top-right corner block
-        self.assertEqual(blit_center(blit), [480, -240])
+    def test_location_box_sits_on_the_densest_blit_area(self):
+        from waw2bo2.menuart import blit_window
+        blit = Image.new('RGBA', (1280, 720))
+        blit.paste((255, 0, 0, 255), (880, 0, 1280, 200))   # top-right 400 x 200 block
+        center, crop = blit_window(blit)
+        self.assertEqual(center, [440, -260])
+        self.assertEqual(crop.size, (400, 200))
+        self.assertEqual(crop.getextrema()[3], (255, 255))
 
     def test_authored_icon_and_loading_art_replace_derived_images(self):
         self.aligned_artwork()

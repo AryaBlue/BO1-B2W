@@ -53,6 +53,7 @@ class Settings:
     menu_blur: str = ''
     menu_loading: str = ''
     menu_icon: str = ''
+    menu_location_point: str = ''
     menu_longitude: str = '0'
     menu_latitude: str = '0'
     loading_song: str = ''
