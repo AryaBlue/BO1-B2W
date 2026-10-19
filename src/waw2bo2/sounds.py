@@ -1002,7 +1002,11 @@ def t6_alias_rows(document: dict, weapon_aliases: set[str] | None = None,
 # "Invalid value for row N col 'DistMin' - 500000 [0, 65535]"): T6 stores
 # alias distances as 16-bit. Beyond 65535 units nothing in a map is farther,
 # so a larger WaW distance behaves the same at the T6 maximum.
-T6_COLUMN_RANGES = {"DistMin": (0, 65535), "DistMaxDry": (0, 65535), "DistMaxWet": (0, 65535)}
+# LoaderSoundBankT6 accepts at most 128 voices for both count columns.
+# WaW custom aliases can exceed that; retain the limit policy and report
+# saturation to the representable T6 range, just as for distances.
+T6_COLUMN_RANGES = {"DistMin": (0, 65535), "DistMaxDry": (0, 65535), "DistMaxWet": (0, 65535),
+                    "LimitCount": (0, 128), "EntityLimitCount": (0, 128)}
 # Integer columns in the native T6 loader. Volume columns accept fractional
 # dB SPL; rounding them as if they were percentages changes the source gain.
 T6_INT_COLUMNS = ("DistMin", "DistMaxDry", "DistMaxWet", "LimitCount",
