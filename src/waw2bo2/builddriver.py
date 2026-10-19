@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from contextlib import ExitStack
+import hashlib
 import json
 import shutil
 import struct
 import subprocess
 
-from . import all2raw, modelhitboxes, progress
+from . import __version__, all2raw, modelhitboxes, progress
 from .launcher import BuildPaths, Settings, cli_command
 from .resources import resource_root
 
@@ -53,6 +54,71 @@ def ensure_laa(linker: Path) -> None:
     if not flags & 0x20:
         struct.pack_into('<H', data, pe + 22, flags | 0x20)
         linker.write_bytes(data)
+
+
+# Staged text files a user may hand-edit to get past a failing step
+# (translated scripts, string tables, animtrees, entities/zone sources).
+EDITABLE_SUFFIXES = ('.gsc', '.csc', '.csv', '.atr', '.json', '.str', '.txt', '.cfg', '.menu')
+# rewritten by stage_art on every build, before staging
+REGENERATED_EACH_BUILD = {'menu.json'}
+
+
+def converter_digest() -> str:
+    """Identity of the converter code: a staged tree from another converter
+    version is never resumed."""
+    h = hashlib.sha256(__version__.encode())
+    package = Path(__file__).resolve().parent
+    for path in sorted(package.rglob('*')):
+        if path.suffix in ('.py', '.json') and path.is_file() and '__pycache__' not in path.parts:
+            h.update(path.relative_to(package).as_posix().encode() + b'\0' + path.read_bytes())
+    return h.hexdigest()
+
+
+def stage_fingerprint(args: list[str]) -> str:
+    # the stage-bridge command line names every input: map dumps (their
+    # folders are keyed by the fastfile stamps), game roots and flags
+    return hashlib.sha256(json.dumps([converter_digest(), args]).encode()).hexdigest()
+
+
+def editable_files(project_root: Path) -> dict[str, list[int]]:
+    if not project_root.is_dir():
+        return {}
+    return {p.relative_to(project_root).as_posix(): [p.stat().st_size, p.stat().st_mtime_ns]
+            for p in sorted(project_root.rglob('*'))
+            if p.suffix.lower() in EDITABLE_SUFFIXES and p.name not in REGENERATED_EACH_BUILD and p.is_file()}
+
+
+def stage_receipt(stage: Path) -> Path:
+    return stage / 'stage_receipt.json'
+
+
+def resumable_stage(stage: Path, project: str, fingerprint: str) -> tuple[bool, str]:
+    """Whether the last completed staging can be reused as it is (including
+    the user's edits to it). Returns (reusable, reason)."""
+    try:
+        receipt = json.loads(stage_receipt(stage).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return False, 'the last build did not finish staging'
+    if receipt.get('project') != project:
+        return False, 'the last staging was for another map name'
+    if receipt.get('fingerprint') != fingerprint:
+        return False, 'the map sources, build options or converter version changed since the last staging'
+    if not (stage / 'zone_raw' / project).is_dir():
+        return False, 'the staged files are missing'
+    return True, ''
+
+
+def edited_since_staging(stage: Path, project: str) -> tuple[list[str], list[str]]:
+    """Staged text files changed or removed since staging finished."""
+    try:
+        recorded = json.loads(stage_receipt(stage).read_text(encoding='utf-8')).get('files', {})
+    except (OSError, ValueError):
+        return [], []
+    current = editable_files(stage / 'zone_raw' / project)
+    changed = sorted(name for name, stat in current.items() if recorded.get(name) not in (None, stat))
+    changed += sorted(name for name in current if name not in recorded)
+    removed = sorted(name for name in recorded if name not in current)
+    return changed, removed
 
 
 def build(settings: Settings, *, redump: bool = False, root: Path | None = None,
@@ -136,7 +202,23 @@ def _build(settings: Settings, *, redump: bool = False, root: Path | None = None
     if settings.source_fx:
         args += ['--waw-mod-tools', settings.waw_tools, '--waw-source-fx',
                  '--waw-source-dumps', str(caches.waw / 'source')]
-    run(cli_command(*args))
+    fingerprint = stage_fingerprint(args)
+    reuse, reason = resumable_stage(stage, project, fingerprint) if settings.resume else (False, '')
+    if reuse:
+        changed, removed = edited_since_staging(stage, project)
+        print(f'== 2. resuming: keeping the staged files of the last build ({len(changed)} edited, '
+              f'{len(removed)} removed since staging)', flush=True)
+        for name in (changed + removed)[:20]:
+            print(f'   kept edit: zone_raw/{project}/{name}', flush=True)
+    else:
+        if settings.resume:
+            print(f'== 2. cannot resume: {reason}; staging again from the WaW sources', flush=True)
+        # staging rewrites zone_raw: a half-finished run must never be resumed
+        stage_receipt(stage).unlink(missing_ok=True)
+        run(cli_command(*args))
+        stage_receipt(stage).write_text(json.dumps({
+            'project': project, 'fingerprint': fingerprint,
+            'files': editable_files(stage / 'zone_raw' / project)}), encoding='utf-8')
     ensure_laa(linker)
     print('== 3a. linking gameplay mod.ff with the BO2 mod tools linker', flush=True)
     run(cli_command('build-mod', str(stage), project, '--bo2', str(bo2), '--work', str(mod),

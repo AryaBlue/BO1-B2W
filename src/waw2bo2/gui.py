@@ -56,6 +56,7 @@ class Launcher(ttk.Frame):
         self.bo2_stock_perks = tk.BooleanVar(value=self.settings.bo2_stock_perks)
         self.remaster = tk.BooleanVar(value=self.settings.remaster)
         self.redump = tk.BooleanVar(value=self.settings.redump)
+        self.resume = tk.BooleanVar(value=self.settings.resume)
         self.verbose = tk.BooleanVar(value=self.settings.verbose)
         self.status = tk.StringVar(value='Choose a WaW map to begin.')
         self.elapsed = tk.StringVar(value='Ready')
@@ -230,6 +231,9 @@ class Launcher(ttk.Frame):
         ttk.Label(build, text='Geometry · Scripts · Weapons · FX · Sounds', style='Muted.TLabel').pack(anchor='w')
         check = ttk.Checkbutton(build, text='Refresh source files (slower rebuild)', variable=self.redump)
         check.pack(anchor='w', pady=(8, 4))
+        self.action_widgets.append(check)
+        check = ttk.Checkbutton(build, text='Resume: keep my edits to the staged files (skip re-staging)', variable=self.resume)
+        check.pack(anchor='w', pady=(0, 4))
         self.action_widgets.append(check)
         check = ttk.Checkbutton(build, text='Use BO2 stock perks and machines (keeps the WaW Pack-a-Punch)', variable=self.bo2_stock_perks)
         check.pack(anchor='w', pady=(0, 4))
@@ -522,7 +526,7 @@ class Launcher(ttk.Frame):
     def _snapshot(self) -> Settings:
         return Settings(**{key: value.get().strip() for key, value in self.vars.items()},
                         source_fx=self.source_fx.get(), bo2_stock_perks=self.bo2_stock_perks.get(),
-                        remaster=self.remaster.get(), redump=self.redump.get(), verbose=self.verbose.get())
+                        remaster=self.remaster.get(), redump=self.redump.get(), resume=self.resume.get(), verbose=self.verbose.get())
 
     def _refresh(self):
         settings = self._snapshot()
