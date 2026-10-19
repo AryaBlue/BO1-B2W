@@ -49,6 +49,7 @@ PRECACHE = "maps\\mp\\waw\\_waw2bo2_precache"
 ONEWAY = "maps\\mp\\waw\\_waw2bo2_oneway"
 WATER_BULLETS = "maps\\mp\\waw\\_waw2bo2_water_bullets"
 ZOMBIEMODE = "maps\\_zombiemode"
+PERKS = "maps\\_zombiemode_perks"
 # the owned copy of BO2's _zm (stage_bo2_perk_support)
 OWNED_ZM = "maps\\mp\\waw\\_waw2bo2_zm"
 CORE_INCLUDES = ("common_scripts\\utility", "maps\\mp\\_utility", "maps\\mp\\zombies\\_zm_utility")
@@ -1939,6 +1940,34 @@ class Translator:
             self.post_calls.append(f"level thread {CORE}::{name}();")
         return names
 
+    def juggernog_hooks(self) -> list[str]:
+        """WaW's Juggernog, carried into the BO2 perk runtime.
+
+        WaW _zombiemode_perks sets player.maxhealth/health to 160 on the drink
+        and _zombiemode::main threads check_for_jugg_perk: every 0.5 s a
+        Juggernog player gains 40 health (3 during dog rounds), capped at 160.
+        The regen loop was never started in the port, so three zombie hits (60
+        each) downed a Juggernog player. The BO2 perk script, which also runs,
+        reapplies max health from zombie_vars["zombie_perk_juggernaut_health"],
+        which nothing set. The value and the loop both come from the source."""
+        calls = []
+        perks = self.sources.text.get(PERKS + ".gsc", "")
+        health = [int(n) for n in re.findall(r"\bplayer\.maxhealth\s*=\s*(\d+)\s*;", perks, re.IGNORECASE)
+                  if int(n) > 100]
+        if health:
+            calls.append(f'level.zombie_vars["zombie_perk_juggernaut_health"] = {health[0]};')
+            calls.append(f'level.zombie_vars["zombie_perk_juggernaut_health_upgrade"] = {health[0]};')
+            self.report.rewrites["WaW Juggernog health -> BO2 zombie_perk_juggernaut_health"] += 1
+        script = self.sources.get(ZOMBIEMODE)
+        main = script.functions.get("main") if script is not None else None
+        if main is not None and "check_for_jugg_perk" in script.functions and any(
+                r.name.lower() == "check_for_jugg_perk"
+                for r in gsc.references(script.tokens, main.body_open, main.body_close)):
+            name = self.extract_entry(ZOMBIEMODE, "check_for_jugg_perk")
+            calls.append(f"level thread {CORE}::{name}();")
+            self.report.rewrites["WaW check_for_jugg_perk regen -> started after _zm::init"] += 1
+        return calls
+
     def dog_rounds_hook(self) -> str | None:
         """WaW _zombiemode::main starts dog rounds through _zombiemode_dogs::init,
         which returns unless the map set level.dogs_enabled. BO2's _zm::init does
@@ -2407,6 +2436,7 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     # before the main is translated: waw_main_post makes these calls
     tr.extract_custom_intermission()
     tr.extract_end_game()
+    tr.post_calls += tr.juggernog_hooks()
     for name in sorted(actor_types):
         tr.want('aitype\\' + name)
     hint_registry = tr.extract_entry(r"maps\_zombiemode", "init_strings")
