@@ -42,3 +42,39 @@ class BarrierTests(unittest.TestCase):
             self.assertEqual(result['aligned'][0]['root_advance'], 16)
             barriers.align_native_boards(root, root)
             self.assertEqual(json.loads(path.read_text())['entities'], es)
+
+    def test_unnamed_boards_align_and_barrier_stands_tear_height_above_floor(self):
+        from waw2bo2.world import Brush, CollisionSummary, CollisionWorld, SubModel
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / 'raw/xanim').mkdir(parents=True)
+            (root / 'raw/xanim/repair').write_bytes(
+                struct.pack('<3H2BH2H3f', 19, 4, 1, 2, 2, 30, 0, 1, 30, 0, 40))
+            (root / 'raw/xanim' / barriers.TEAR_ANIM).write_bytes(
+                struct.pack('<3H2BH2H3f', 19, 4, 1, 2, 2, 30, 0, 1, 6, 0, -31))
+            # Project X: boards carry no number, the goal floats 16 above the floor
+            goal = {'targetname': 'exterior_goal', 'target': 'win', 'origin': '0 0 -552', 'angles': '0 0 0'}
+            boards = [{'classname': 'script_brushmodel', 'targetname': 'win', 'origin': '50 0 -506'},
+                      {'classname': 'script_brushmodel', 'targetname': 'win', 'script_noteworthy': 'window_south_1',
+                       'origin': '50 0 -490'},
+                      {'classname': 'script_brushmodel', 'targetname': 'win', 'script_noteworthy': 'clip',
+                       'origin': '200 0 -508'}]
+            barrier = {'classname': 'zbarrier_zmcore_BasicWoodBarrier', 'targetname': 'win',
+                       'origin': '0 0 -552', 'zbarriernumboards': '1', 'zbarrierboardanim1': 'repair'}
+            path = root / 'entities.json'
+            path.write_text(json.dumps({'entities': [goal, *boards, barrier]}))
+            # floor: one quad at -568, a sill brush at the wall the barrier must not land on
+            sill = Brush((40, -32, -568), (56, 32, -536), 1,
+                         [((-1, 0, 0), -40, 0), ((1, 0, 0), 56, 0), ((0, -1, 0), 32, 0),
+                          ((0, 1, 0), 32, 0), ((0, 0, -1), 568, 0), ((0, 0, 1), -536, 0)], [])
+            clip = CollisionWorld(CollisionSummary('m', 0, 4, 2, 1),
+                                  [(-500, -500, -568), (500, -500, -568), (500, 500, -568), (-500, 500, -568)],
+                                  [0, 1, 2, 0, 2, 3], brushes=[sill], submodels=[SubModel((0, 0, 0), (0, 0, 0), [])])
+            result = barriers.align_native_boards(root, root, clip)
+            es = json.loads(path.read_text())['entities']
+            origin = [float(x) for x in es[4]['origin'].split()]
+            self.assertAlmostEqual(origin[0], 20)  # boards (not the clip brush) at 50 - native 30
+            self.assertAlmostEqual(origin[2], -568 + 31)
+            self.assertAlmostEqual(result['aligned'][0]['lift'], 15)
+            barriers.align_native_boards(root, root, clip)
+            self.assertEqual(json.loads(path.read_text())['entities'], es)

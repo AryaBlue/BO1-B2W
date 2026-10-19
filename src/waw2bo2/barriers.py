@@ -4,6 +4,11 @@ import math
 import struct
 from pathlib import Path
 
+# Tear animation whose root height fixes the barrier origin above the floor.
+TEAR_ANIM = 'ai_zombie_boardtear_aligned_m_1_grab'
+# Search window for the floor below the WaW goal (goals sit 8-27 above it).
+FLOOR_ABOVE_GOAL, FLOOR_BELOW_GOAL = 8.0, 64.0
+
 
 def repaired_translation(path: Path) -> tuple[float, float, float]:
     """Final root translation of the measured T6 basic-board repair format.
@@ -45,24 +50,84 @@ def repaired_translation(path: Path) -> tuple[float, float, float]:
     return result
 
 
-def align_native_boards(bsp: Path, bo2: Path) -> dict:
+class Floor:
+    """Highest walkable collision at or below a height: world triangles and
+    solid world brushes of the WaW clip map."""
+
+    def __init__(self, clip):
+        import numpy as np
+        self.np = np
+        tris = np.asarray(clip.vertices, dtype=np.float64)[np.asarray(clip.indices, dtype=np.int64)]
+        self.tris = tris.reshape(-1, 3, 3)
+        self.lo, self.hi = self.tris.min(axis=1), self.tris.max(axis=1)
+        owned = {b for model in clip.submodels[1:] for b in model.brushes}
+        self.brushes = [b for i, b in enumerate(clip.brushes) if i not in owned and b.contents & 1]
+
+    def below(self, x: float, y: float, ceiling: float) -> float | None:
+        np, t = self.np, self.tris
+        hit = (self.lo[:, 0] <= x) & (x <= self.hi[:, 0]) & (self.lo[:, 1] <= y) & (y <= self.hi[:, 1])
+        a, b, c = t[hit, 0], t[hit, 1], t[hit, 2]
+        det = (b[:, 1] - c[:, 1]) * (a[:, 0] - c[:, 0]) + (c[:, 0] - b[:, 0]) * (a[:, 1] - c[:, 1])
+        ok = np.abs(det) > 1e-9
+        a, b, c, det = a[ok], b[ok], c[ok], det[ok]
+        l1 = ((b[:, 1] - c[:, 1]) * (x - c[:, 0]) + (c[:, 0] - b[:, 0]) * (y - c[:, 1])) / det
+        l2 = ((c[:, 1] - a[:, 1]) * (x - c[:, 0]) + (a[:, 0] - c[:, 0]) * (y - c[:, 1])) / det
+        l3 = 1 - l1 - l2
+        z = l1 * a[:, 2] + l2 * b[:, 2] + l3 * c[:, 2]
+        z = z[(np.minimum(np.minimum(l1, l2), l3) >= -1e-6) & (z <= ceiling)]
+        heights = [float(z.max())] if z.size else []
+        for brush in self.brushes:
+            if not (brush.mins[0] <= x <= brush.maxs[0] and brush.mins[1] <= y <= brush.maxs[1]):
+                continue
+            top, bottom = math.inf, -math.inf
+            for (nx, ny, nz), dist, _ in brush.planes:
+                rest = dist - nx * x - ny * y
+                if nz > 1e-6:
+                    top = min(top, rest / nz)
+                elif nz < -1e-6:
+                    bottom = max(bottom, rest / nz)
+                elif rest < -1e-3:
+                    break
+            else:
+                if bottom <= top <= ceiling:
+                    heights.append(top)
+        return max(heights) if heights else None
+
+
+def tear_root_height(bo2: Path) -> float:
+    """Height of zbarrier.origin above the attacking zombie's feet.
+
+    _zm_spawner plays every tear and entry animation with animscripted at
+    zbarrier.origin, and their root stays a constant ~31 units below it
+    (stock T6 xanims), so native barriers stand that far above the floor."""
+    return -repaired_translation(bo2 / 'raw/xanim' / TEAR_ANIM)[2]
+
+
+def align_native_boards(bsp: Path, bo2: Path, clip=None) -> dict:
     """Keep attack slots outside while matching the source boards' depth.
 
     T6 places its attack slots at the zbarrier origin, but its repair animation
     advances the boards about thirty units. The source entry struct is the
-    repair trigger, not the animated barrier's root.
+    repair trigger, not the animated barrier's root. Boards are the goal
+    group's brush models other than its "clip" brush: stock prefabs number
+    them, custom maps (Project X) leave them unnamed or name them freely.
+    With the WaW clip map, the origin is also lifted to the tear animations'
+    root height above the floor; WaW goals sit 8-27 units above it, which sank
+    zombies into the floor while tearing and after climbing in.
     """
     path = bsp / 'entities.json'
     data = json.loads(path.read_text())
     es = data['entities']
     poses, aligned, warnings = {}, [], []
+    floor = Floor(clip) if clip is not None else None
+    height = tear_root_height(bo2) if floor is not None else None
     for goal in es:
         if goal.get('targetname') != 'exterior_goal' or not goal.get('target'):
             continue
         group = [e for e in es if e.get('targetname') == goal['target']]
         native = [e for e in group if e.get('classname') == 'zbarrier_zmcore_BasicWoodBarrier']
         boards = [e for e in group if e.get('classname') == 'script_brushmodel'
-                  and e.get('script_noteworthy', '').isdigit()]
+                  and e.get('script_noteworthy') != 'clip']
         if len(native) != 1 or not boards:
             continue
         origin = tuple(float(x) for x in goal.get('origin', '0 0 0').split())
@@ -77,10 +142,20 @@ def align_native_boards(bsp: Path, bo2: Path) -> dict:
         source_depth = sum(depths) / len(depths)
         native_depth = sum(poses[name][0] for name in names) / len(names)
         shift = source_depth - native_depth
-        native[0]['origin'] = ' '.join(f'{origin[k] + forward[k] * shift:.9g}' for k in range(3))
+        root = [origin[k] + forward[k] * shift for k in range(3)]
+        entry = {'target': goal['target'], 'source_depth': source_depth,
+                 'native_repaired_depth': native_depth, 'root_advance': shift}
+        if floor is not None:
+            ground = floor.below(root[0], root[1], origin[2] + FLOOR_ABOVE_GOAL)
+            if ground is None or ground < origin[2] - FLOOR_BELOW_GOAL:
+                warnings.append(f"{goal['target']} at {goal.get('origin')}: no floor under the barrier; "
+                                f"height left at the WaW goal")
+            else:
+                entry['floor'], entry['lift'] = ground, ground + height - root[2]
+                root[2] = ground + height
+        native[0]['origin'] = ' '.join(f'{v:.9g}' for v in root)
         native[0]['angles'] = goal.get('angles', '0 0 0')
-        aligned.append({'target': goal['target'], 'source_depth': source_depth,
-                        'native_repaired_depth': native_depth, 'root_advance': shift})
+        aligned.append(entry)
     path.write_text(json.dumps(data, indent=1) + '\n', encoding='utf-8')
     return {'aligned': aligned, 'repair_poses': poses, 'warnings': warnings}
 
