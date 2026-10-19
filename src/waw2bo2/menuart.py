@@ -6,7 +6,7 @@ import json
 import warnings
 from functools import lru_cache
 from pathlib import Path
-from PIL import Image, ImageChops
+from PIL import Image
 from .iwi import dds_to_iwi
 
 SIZES = {'blit': (512, 256), 'large': (2048, 2048), 'blur': (2048, 2048)}
@@ -55,6 +55,38 @@ def composite_art(images: dict[str, Image.Image], *, blurred: bool = False) -> I
     else:
         background.alpha_composite(images['blit'].resize((320, 284), Image.Resampling.LANCZOS), (864, 882))
     return background
+
+
+# Start-location box in the 1280 x 720 menu space (SelectStartLocZombie's
+# default StartLocInfoWidth/Height); aligned artwork is drawn full-frame.
+START_BOX = (400, 200)
+
+
+def blit_window(blit: Image.Image, point: tuple[float, float] | None = None) -> tuple[list[int], Image.Image]:
+    """The 400 x 200 menu-space start-location box, as its centre (menu units
+    from the screen centre) and the Blit pixels inside it. The stock
+    start-location image (gametypestable column 6) is drawn in that box and
+    pulses when selected, so it must be the Blit cut at that position.
+
+    `point` (canvas pixels) centres the box on the authored subject; without
+    it the box goes where the Blit is densest, which can be scenery (Shi No
+    Numa's cutout includes a whole wall)."""
+    cols, rows = round(START_BOX[0] / 1280 * 160), round(START_BOX[1] / 720 * 90)
+    if point is not None:
+        left = min(max(round(point[0] / blit.width * 160 - cols / 2), 0), 160 - cols)
+        top = min(max(round(point[1] / blit.height * 90 - rows / 2), 0), 90 - rows)
+    else:
+        values = list(blit.getchannel('A').resize((160, 90), Image.Resampling.BOX).getdata())
+        best, (left, top) = -1, (0, 0)
+        for y0 in range(0, 90 - rows + 1):
+            for x0 in range(0, 160 - cols + 1):
+                total = sum(sum(values[(y0 + y) * 160 + x0:(y0 + y) * 160 + x0 + cols]) for y in range(rows))
+                if total > best:
+                    best, (left, top) = total, (x0, y0)
+    center = [round((left + cols / 2) / 160 * 1280 - 640), round((top + rows / 2) / 90 * 720 - 360)]
+    box = tuple(round(v) for v in (left / 160 * blit.width, top / 90 * blit.height,
+                                   (left + cols) / 160 * blit.width, (top + rows) / 90 * blit.height))
+    return center, blit.crop(box)
 
 
 def validate_art(settings) -> None:
@@ -134,7 +166,7 @@ def stage_art(settings, root: Path) -> None:
     # Always emit branding, including text-only/default builds. The stock UI
     # synthesizes location/mode keys even when no artwork was uploaded.
     data = {**{k: v for k, v in previous.items() if k not in
-               ('icon', 'blit', 'desktop_files', 'loading_song', 'layer_layout', 'layer_rawfiles', 'layer_materials', 'texture_report')},
+               ('icon', 'blit', 'desktop_files', 'loading_song', 'layer_layout', 'layer_rawfiles', 'layer_materials', 'texture_report', 'start_location')},
             'title': settings.menu_title.strip() or settings.project,
             'description': settings.menu_description.strip() or f'{settings.project}: World at War custom map',
             'longitude': coordinates[0], 'latitude': coordinates[1],
@@ -148,20 +180,38 @@ def stage_art(settings, root: Path) -> None:
         aligned = artwork_layout(images) == 'aligned'
         complete = composite_art(images)
         if aligned:
+            # Bake both menu states. Stock maps stream one full-screen map image
+            # at a time; a separately streamed full-canvas Blit showed unfocused
+            # but vanished on focus, leaving Blur's cutout black. Map is
+            # Large + Blit; Map Blur is the focused view, sharp Blit over Blur.
+            point = getattr(settings, 'menu_location_point', '')
+            point = tuple(float(v) for v in point.split(',')) if point else None
+            data['start_location'], location = blit_window(images['blit'], point)
+            images = {'large': complete, 'blur': composite_art(images, blurred=True), 'blit': images['blit']}
             images = {role: image.resize((2048, 2048), Image.Resampling.LANCZOS) for role, image in images.items()}
-            # At interpolated edges the background must still cover the screen.
-            # Both layers share source RGB there; retain partial coverage without an alpha seam.
-            edge = images['blit'].getchannel('A').point(lambda a: 255 if 0 < a < 255 else 0)
-            images['large'].putalpha(ImageChops.lighter(images['large'].getchannel('A'), edge))
-            images['blur'].putalpha(images['large'].getchannel('A'))
-            images['location'] = Image.new('RGBA', (4, 4))
+            images['location'] = location.resize((512, 256), Image.Resampling.LANCZOS)
         images['complete'] = complete.resize((2048, 2048), Image.Resampling.LANCZOS)
         images['icon'] = complete.resize((256, 256), Image.Resampling.LANCZOS)
+        if getattr(settings, 'menu_icon', ''):
+            # Optional authored globe signpost icon (mapstable column 4), transparent like stock.
+            images['icon'] = Image.open(settings.menu_icon).convert('RGBA').resize((256, 256), Image.Resampling.LANCZOS)
+        loading = 'complete'
+        if getattr(settings, 'menu_loading', ''):
+            # Optional full-screen loading art; stored like the other 2048 canvases.
+            images['loading'] = Image.open(settings.menu_loading).convert('RGBA').resize((2048, 2048), Image.Resampling.LANCZOS)
+            loading = 'loading'
+        preview = 'complete'
+        if getattr(settings, 'menu_preview', ''):
+            # Optional lobby map preview (menu_<project>_zclassic_default).
+            images['preview'] = Image.open(settings.menu_preview).convert('RGBA').resize((2048, 2048), Image.Resampling.LANCZOS)
+            preview = 'preview'
         bindings = {'map': 'large', 'map_blur': 'blur', 'blit': 'blit', 'icon': 'icon',
-                    'zclassic_default': 'complete'}
-        bindings.update({'loadscreen:' + suffix: 'complete' for suffix in ('zclassic_default', 'zclassic_')})
+                    'zclassic_default': preview}
+        bindings.update({'loadscreen:' + suffix: loading for suffix in ('zclassic_default', 'zclassic_')})
         if aligned:
-            bindings['location'] = 'location'
+            # Stock location image (gametypestable column 6): the Blit cut at
+            # the start-location box, drawn and pulsed over the same spot.
+            bindings['loc'] = 'location'
         for folder in ('materials', 'images'):
             (root / folder).mkdir(parents=True, exist_ok=True)
         report = {}

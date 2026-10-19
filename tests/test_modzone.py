@@ -193,6 +193,34 @@ class ModZoneTests(unittest.TestCase):
             with output.open() as stream:
                 self.assertEqual(rows, list(csv.reader(stream)))
 
+    def test_custom_location_row_precedes_stock_rows_with_its_location_name(self):
+        # SelectStartLocZombie reads location columns by (category 5, location
+        # name) only; zm_bus_test's "default" row came first (playlist_ffa).
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = root / "project"
+            project.mkdir()
+            (project / "menu.json").write_text(json.dumps({"title": "T", "description": "D",
+                "icon": "custom_icon", "blit": "custom_loc", "start_location": [99, 103]}))
+            stock = root / "stock.csv"
+            bus = ["5", "0", "zm_bus_test", "default", "C", "D", "playlist_ffa", "1", "-320", "-240"] + [""] * 14
+            with stock.open("w", newline="") as stream:
+                csv.writer(stream).writerows([[f"c{i}" for i in range(24)], ["maxnum_startloc", "1"], bus,
+                    ["startloc_gamemode_map", "1"],
+                    ["6", "0", "zm_bus_test", "default", "zclassic", "0", "left", "YES"] + [""] * 16])
+            output = modzone.stage_lobby_gametype_table(stock, project, "zm_custom")
+            with output.open() as stream:
+                rows = list(csv.reader(stream))
+            first = next(r for r in rows if r and r[0] == "5" and r[3] == "default")
+            self.assertEqual(first[2], "zm_custom")
+            self.assertEqual([r[2] for r in rows if r and r[0] in ("5", "6") and r[3] == "default"],
+                             ["zm_custom", "zm_custom"])
+            self.assertEqual({r[3] for r in rows if len(r) > 3 and r[2] == "zm_bus_test"}, {"zm_bus_test"})
+            self.assertEqual(first[6], "custom_loc")
+            self.assertEqual(first[8:12], ["99", "103", "279", "53"])
+            self.assertEqual(first[17:19], ["199", "13"])
+            self.assertEqual(next(r[1] for r in rows if r[0] == "maxnum_startloc"), "2")
+
     def test_custom_map_has_persistent_numeric_globe_metadata(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

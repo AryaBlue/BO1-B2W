@@ -65,6 +65,15 @@ class HudTechniqueTests(unittest.TestCase):
         out = techsets.build_material(wire_only, donor, [])
         self.assertEqual([s["cullFace"] for s in out["stateBits"]], ["back"])
 
+    def test_no_marks_follows_the_source(self):
+        # wc/water_sumpf_muddy_green: WaW gameFlags 4,10; the donor had 2,10, so
+        # blood decals stuck to the water surface.
+        donor = {"techniqueSet": "wc_water_x", "textures": [], "gameFlags": ["2", "10"]}
+        out = techsets.build_material({"gameFlags": ["4", "10"]}, donor, [])
+        self.assertEqual(out["gameFlags"], ["2", "10", "NO_MARKS"])
+        marked = dict(donor, gameFlags=["NO_MARKS", "10"])
+        self.assertEqual(techsets.build_material({"gameFlags": ["10"]}, marked, [])["gameFlags"], ["10"])
+
 
 if __name__ == "__main__":
     unittest.main()

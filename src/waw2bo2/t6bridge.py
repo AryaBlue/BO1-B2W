@@ -35,7 +35,7 @@ from pathlib import Path
 from .resources import resource_root
 from . import clientport, progress, viewmodels, zombiebehavior
 
-from . import assetresolve, audio, entities, wawtext, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, materialisolation, oneway, paths, projectilecollision, scorebehavior, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones
+from . import assetresolve, audio, entities, wawtext, fx, fxmap, fxmaterials, gscport, hulls, iwi, lighting, lightmaps, localization, materialisolation, oneway, paths, projectilecollision, scorebehavior, shaderruntime, shaders, sounds, t6api, techsets, visions, wawassets, wawsource, wavelet, weapons, zones, waterbullets
 from .fbx import collision_material_slots, collision_slot_models, water_only, write_collision_fbx, write_world_fbx
 from .world import layer_formats_from_strides, read_collision, read_gfx_world
 
@@ -1164,6 +1164,23 @@ def stage_scripts(report: StageReport, project: str, project_root: Path,
         report.warnings.append(f"script {dst.name} generated from template {src.name}")
 
 
+def stage_water_bullets(report: StageReport, clip, roots: list[Path], project_root: Path,
+                        weapon_table: dict[str, str]) -> None:
+    """Continue player bullets through WaW water (waterbullets: T6 drops their damage)."""
+    rows = {}
+    if waterbullets.has_water(clip):
+        table = _find(roots, waterbullets.PENETRATION_TABLE)
+        if table is None:
+            report.warnings.append(f"WATER_BULLETS_NO_TABLE {waterbullets.PENETRATION_TABLE.as_posix()} in no "
+                                   f"source root; bullets stop at the water")
+        else:
+            depths = waterbullets.water_depths(table.read_text(encoding="utf-8", errors="replace"))
+            rows = waterbullets.weapon_rows(project_root / "content_source", weapon_table, depths)
+            report.content["water_bullets"] = {"depths": depths, "weapons": sorted(rows)}
+    (project_root / "maps" / "mp" / "waw" / "_waw2bo2_water_bullets.gsc").write_text(
+        waterbullets.water_bullets_source(rows), encoding="utf-8")
+
+
 def stage_rawfiles(report: StageReport, project_root: Path, bo2_root: Path | None) -> None:
     rel = Path("animtrees") / "fxanim_props.atr"
     dst = project_root / rel
@@ -1784,6 +1801,7 @@ def stage_bridge(stage: Path, project: str, gfx_bin: Path, clip_bin: Path, stock
     environment = flame_environment_source(environment, project_root / 'content_source')
     weapon_runtime = project_root / 'content_source/weapons.runtime.json'
     weapon_table = json.loads(weapon_runtime.read_text())['table'] if weapon_runtime.is_file() else {}
+    stage_water_bullets(report, clip, roots, project_root, weapon_table)
     client_sound_names = zone_sound_names | compiled_sound_names | ({n for kinds in stock_waw.index.values()
         for n in kinds.get('sound', [])} if stock_waw else set())
     tesla_client = clientport.stage_tesla(roots, project_root, report.fx_table, weapon_table, client_sound_names)

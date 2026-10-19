@@ -36,7 +36,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import gsc, oneway, stockperks, zombieappearance, zombiebehavior
+from . import gsc, oneway, stockperks, waterbullets, zombieappearance, zombiebehavior
 from .t6api import T6Api
 
 COMPAT_DIR = Path(__file__).parent / "compat"
@@ -47,6 +47,7 @@ ASSETS = "maps\\mp\\waw\\_waw2bo2_assets"
 CORE = "maps\\mp\\waw\\_waw2bo2_core"
 PRECACHE = "maps\\mp\\waw\\_waw2bo2_precache"
 ONEWAY = "maps\\mp\\waw\\_waw2bo2_oneway"
+WATER_BULLETS = "maps\\mp\\waw\\_waw2bo2_water_bullets"
 ZOMBIEMODE = "maps\\_zombiemode"
 # the owned copy of BO2's _zm (stage_bo2_perk_support)
 OWNED_ZM = "maps\\mp\\waw\\_waw2bo2_zm"
@@ -2250,7 +2251,7 @@ class Translator:
                       "".join(f"\n\t{call}" for call in self.post_calls))
         tokens[fn.start].text = "waw_main_pre"
         tokens[fn.body_open].text = ("{\n\t" + f"{COMPAT}::init();\n\t{CORE}::framework_level_state();"
-                                     f"\n\t{PRECACHE}::init();\n\t{ONEWAY}::init();")
+                                     f"\n\t{PRECACHE}::init();\n\t{ONEWAY}::init();\n\t{WATER_BULLETS}::init();")
         split = None
         for ref in gsc.references(tokens, fn.body_open, fn.body_close):
             if ref.qualifier is not None and norm(ref.qualifier) == "maps\\_zombiemode" and ref.name.lower() == "main":
@@ -2593,6 +2594,8 @@ def port_map(sources: Sources, api: T6Api, map_name: str, out_root: Path,
     (out_dir / "_waw2bo2_precache.gsc").write_text(precache_source([]), encoding="utf-8")
     # one-way clip sheets come from the collision (t6bridge.port_scripts)
     (out_dir / "_waw2bo2_oneway.gsc").write_text(oneway.oneway_source([]), encoding="utf-8")
+    # filled from the water brushes and weapon runtime by t6bridge.stage_bridge
+    (out_dir / "_waw2bo2_water_bullets.gsc").write_text(waterbullets.water_bullets_source({}), encoding="utf-8")
     if appearance:
         (out_dir / "_waw2bo2_characters.gsc").write_text(characters_source(), encoding="utf-8")
     (out_dir / "_waw2bo2_weapons.gsc").write_text(weapons_source(registration), encoding="utf-8")

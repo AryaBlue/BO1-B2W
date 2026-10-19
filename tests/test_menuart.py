@@ -90,16 +90,45 @@ class MenuArtworkTests(unittest.TestCase):
         self.assertIn('rawfile,ui_mp/t6/zombie/waw_gamemap_base.lua', entries)
         self.assertIn('stringtable,zm/waw_menu_layers.csv', entries)
         self.assertIn('material,menu_zm_example_blit', entries)
-        self.assertEqual(data['blit'], 'menu_zm_example_location')
-        for role in ('large', 'blur', 'blit'):
-            report = data['texture_report'][role]
-            self.assertEqual(report['format'], 'DXT5')
-            self.assertEqual(report['bytes'], 2048 * 2048 + 64)
-        self.assertEqual(data['texture_report']['complete']['format'], 'DXT1')
+        self.assertEqual(data['blit'], 'menu_zm_example_loc')
+        self.assertEqual(len(data['start_location']), 2)
+        self.assertEqual(data['texture_report']['location']['width'], 512)
+        self.assertLess(len(data['blit']), 32)
+        self.assertIn('material,menu_zm_example_loc', entries)
+        report = data['texture_report']['blit']
+        self.assertEqual((report['format'], report['bytes']), ('DXT5', 2048 * 2048 + 64))
+        # Both states are baked: the cutout is filled in Map and in Map Blur.
+        for role in ('large', 'blur', 'complete'):
+            self.assertEqual(data['texture_report'][role]['format'], 'DXT1')
         self.assertLess(sum(r['bytes'] for r in data['texture_report'].values()), 16 * 1024 * 1024)
         for suffix in ('zclassic_default',):
             binding = json.loads((self.root / f'project/materials/loadscreen_zm_example_{suffix}.json').read_text())
             self.assertEqual(binding['textures'][0]['image'], 'menu_zm_example_complete')
+
+    def test_location_box_sits_on_the_densest_blit_area(self):
+        from waw2bo2.menuart import blit_window
+        blit = Image.new('RGBA', (1280, 720))
+        blit.paste((255, 0, 0, 255), (880, 0, 1280, 200))   # top-right 400 x 200 block
+        center, crop = blit_window(blit)
+        self.assertEqual(center, [440, -260])
+        self.assertEqual(crop.size, (400, 200))
+        self.assertEqual(crop.getextrema()[3], (255, 255))
+
+    def test_authored_icon_and_loading_art_replace_derived_images(self):
+        self.aligned_artwork()
+        Image.new('RGBA', (64, 64), (200, 0, 0, 128)).save(self.root / 'icon.png')
+        Image.new('RGB', (160, 90), (0, 200, 0)).save(self.root / 'loading.png')
+        self.settings.menu_icon, self.settings.menu_loading = str(self.root / 'icon.png'), str(self.root / 'loading.png')
+        self.settings.menu_preview = str(self.root / 'loading.png')
+        stage_art(self.settings, self.root / 'project')
+        data = json.loads((self.root / 'project/menu.json').read_text())
+        self.assertEqual(data['texture_report']['icon']['format'], 'DXT5')
+        self.assertEqual(data['texture_report']['loading']['format'], 'DXT1')
+        for suffix in ('zclassic_default', 'zclassic_'):
+            binding = json.loads((self.root / f'project/materials/loadscreen_zm_example_{suffix}.json').read_text())
+            self.assertEqual(binding['textures'][0]['image'], 'menu_zm_example_loading')
+        binding = json.loads((self.root / 'project/materials/menu_zm_example_zclassic_default.json').read_text())
+        self.assertEqual(binding['textures'][0]['image'], 'menu_zm_example_preview')
 
     def test_replacing_aligned_with_stock_removes_runtime(self):
         self.aligned_artwork()
