@@ -62,6 +62,16 @@ def composite_art(images: dict[str, Image.Image], *, blurred: bool = False) -> I
 START_BOX = (400, 200)
 
 
+def fit_aspect(image: Image.Image, aspect: float) -> Image.Image:
+    """Centre crop to width / height == aspect."""
+    width, height = image.size
+    if width / height > aspect:
+        keep = round(height * aspect)
+        return image.crop(((width - keep) // 2, 0, (width - keep) // 2 + keep, height))
+    keep = round(width / aspect)
+    return image.crop((0, (height - keep) // 2, width, (height - keep) // 2 + keep))
+
+
 def blit_window(blit: Image.Image, point: tuple[float, float] | None = None) -> tuple[list[int], Image.Image]:
     """The 400 x 200 menu-space start-location box, as its centre (menu units
     from the screen centre) and the Blit pixels inside it. The stock
@@ -155,6 +165,8 @@ def stage_art(settings, root: Path) -> None:
                 (root / relative).unlink(missing_ok=True)
         from .menulayers import clear_runtime
         clear_runtime(root, previous)
+        from . import menupreview
+        menupreview.clear_runtime(root, previous)
     if not any((settings.menu_title, settings.menu_description, getattr(settings, 'menu_mode', ''),
                 getattr(settings, 'menu_location', ''), settings.menu_blit, settings.loading_song, any(coordinates))):
         # Remove only metadata previously created by this launcher.
@@ -166,7 +178,7 @@ def stage_art(settings, root: Path) -> None:
     # Always emit branding, including text-only/default builds. The stock UI
     # synthesizes location/mode keys even when no artwork was uploaded.
     data = {**{k: v for k, v in previous.items() if k not in
-               ('icon', 'blit', 'desktop_files', 'loading_song', 'layer_layout', 'layer_rawfiles', 'layer_materials', 'texture_report', 'start_location')},
+               ('icon', 'blit', 'desktop_files', 'loading_song', 'layer_layout', 'layer_rawfiles', 'layer_materials', 'texture_report', 'start_location', 'preview_layout', 'preview_rawfiles')},
             'title': settings.menu_title.strip() or settings.project,
             'description': settings.menu_description.strip() or f'{settings.project}: World at War custom map',
             'longitude': coordinates[0], 'latitude': coordinates[1],
@@ -200,11 +212,13 @@ def stage_art(settings, root: Path) -> None:
             # Optional full-screen loading art; stored like the other 2048 canvases.
             images['loading'] = Image.open(settings.menu_loading).convert('RGBA').resize((2048, 2048), Image.Resampling.LANCZOS)
             loading = 'loading'
-        preview = 'complete'
-        if getattr(settings, 'menu_preview', ''):
-            # Optional lobby map preview (menu_<project>_zclassic_default).
-            images['preview'] = Image.open(settings.menu_preview).convert('RGBA').resize((2048, 2048), Image.Resampling.LANCZOS)
-            preview = 'preview'
+        # Lobby map preview (menu_<project>_zclassic_default): the authored
+        # picture, else the completed menu art, cut to the full frame's shape
+        # (menupreview) so it is neither stretched nor squashed.
+        from .menupreview import ASPECT
+        source = Image.open(settings.menu_preview).convert('RGBA') if getattr(settings, 'menu_preview', '') else complete
+        images['preview'] = fit_aspect(source, ASPECT).resize((2048, 2048), Image.Resampling.LANCZOS)
+        preview = 'preview'
         bindings = {'map': 'large', 'map_blur': 'blur', 'blit': 'blit', 'icon': 'icon',
                     'zclassic_default': preview}
         bindings.update({'loadscreen:' + suffix: loading for suffix in ('zclassic_default', 'zclassic_')})
@@ -231,6 +245,8 @@ def stage_art(settings, root: Path) -> None:
         if aligned:
             from .menulayers import stage_runtime
             data.update(stage_runtime(Path(settings.bo2), root, settings.project))
+        from . import menupreview
+        data.update(menupreview.stage_runtime(Path(settings.bo2), root, settings.project))
     data['desktop_files'] = generated
     song = stage_song(settings, root)
     if song:
