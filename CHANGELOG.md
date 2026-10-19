@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add **Resume: keep my edits to the staged files** to Build Map (off by default). Every build re-stages the map, which translates the WaW scripts again into `stage/zone_raw/<map>/`, so a hand fix to a staged file that failed script compilation or linking was overwritten on the next build. **Refresh source files** only re-extracts the WaW fastfiles. With Resume on, a build whose map sources, options and converter version match the last finished staging skips staging, lists the edited files, and reruns linking, script compilation and the audits. See [Desktop app](docs/DESKTOP.md).
+- Give menu artwork its own launcher section, **Map Details & Artwork**, with in-game previews drawn in BO2's menu space: a rotatable globe (click to place the map), map selection and focused selection (click to place the start location), the lobby preview frame and the loading screen. Stock textures are read from the user's BO2 install; nothing from the game ships.
+- Fill the whole Custom Games lobby preview frame for converted maps. Stock ZM leaves a strip under the picture to the frame's dark gradient, so a converted map's picture looked cut off by a black bar. Stock maps keep the stock layout.
+- Carry WaW's Juggernog health and regeneration into the port: 160 health, regaining 40 every 0.5 s (3 during dog rounds). The port never started WaW's loop, so three zombie hits downed a Juggernog player.
+
 - Fix Hotel of Hell and other maps failing to build with `raw animation has no valid notification suffix` when a weapon sound-map key occurs inside an existing `sndnt#` event. Sound translation now matches complete event names after validating the notification section, preserving existing native events.
 - Fit converted sound voice counts to the BO2 linker's maximum of 128, reporting every changed count in `sounds.bank.json`. WaW aliases with counts of 256 previously stopped Hotel of Hell at soundbank linking.
 
