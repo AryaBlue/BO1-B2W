@@ -1,4 +1,4 @@
-"""Rebuild the checked-in T6 32-bit menu wrapper using hksc configured for T6."""
+"""Rebuild a checked-in T6 32-bit menu wrapper using hksc configured for T6."""
 import argparse
 import hashlib
 import json
@@ -9,9 +9,10 @@ import subprocess
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('compiler', type=Path)
+    parser.add_argument('wrapper', nargs='?', default='menu_layers', help='menu_layers or menu_preview')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    source = Path('src/waw2bo2/compat/menu_layers.lua')
+    source = Path(f'src/waw2bo2/compat/{args.wrapper}.lua')
     binary = source.with_suffix('.luac')
     subprocess.run([str(args.compiler.resolve()), '-mwindows', '-m32', '-s', '-o', str(binary), str(source)], cwd=root, check=True)
     subprocess.run([str(args.compiler.resolve()), '-mwindows', '-m32', '-b', '-p', str(binary)], cwd=root, check=True)

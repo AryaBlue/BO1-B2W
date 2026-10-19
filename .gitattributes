@@ -1,3 +1,5 @@
 # The compiled menu wrapper manifest hashes the Lua source bytes.
 src/waw2bo2/compat/menu_layers.lua text eol=lf
 src/waw2bo2/compat/menu_layers.luac binary
+src/waw2bo2/compat/menu_preview.lua text eol=lf
+src/waw2bo2/compat/menu_preview.luac binary

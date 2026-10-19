@@ -17,6 +17,13 @@ class MenuArtworkTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.settings = Settings(project='zm_example', menu_title='Example Town', menu_description='Survive the town.')
+        # Installed game's lobby preview widget (wrapped for every authored map).
+        from waw2bo2 import menupreview
+        self.settings.bo2 = str(self.root / 'bo2')
+        stock = self.root / 'bo2/raw' / menupreview.RUNTIME
+        stock.parent.mkdir(parents=True)
+        compiled = Path(menupreview.__file__).parent / 'compat/menu_preview.luac'
+        stock.write_bytes(compiled.read_bytes()[:16] + b'stock-mapinfoimage')
 
     def artwork(self):
         for role, size in SIZES.items():
@@ -129,6 +136,37 @@ class MenuArtworkTests(unittest.TestCase):
             self.assertEqual(binding['textures'][0]['image'], 'menu_zm_example_loading')
         binding = json.loads((self.root / 'project/materials/menu_zm_example_zclassic_default.json').read_text())
         self.assertEqual(binding['textures'][0]['image'], 'menu_zm_example_preview')
+
+    def test_lobby_preview_fills_the_frame_for_authored_maps(self):
+        from waw2bo2 import menupreview
+        self.artwork()
+        Image.new('RGB', (1920, 1080), (0, 90, 0)).save(self.root / 'preview.png')
+        self.settings.menu_preview = str(self.root / 'preview.png')
+        project = self.root / 'project'
+        stage_art(self.settings, project)
+        data = json.loads((project / 'menu.json').read_text())
+        self.assertEqual(data['preview_layout'], 'full')
+        self.assertEqual((project / menupreview.BASE).read_bytes()[16:], b'stock-mapinfoimage')
+        self.assertEqual((project / menupreview.RUNTIME).read_bytes(),
+                         (Path(menupreview.__file__).parent / 'compat/menu_preview.luac').read_bytes())
+        self.assertEqual((project / menupreview.TABLE).read_text().strip(), 'zm_example')
+        entries = stage_menu_assets(project, 'zm_example')
+        for name in (menupreview.BASE, menupreview.RUNTIME):
+            self.assertIn(f'rawfile,{name}', entries)
+        self.assertIn(f'stringtable,{menupreview.TABLE}', entries)
+        # Clearing the artwork removes the wrapper again.
+        for role in SIZES:
+            setattr(self.settings, 'menu_' + role, '')
+        stage_art(self.settings, project)
+        self.assertFalse((project / menupreview.RUNTIME).exists())
+
+    def test_preview_is_cut_to_the_frame_shape(self):
+        from waw2bo2.menuart import fit_aspect
+        from waw2bo2.menupreview import ASPECT
+        wide = fit_aspect(Image.new('RGB', (1920, 1080)), ASPECT)
+        self.assertEqual(wide.size, (round(1080 * ASPECT), 1080))
+        tall = fit_aspect(Image.new('RGB', (1000, 1000)), ASPECT)
+        self.assertEqual(tall.size, (1000, round(1000 / ASPECT)))
 
     def test_replacing_aligned_with_stock_removes_runtime(self):
         self.aligned_artwork()

@@ -48,6 +48,18 @@ read back through those table lookups must fit a 32-byte buffer, and
 Switching to stock artwork removes these generated overrides. Both frontend zones
 register the runtime and layer table.
 
+Every authored map also gets a full-frame lobby preview. Stock ZM draws the
+Custom Games preview (`CoD.MapInfoImage.mapImage`) 294 × 136 and leaves the
+46-unit strip below it to the frame's translucent dark gradient behind the map
+name. The build wraps the installed game's `ui/t6/mapinfoimage.lua` (original
+bytecode kept as `ui/t6/waw_mapinfoimage_base.lua`): for maps listed in
+`zm/waw_menu_preview.csv` the picture extends under that strip, so it fills the
+whole 294 × 182 frame with the name drawn over it. Stock maps keep the stock
+layout. The preview image (`menu_preview`, else the completed art) is centre
+cropped to the frame's 294:182 shape. Rebuild its bytecode with
+`python tools/compile_menu_layers.py /path/to/hksc menu_preview`;
+`tests/menu_preview_runtime.lua` checks the layout with a stub UI.
+
 The checked-in `compat/menu_layers.lua` and `.luac` have paired SHA-256 hashes;
 staging rejects stale bytecode or a mismatching VM header. Recompile changes with
 `python tools/compile_menu_layers.py /path/to/hksc`, using hksc configured with

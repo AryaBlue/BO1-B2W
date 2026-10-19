@@ -254,7 +254,7 @@ def activate_mod_shaders(ff: Path, project: Path, work: Path, linker: Path, unli
     # Stringtables must also override loaded/stock assets. The linker's
     # independent search paths are sorted, so adding a project path beside
     # BO2's raw path is insufficient to guarantee source priority.
-    for name in ('mapstable.csv', 'gametypestable.csv', 'zm_statstable.csv', 'waw_menu_layers.csv'):
+    for name in ('mapstable.csv', 'gametypestable.csv', 'zm_statstable.csv', 'waw_menu_layers.csv', 'waw_menu_preview.csv'):
         source = project / 'zm' / name
         if source.is_file():
             target = overlay / 'zm' / name
@@ -262,7 +262,7 @@ def activate_mod_shaders(ff: Path, project: Path, work: Path, linker: Path, unli
             shutil.copy2(source, target)
     # Explicit project rawfiles must override both stock disk inputs and the
     # loaded baseline (notably the corrected stock overheat HUD bytecode).
-    for source in (project / 'ui_mp').rglob('*.lua'):
+    for source in [*(project / 'ui_mp').rglob('*.lua'), *(project / 'ui').rglob('*.lua')]:
         target = overlay / source.relative_to(project)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
@@ -604,6 +604,12 @@ def stage_menu_assets(project_root: Path, project: str) -> list[str]:
             if not (project_root / name).is_file():
                 raise FileNotFoundError(f'aligned menu runtime missing: {name}')
         assets += [f'rawfile,{BASE}', f'rawfile,{RUNTIME}', f'stringtable,{TABLE}']
+    if data.get('preview_layout') == 'full':
+        from . import menupreview
+        for name in (menupreview.BASE, menupreview.RUNTIME, menupreview.TABLE):
+            if not (project_root / name).is_file():
+                raise FileNotFoundError(f'full-frame lobby preview runtime missing: {name}')
+        assets += [f'rawfile,{menupreview.BASE}', f'rawfile,{menupreview.RUNTIME}', f'stringtable,{menupreview.TABLE}']
     streaming_file = project_root / 'images/streaming.json'
     streaming = json.loads(streaming_file.read_text()) if streaming_file.is_file() else {'streamingMode': {}}
     for name in names:
