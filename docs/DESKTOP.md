@@ -59,6 +59,18 @@ source changes invalidate that source's dump. The updated Extract All workflow
 checks stock cache freshness at build time and automatically prepares missing
 or stale caches. See [Extract All](EXTRACT_ALL.md).
 Select **Refresh source files** to force a fresh extraction when troubleshooting.
+It only re-extracts the WaW fastfiles; every build still re-stages the map,
+which rewrites the translated files under `stage/zone_raw/<map>/` (scripts in
+`maps/mp/waw/` are deleted and translated again from the WaW sources).
+
+To get past a failing step by editing those staged files (for example
+commenting out a line the BO2 script compiler rejects), edit them in
+`<work>/<map>_<id>/stage/zone_raw/<map>/`, then build again with **Resume: keep
+my edits to the staged files**. The build skips staging and reruns linking,
+script compilation and the audits. Resume falls back to a full staging (and
+says why) when the last staging did not finish, or when the map sources, build
+options or converter version changed since; your edits are then replaced.
+Edits made in `mod_build/` or `package/` are always regenerated.
 Installed maps live in `%LOCALAPPDATA%/Plutonium/storage/t6/mods/<map>/`.
 
 ## Run from source

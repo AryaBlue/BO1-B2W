@@ -11,7 +11,7 @@ from waw2bo2 import builddriver
 from waw2bo2.launcher import BuildPaths, Settings
 
 
-class BuildDriverTests(unittest.TestCase):
+class BuildWorkspace:
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -47,6 +47,8 @@ class BuildDriverTests(unittest.TestCase):
             'map': self.root / 'source_map', 'mod': self.root / 'source_mod',
             'patch': self.root / 'source_patch'}).start()
 
+
+class BuildDriverTests(BuildWorkspace, unittest.TestCase):
     def test_pipeline_preserves_sources_runs_audits_and_never_installs(self):
         commands = []
         paths = BuildPaths.for_settings(self.settings)
@@ -168,3 +170,75 @@ class WorldNameTests(unittest.TestCase):
                 (maps / f'{name}.d3dbsp.gfx.bin').write_bytes(b'')
             with self.assertRaisesRegex(RuntimeError, 'several map worlds'):
                 builddriver.world_name(Path(tmp), 'mod')
+
+
+class ResumeTests(BuildWorkspace, unittest.TestCase):
+    """Resume keeps the last staging (and the user's edits to it) and reruns
+    the steps after it; it never reuses a staging from other inputs."""
+    def _pipeline(self, settings, *, fail=None):
+        commands = []
+        paths = BuildPaths.for_settings(settings)
+        script = paths.stage / 'zone_raw/zm_bankjob/maps/mp/waw/_zombiemode_spawner.gsc'
+        def fake_run(command, log=None):
+            commands.append(command)
+            if fail and fail in command:
+                raise RuntimeError(fail + ' failed')
+            if 'stage-bridge' in command:
+                script.parent.mkdir(parents=True, exist_ok=True)
+                script.write_text('// translated from WaW\n')
+            if 'bridge-link' in command:
+                for ff in (paths.stage / 'zone_out/zm_bankjob/zm_bankjob.ff', paths.mod / 'out/mod.ff'):
+                    ff.parent.mkdir(parents=True, exist_ok=True)
+                    ff.touch()
+        with patch.object(builddriver, 'run', side_effect=fake_run):
+            if fail:
+                with self.assertRaisesRegex(RuntimeError, fail):
+                    builddriver.build(settings)
+            else:
+                self.assertEqual(builddriver.build(settings), 0)
+        return [name for name in ('stage-bridge', 'build-mod', 'compile-scripts', 'bridge-link')
+                if any(name in command for command in commands)], script
+
+    def test_resume_keeps_edited_staged_scripts_and_reruns_later_steps(self):
+        from dataclasses import replace
+        steps, script = self._pipeline(self.settings, fail='compile-scripts')
+        self.assertEqual(steps, ['stage-bridge', 'build-mod', 'compile-scripts'])
+        script.write_text('// user commented out the failing line\n')
+        resume = replace(self.settings, resume=True)
+        with patch('sys.stdout') as out:
+            steps, _ = self._pipeline(resume)
+        self.assertEqual(steps, ['build-mod', 'compile-scripts', 'bridge-link'])
+        self.assertEqual(script.read_text(), '// user commented out the failing line\n')
+        printed = ''.join(str(c.args[0]) for c in out.write.call_args_list if c.args)
+        self.assertIn('1 edited', printed)
+        self.assertIn('maps/mp/waw/_zombiemode_spawner.gsc', printed)
+
+    def test_default_build_always_restages(self):
+        _, script = self._pipeline(self.settings)
+        script.write_text('// edit\n')
+        steps, _ = self._pipeline(self.settings)
+        self.assertEqual(steps[0], 'stage-bridge')
+        self.assertEqual(script.read_text(), '// translated from WaW\n')
+
+    def test_changed_options_or_failed_staging_are_never_resumed(self):
+        from dataclasses import replace
+        self._pipeline(self.settings)
+        # another build option changes the stage-bridge inputs
+        steps, _ = self._pipeline(replace(self.settings, resume=True, remaster=True))
+        self.assertEqual(steps[0], 'stage-bridge')
+        # a staging that failed half-way leaves no receipt to resume from
+        self._pipeline(self.settings, fail='stage-bridge')
+        steps, _ = self._pipeline(replace(self.settings, resume=True))
+        self.assertEqual(steps[0], 'stage-bridge')
+
+    def test_converter_change_invalidates_the_staging(self):
+        from dataclasses import replace
+        self._pipeline(self.settings)
+        with patch.object(builddriver, 'converter_digest', return_value='other converter'):
+            steps, _ = self._pipeline(replace(self.settings, resume=True))
+        self.assertEqual(steps[0], 'stage-bridge')
+
+    def test_resume_setting_round_trips(self):
+        path = self.root / 'settings.json'
+        Settings(resume=True).save(path)
+        self.assertTrue(Settings.load(path).resume)
