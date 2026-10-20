@@ -351,6 +351,97 @@ class ModZoneTests(unittest.TestCase):
             self.assertIn('material,custom', (root / 'build/zone_source/mod.zone').read_text())
 
 
+class SharedIpakImageTests(unittest.TestCase):
+    """WAW2BO2_FAST_LINK: a later build seeds stock ipak images an earlier build
+    recovered, so its first link succeeds instead of failing to name them."""
+
+    def _layout(self, root):
+        from waw2bo2 import iwi
+        template = root / 'bo2/mods/zm_test/zm_test.zone'
+        template.parent.mkdir(parents=True)
+        template.write_text('>game,T6\nmaterial,custom\n')
+        stock = root / 'cache/bo2_x/views/v1'
+        stock.mkdir(parents=True)
+        original = root / 'cache/bo2_x/dependencies/images/k/images/custom.iwi'
+        original.parent.mkdir(parents=True)
+        payload = iwi.solid_rgba_iwi(2, 2, (1, 2, 3, 255))
+        original.write_bytes(payload)
+        return stock, original, payload
+
+    def _link(self, root, build, stock, original, map_root=None):
+        from waw2bo2 import all2raw
+        calls = []
+
+        def link(command, **kwargs):
+            calls.append(command)
+            if not (root / build / 'ipak_images/images/custom.iwi').is_file():
+                return subprocess.CompletedProcess(command, 0,
+                    'ERROR: Failed to open file for ipak: images/custom.iwi\n')
+            ff = root / build / 'out/mod.ff'
+            ff.parent.mkdir(parents=True, exist_ok=True)
+            ff.write_bytes(b'linked')
+            return subprocess.CompletedProcess(command, 0, '')
+        with patch.dict('os.environ', {'WAW2BO2_FAST_LINK': '1'}), \
+             patch.object(modzone, 'stock_scripts', return_value=set()), \
+             patch.object(modzone, 'captured', side_effect=link), \
+             patch.object(all2raw, 'required_bo2_image', return_value=original):
+            modzone.link_mod(root / 'bo2', root / build, root / 'Unlinker.exe',
+                             extra_asset_roots=[map_root] if map_root else [], stock_dump=stock)
+        return calls
+
+    def test_second_build_links_once(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stock, original, payload = self._layout(root)
+            self.assertEqual(len(self._link(root, 'first', stock, original)), 2)
+            self.assertEqual(len(self._link(root, 'second', stock, original)), 1)
+            self.assertEqual((root / 'second/ipak_images/images/custom.iwi').read_bytes(), payload)
+
+    def test_map_owned_image_is_never_shadowed(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stock, original, _ = self._layout(root)
+            self._link(root, 'first', stock, original)
+            own = root / 'map/images/custom.dds'
+            own.parent.mkdir(parents=True)
+            own.write_bytes(b'map texture')
+            shared = modzone.shared_ipak_root(stock)
+            self.assertEqual(modzone.seed_shared_ipak_images(shared, [root / 'map'], root / 'out'), 0)
+
+    def test_changed_stock_source_is_not_seeded(self):
+        import os
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stock, original, _ = self._layout(root)
+            self._link(root, 'first', stock, original)
+            stat = original.stat()
+            os.utime(original, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+            shared = modzone.shared_ipak_root(stock)
+            self.assertEqual(modzone.seed_shared_ipak_images(shared, [], root / 'out'), 0)
+
+    def test_map_sourced_image_is_not_published(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            output = root / 'build/ipak_images/images/custom.iwi'
+            output.parent.mkdir(parents=True)
+            output.write_bytes(b'x')
+            source = root / 'map/images/custom.iwi'
+            source.parent.mkdir(parents=True)
+            source.write_bytes(b'x')
+            count = modzone.publish_shared_ipak_images(root / 'shared', [
+                {'image': 'custom', 'source': str(source), 'output': str(output)}], [root / 'bo2/raw'])
+            self.assertEqual(count, 0)
+            self.assertFalse((root / 'shared').exists())
+
+    def test_off_by_default(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            stock, original, _ = self._layout(root)
+            with patch.dict('os.environ', {}, clear=False) as env:
+                env.pop('WAW2BO2_FAST_LINK', None)
+                self.assertFalse(modzone.fast_link_enabled())
+
+
 if __name__ == "__main__":
     unittest.main()
 

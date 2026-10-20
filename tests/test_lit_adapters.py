@@ -89,6 +89,34 @@ add oC0, r0, r1
         self.assertIn('0.6666666666666666', hlsl)
         shaders.compile_hlsl(hlsl, 'ps_5_0')
 
+    def test_bo1_brightness_taps_rebuild_the_16_bit_words(self):
+        ps = 'ps_3_0\ndcl_texcoord v0\ndcl_2d s14\ntexld r0, v0.zwzw, s14\nmov oC0, r0\n'
+        contract = {'inputs': {'v0': {'semantic': 'TEXCOORD0', 'width': 4}},
+                    'outputs': {'oC0': {'semantic': 'SV_Target0', 'width': 4}}, 'constants': {},
+                    'samplers': {'s14': {'texture': 13, 'sampler': 13,
+                                         'v_taps': [list(t) for t in lightmaps.T5_BRIGHTNESS_TAPS],
+                                         'taps_expr': lightmaps.T5_BRIGHTNESS_TEXEL}}}
+        hlsl, _ = shaders.translate(ps, contract)
+        self.assertEqual(hlsl.count('tex_s14.Sample('), 3)
+        shaders.compile_hlsl(hlsl, 'ps_5_0')
+        # the page bytes build_page_t5 writes decode back to the G16R16 words
+        with tempfile.TemporaryDirectory() as tmp:
+            words = [0x0000, 0xFFFF, 0x1234, 0xABCD]           # A0 B0 A1 B1
+            sec = struct.pack('<4H', 0xF800, 0x07E0, 0x001F, 0xFFFF)   # 2x2: top row A, bottom row B
+            def loaddef(name, fmt, w, h, data):
+                path = Path(tmp) / name
+                path.write_bytes(struct.pack('<6i', fmt, len(data), w, h, 1, 0) + data)
+                return path
+            width, height, waw, _ = lightmaps.build_page_t5(
+                loaddef('s.bin', 23, 2, 2, sec), loaddef('b.bin', 34, 2, 1, struct.pack('<4H', *words)), None)
+            pixels = width * height
+            for i in range(pixels):
+                t0, t1, t2 = (waw[(k * pixels + i) * 4:(k * pixels + i) * 4 + 4] for k in range(3))
+                x = (t0[3] / 255 * 65280 + t2[2] / 255 * 255) / 65535
+                y = (t1[3] / 255 * 65280 + t2[3] / 255 * 255) / 65535
+                self.assertAlmostEqual(x, words[2 * i] / 65535, places=6)
+                self.assertAlmostEqual(y, words[2 * i + 1] / 65535, places=6)
+
     def test_point_load_reads_texels_without_sampler_state(self):
         ps = 'ps_3_0\ndcl_texcoord v0\ndcl_2d s5\ntexldl r0, v0, s5\nmov oC0, r0\n'
         contract = {'inputs': {'v0': {'semantic': 'TEXCOORD0', 'width': 4}},

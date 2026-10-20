@@ -51,6 +51,8 @@ class Settings:
     menu_blit: str = ''
     menu_large: str = ''
     menu_blur: str = ''
+    menu_icon: str = ''
+    menu_preview: str = ''
     menu_longitude: str = '0'
     menu_latitude: str = '0'
     loading_song: str = ''
@@ -87,9 +89,10 @@ class Settings:
         temp.replace(path)
 
 
-def discover(settings: Settings) -> Settings:
-    """Fill only unset paths, using Steam libraries and bundled native tools."""
-    root = resource_root()
+def steam_libraries() -> list[Path]:
+    """Every Steam library root on this machine (registry + libraryfolders.vdf),
+    so game installs are found wherever the user keeps them (never a hard-coded
+    drive/path)."""
     steam_paths = [Path(os.environ.get('ProgramFiles(x86)', 'C:/Program Files (x86)')) / 'Steam']
     if os.name != 'nt':
         steam_paths = [Path.home() / '.steam/steam', Path.home() / '.local/share/Steam',
@@ -109,10 +112,21 @@ def discover(settings: Settings) -> Settings:
                              re.findall(r'"path"\s+"([^"]+)"', text))
         except OSError:
             pass
+    return libraries
+
+
+def find_steam_app(folder: str) -> Path | None:
+    """A Steam game's install directory by its steamapps/common folder name."""
+    return next((p / 'steamapps/common' / folder for p in steam_libraries()
+                 if (p / 'steamapps/common' / folder).is_dir()), None)
+
+
+def discover(settings: Settings) -> Settings:
+    """Fill only unset paths, using Steam libraries and bundled native tools."""
+    root = resource_root()
     for field_name, folder in [('waw', 'Call of Duty World at War'), ('bo2', 'Call of Duty Black Ops II')]:
         if not getattr(settings, field_name):
-            found = next((p / 'steamapps/common' / folder for p in libraries
-                          if (p / 'steamapps/common' / folder).is_dir()), None)
+            found = find_steam_app(folder)
             if found:
                 setattr(settings, field_name, str(found))
     for field_name, relative in [('t4', 'vendor/OpenAssetTools/build/bin/Release_x86'),
@@ -129,9 +143,16 @@ def discover(settings: Settings) -> Settings:
 
 
 def map_fastfiles(folder: Path) -> list[Path]:
+    # Companions a custom WaW map ships beside its map .ff: the gameplay mod,
+    # the map patch, the loadscreen (*_load) and the localized string banks
+    # (localized_*, incl. localized_mapname). None is the map zone itself.
     excluded = {'mod', 'mod_load', 'common', 'code_post_gfx'}
-    return sorted((p for p in folder.glob('*.ff') if p.stem.lower() not in excluded
-                   and not p.stem.lower().endswith('_patch')), key=lambda p: p.name.lower())
+    def companion(stem: str) -> bool:
+        stem = stem.lower()
+        return (stem in excluded or stem.endswith('_patch') or stem.endswith('_load')
+                or stem.startswith('localized_'))
+    return sorted((p for p in folder.glob('*.ff') if not companion(p.stem)),
+                  key=lambda p: p.name.lower())
 
 
 def project_name(source: str) -> str:
@@ -356,6 +377,67 @@ class ProcessRunner:
     def cancel(self) -> None:
         self.cancelled.set()
         self._terminate()
+
+
+def resolve_import_settings(*, folder: str | None = None, fastfile: str | None = None,
+                            project: str | None = None, work: str | None = None,
+                            source_fx: bool = False, bo2_stock_perks: bool = False,
+                            remaster: bool = False, redump: bool = False, verbose: bool = False,
+                            base: Settings | None = None) -> Settings:
+    """Discovered Settings for a one-shot WaW map import driven from the tool.
+
+    The tool only knows where the map lives; everything else (WaW/BO2 installs,
+    bundled native tools) is filled by discover(), exactly as the desktop GUI does,
+    so all path logic stays here where it is tested rather than in the C++ front end."""
+    settings = discover(base if base is not None else Settings.load())
+    if fastfile:
+        source = Path(fastfile)
+    elif folder:
+        candidates = map_fastfiles(Path(folder))
+        if not candidates:
+            raise ValueError(f'No map fastfile (.ff) found in {folder}. Choose the folder that '
+                             f'holds the map’s .ff (not mod.ff/common.ff).')
+        if len(candidates) > 1:
+            raise ValueError('Several map fastfiles found; pass one with --fastfile: '
+                             + ', '.join(p.name for p in candidates))
+        source = candidates[0]
+    else:
+        raise ValueError('import needs --folder or --fastfile')
+    source = source.resolve()
+    if not source.is_file() or source.suffix.lower() != '.ff':
+        raise ValueError(f'Not a fastfile (.ff): {source}')
+    settings.fastfile = str(source)
+    settings.project = project or project_name(str(source))
+    validate_project(settings.project)
+    if work:
+        settings.work = str(Path(work))
+    settings.source_fx = source_fx
+    settings.bo2_stock_perks = bo2_stock_perks
+    settings.remaster = remaster
+    settings.redump = redump
+    settings.verbose = verbose
+    return settings
+
+
+def perform_import(settings: Settings, runner: ProcessRunner) -> int:
+    """Build the map and install it straight into the Plutonium mods folder.
+
+    One shot for the tool: perform_build() does the full extract/stage/link and
+    packages into the private build folder; this then runs the same install step
+    the GUI's Install button uses (package with no --dest -> the Plutonium mods dir)."""
+    code = perform_build(settings, runner)
+    if code or runner.cancelled.is_set():
+        return code or -1
+    paths = BuildPaths.for_settings(settings)
+    runner.emit('line', '== 8. installing to the Plutonium mods folder')
+    code = runner.run(cli_command('package', str(paths.stage), settings.project, '--bo2', settings.bo2,
+                                 '--work', str(paths.mod)), paths.root / 'install.log')
+    if code or runner.cancelled.is_set():
+        return code or -1
+    from .package import plutonium_mods_dir
+    (paths.root / 'installed.json').write_text(json.dumps({'output': str(paths.output)}), encoding='utf-8')
+    runner.emit('line', f'installed {plutonium_mods_dir() / settings.project}')
+    return 0
 
 
 def perform_build(settings: Settings, runner: ProcessRunner) -> int:

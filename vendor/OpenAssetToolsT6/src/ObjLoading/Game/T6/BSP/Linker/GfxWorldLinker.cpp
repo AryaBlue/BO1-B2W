@@ -776,33 +776,23 @@ namespace BSP
                        gfxWorld.primaryLightCount);
             return;
         }
-        // static world surfaces only (brush model surfaces move)
-        std::map<int, std::vector<uint16_t>> surfacesOfMesh;
-        for (size_t i = 0; i < m_surface_order.size() && i < gfxWorld.dpvs.staticSurfaceCount; ++i)
-            surfacesOfMesh[bsp.gfxWorld.surfaces[m_surface_order[i]].meshIndex].push_back(static_cast<uint16_t>(i));
+        // GfxShadowGeometry stays empty (null lists, LoadGfxLights): T6 fills a
+        // light's lists itself at runtime, appending to sortedSurfIndex /
+        // smodelIndex whenever they are non-null, so exact-size lists from the
+        // zone overflow into neighbouring memory (Kino crashed at t6zm 0x73C705
+        // and 0x762F63). The sun's static model list still selects which static
+        // models cast sun shadows (below).
+        std::vector<char> sunCaster(gfxWorld.dpvs.smodelCount, 0);
+        size_t sunCasters = 0;
+        for (const auto& smodel : lights[gfxWorld.sunPrimaryLightIndex].at("smodels"))
+            if (smodel.get<unsigned>() < gfxWorld.dpvs.smodelCount && !sunCaster[smodel.get<unsigned>()])
+            {
+                sunCaster[smodel.get<unsigned>()] = 1;
+                ++sunCasters;
+            }
         for (unsigned light = 0; light < gfxWorld.primaryLightCount; ++light)
         {
             const auto& entry = lights[light];
-            std::vector<uint16_t> surfaces;
-            for (const auto& mesh : entry.at("meshes"))
-            {
-                const auto found = surfacesOfMesh.find(mesh.get<int>());
-                if (found != surfacesOfMesh.end())
-                    surfaces.insert(surfaces.end(), found->second.begin(), found->second.end());
-            }
-            std::ranges::sort(surfaces);
-            surfaces.erase(std::ranges::unique(surfaces).begin(), surfaces.end());
-            std::vector<uint16_t> smodels;
-            for (const auto& smodel : entry.at("smodels"))
-                if (smodel.get<unsigned>() < gfxWorld.dpvs.smodelCount)
-                    smodels.push_back(smodel.get<uint16_t>());
-            auto& geom = gfxWorld.shadowGeom[light];
-            geom.surfaceCount = static_cast<uint16_t>(surfaces.size());
-            geom.smodelCount = static_cast<uint16_t>(smodels.size());
-            geom.sortedSurfIndex = surfaces.empty() ? nullptr : m_memory.Alloc<uint16_t>(surfaces.size());
-            geom.smodelIndex = smodels.empty() ? nullptr : m_memory.Alloc<uint16_t>(smodels.size());
-            std::ranges::copy(surfaces, geom.sortedSurfIndex);
-            std::ranges::copy(smodels, geom.smodelIndex);
 
             const auto& hulls = entry.at("hulls");
             auto& region = gfxWorld.lightRegion[light];
@@ -830,18 +820,14 @@ namespace BSP
         }
         // WaW draws the static models listed in the sun's shadow geometry into
         // the sun shadow map; the others cast no sun shadow.
-        const auto& sun = gfxWorld.shadowGeom[gfxWorld.sunPrimaryLightIndex];
-        std::vector<char> sunCaster(gfxWorld.dpvs.smodelCount, 0);
-        for (unsigned i = 0; i < sun.smodelCount; ++i)
-            sunCaster[sun.smodelIndex[i]] = 1;
         for (unsigned i = 0; i < gfxWorld.dpvs.smodelCount; ++i)
         {
             auto& flags = gfxWorld.dpvs.smodelDrawInsts[i].flags;
             flags = sunCaster[i] ? (flags & ~STATIC_MODEL_FLAG_NO_SHADOW) : (flags | STATIC_MODEL_FLAG_NO_SHADOW);
             gfxWorld.dpvs.smodelCastsShadow[i] = sunCaster[i];
         }
-        con::info("Loaded shadow geometry for {} primary lights ({} sun-shadowing static models)", lights.size(),
-                  sun.smodelCount);
+        con::info("Loaded light regions for {} primary lights ({} sun-shadowing static models; runtime-filled shadow lists left empty)",
+                  lights.size(), sunCasters);
     }
 
     bool GfxWorldLinker::LoadLightGrid(GfxWorld& gfxWorld) const
@@ -1024,7 +1010,10 @@ namespace BSP
         {
             try
             {
-                for (const auto& modelJs : json::parse(*subFile.m_stream).at("submodels"))
+                // keep the parsed document alive: a range-for over parse(...).at(...)
+                // iterates a destroyed temporary (C++20) and silently found no models
+                const auto subJs = json::parse(*subFile.m_stream);
+                for (const auto& modelJs : subJs.at("submodels"))
                 {
                     const auto& mins = modelJs.at("mins");
                     const auto& maxs = modelJs.at("maxs");
@@ -1037,6 +1026,12 @@ namespace BSP
                 con::error("JSON error when parsing submodels.json: {}", e.what());
                 subBounds.clear();
             }
+        }
+        else
+        {
+            // entities name brush models *1..*N: without them the renderer
+            // reads past gfxWorld.models when it draws a door (crash 0x72671B)
+            con::error("ERROR! {} not found: the map gets no brush models", GetFileNameForBSPAsset("submodels.json"));
         }
 
         gfxWorld.modelCount = 1 + static_cast<int>(subBounds.size());
@@ -1062,6 +1057,8 @@ namespace BSP
         gfxWorld.models[0].bounds[1].y = gfxWorld.maxs.y;
         gfxWorld.models[0].bounds[1].z = gfxWorld.maxs.z;
         memset(&gfxWorld.models[0].writable, 0, sizeof(GfxBrushModelWritable));
+        con::info("Loaded {} brush models ({} with render surfaces)", gfxWorld.modelCount,
+                  std::count_if(gfxWorld.models, gfxWorld.models + gfxWorld.modelCount, [](const GfxBrushModel& m) { return m.surfaceCount > 0; }));
 
         // Other models aren't implemented yet
         // Code kept for future use
@@ -1165,6 +1162,12 @@ namespace BSP
                 fog.sunFogColor.v[i] *= fogScale;
             }
             sun.exposure = data.value("exposure", unitScaleExposure);
+            // BO1 (T5) worlds are lit far brighter than WaW's 1:1 display units
+            // and carry their own exposure; T6 at unit scale blew Kino out. In
+            // game r_exposureValue 3 matched BO1's look; T5 exposure 1.234 + 2
+            // stops (the unit-scale offset above) gives 3.23.
+            if (!data.contains("exposure") && data.contains("t5") && data.at("t5").contains("exposure"))
+                sun.exposure = data.at("t5").at("exposure").get<float>() + 2.0f;
             const auto name = source.value("name", std::string());
             std::strncpy(gfxWorld.sunParse.name, name.c_str(), sizeof(gfxWorld.sunParse.name) - 1);
             con::info("Loaded source sun angles and colors (WaW direct strength {}, exposure {})", strength, sun.exposure);

@@ -84,7 +84,9 @@ namespace BSP
         std::vector<TriggerModel> models;
         std::vector<TriggerHull> hulls;
         std::vector<TriggerSlab> slabs;
-        for (const auto& modelJs : json::parse(*subFile.m_stream).at("submodels"))
+        // keep the parsed document alive (see GfxWorldLinker::LoadModels)
+        const auto subJs = json::parse(*subFile.m_stream);
+        for (const auto& modelJs : subJs.at("submodels"))
         {
             TriggerModel model{};
             model.firstHull = static_cast<uint16_t>(hulls.size());

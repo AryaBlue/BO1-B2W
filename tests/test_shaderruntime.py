@@ -389,3 +389,63 @@ class HashedMaterialTextureTests(unittest.TestCase):
         self.assertEqual(output['textures'], [texture])
         self.assertEqual(native['stableArgCount'], 1)
         self.assertIsNone(runtime.add_material_texture(native, output, source, 123, ''))
+
+class SourceSlotTests(unittest.TestCase):
+    """T6 slots read the source technique of the same meaning in each game."""
+    def test_waw_table(self):
+        present = lambda i: True
+        got = {slot: runtime.source_slot(present, 'wc_l_sm_r0c0', slot, 59) for slot in runtime.SLOTS}
+        self.assertEqual(got, {0: 0, 1: 2, 2: 4, 3: 5, 4: 8, 5: 10, 6: 12, 7: 14, 8: 16, 13: 18, 14: 20})
+
+    def test_bo1_table(self):
+        # T5 MaterialTechniqueType: LIT 10, LIT_SUN 11, LIT_SUN_SHADOW 12, LIT_SPOT 13,
+        # LIT_SPOT_SHADOW 14, LIT_OMNI 15, LIT_OMNI_SHADOW 16
+        present = lambda i: True
+        got = {slot: runtime.source_slot(present, 'wc_l_sm_r0c0', slot, 130) for slot in runtime.SLOTS}
+        self.assertEqual(got, {0: 0, 1: 2, 2: 4, 3: 5, 4: 10, 5: 11, 6: 12, 7: 13, 8: 14, 13: 15, 14: 16})
+
+    def test_bo1_self_lit_alias_is_lit(self):
+        # BO1 unlit variant drawn only through LIT (10) feeds T6 unlit/emissive
+        self.assertEqual(runtime.source_slot(lambda i: i == 10, 'wc_unlitdecalblend_add', 2, 130), 10)
+        self.assertIsNone(runtime.source_slot(lambda i: i == 8, 'wc_unlitdecalblend_add', 2, 130))
+
+    def test_source_technique_uses_table_length(self):
+        techniques = [None] * 130
+        techniques[13] = {'name': 'spot'}
+        techniques[14] = {'name': 'spot shadow'}
+        original = {'techniques': techniques}
+        self.assertEqual(runtime.source_technique(original, 'wc_l_sm_r0c0', 7)['name'], 'spot')
+        self.assertEqual(runtime.source_technique(original, 'wc_l_sm_r0c0', 8)['name'], 'spot shadow')
+
+CTAB = """// Parameters:
+//
+//   float extraCamParam;
+//   float2 sunFog;
+//   float3 sunFogDir;
+//   float4x4 worldMatrix;
+//
+"""
+
+
+class NativeFieldSizeTests(unittest.TestCase):
+    """T6 packs some PerScene fields narrower than a row; D3DX reads only the declared components."""
+    def test_declared_width(self):
+        self.assertEqual(runtime.declared_width(CTAB, 'sunFogDir'), 3)
+        self.assertEqual(runtime.declared_width(CTAB, 'sunFog'), 2)
+        self.assertEqual(runtime.declared_width(CTAB, 'extraCamParam'), 1)
+        self.assertEqual(runtime.declared_width(CTAB, 'worldMatrix'), 4)
+        self.assertEqual(runtime.declared_width(CTAB, 'unknown'), 4)
+
+    def test_fits_declared_size(self):
+        self.assertTrue(runtime.fits(CTAB, 'sunFogDir', 0, 12))   # T6 cb0+464, 12 bytes
+        self.assertTrue(runtime.fits(CTAB, 'sunFog', 0, 8))       # T6 cb0+496, 8 bytes
+        self.assertFalse(runtime.fits(CTAB, 'sunFogDir', 0, 8))
+        self.assertTrue(runtime.fits(CTAB, 'worldMatrix', 3, 64))
+        self.assertFalse(runtime.fits(CTAB, 'worldMatrix', 3, 48))
+
+    def test_unaligned_scalar_rotates_row(self):
+        self.assertEqual(runtime.unaligned_expr(CTAB, 'extraCamParam', 0, 2260, 4),
+                         {'expr': 't6_cb0[141].yzwx', 'uses': [[0, 141]]})
+        self.assertIsNone(runtime.unaligned_expr(CTAB, 'extraCamParam', 0, 2256, 4))  # aligned
+        self.assertIsNone(runtime.unaligned_expr(CTAB, 'extraCamParam', 1, 2260, 4))  # not PerScene
+        self.assertIsNone(runtime.unaligned_expr(CTAB, 'sunFogDir', 0, 2264, 12))      # crosses the row

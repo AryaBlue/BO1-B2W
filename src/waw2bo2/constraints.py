@@ -14,7 +14,10 @@ def stage(source: Path, project: Path) -> dict:
     data = json.loads(source.read_text())
     if data.get('version') != 1:
         raise ValueError('unsupported map physics constraint schema')
-    entries = data['constraints']
+    # BO1 maps attach some joints to physics dynents (hanging lamps, chains); those need native dynent
+    # staging, which does not exist yet, so they are left out and reported
+    skipped_dynent = [e for e in data['constraints'] if 1 in (e['attach_point_type1'], e['attach_point_type2'])]
+    entries = data['constraints'] = [e for e in data['constraints'] if e not in skipped_dynent]
     if len(entries) > 511:
         raise ValueError('map physics constraint count exceeds T6 limit 511')
     materials = set()
@@ -48,7 +51,8 @@ def stage(source: Path, project: Path) -> dict:
         raise ValueError('map rope count exceeds T6 limit 300')
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(data, indent=2) + '\n')
-    return {'count': len(entries), 'ropes': ropes, 'materials': sorted(materials), 'exported': True}
+    return {'count': len(entries), 'ropes': ropes, 'materials': sorted(materials), 'exported': True,
+            'skipped_dynent_attachments': len(skipped_dynent)}
 
 
 def stage_entities(project: Path) -> dict:

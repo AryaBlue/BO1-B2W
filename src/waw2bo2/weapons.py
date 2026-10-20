@@ -8,11 +8,14 @@ The official BO2 linker consumes these infostrings and WaW's raw v17 xanims.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from . import wawtext
+from .parallel import ordered_map, write_shared
 from .resources import resource_root
 
 
@@ -353,71 +356,70 @@ def model_lod_source(roots: list[Path], owner: Path, file: str) -> Path | None:
     return next((root / file for root in dict.fromkeys([owner, *roots]) if (root / file).is_file()), None)
 
 
-def stage_models(roots: list[Path], project: Path, names: set[str]) -> dict:
-    """Preserve weapon skeletons and LODs; never use the static-prop skin stripper.
+def _stage_one_weapon(ctx: dict, name: str) -> dict:
+    """Stage one weapon xmodel (a CPU-bound GLTF job) in a worker process.
 
-    Models/material names are isolated from stock BO2. Multi-root skeletons
-    require a loader fix and are explicitly rejected, not made rigid. Materials
-    and image dependencies are reported for the subsequent translation stage.
+    Returns a fragment that stage_models merges in input order, so the result is
+    identical to a serial run. Partial materials/physpresets/reparent recorded
+    before a failure are still reported, exactly as the serial loop left them in
+    its shared accumulators; LOD and xmodel outputs are per-weapon unique paths,
+    and the only shared path (a physpreset two weapons share) is written atomically.
     """
-    staged, missing, unsupported, materials = [], [], {}, set()
+    roots: list[Path] = ctx["roots"]
+    project: Path = ctx["project"]
+    renamed = output_name("xmodel", name)
+    relative = Path("xmodel") / f"{name}.json"
+    root = next((r for r in roots if (r / relative).is_file()), None)
+    if root is None:
+        return {"name": name, "missing": True}
+    model_materials: set[str] = set()
     physpresets: dict[str, dict] = {}
-    reparented: dict[str, list[str]] = {}
-    no_collision: list[str] = []
-    for name in sorted(names):
-        model_materials = set()
-        renamed = output_name("xmodel", name)
-        relative = Path("xmodel") / f"{name}.json"
-        root = next((r for r in roots if (r / relative).is_file()), None)
-        if root is None:
-            missing.append(name)
-            continue
+    reparent: list[str] | None = None
+    no_collision = False
+    staged = None
+    error = None
+    try:
         model = json.loads((root / relative).read_text(encoding="utf-8"))
-        try:
-            if model.get("flags", 0):
-                raise WeaponError("nonzero T4 xmodel flags need measured T6 translation")
-            if model.get("physPreset"):
-                model["physPreset"] = stage_physpreset(roots, project, model["physPreset"], physpresets)
-            lods = []
-            for index, lod in enumerate(model.get("lods", [])):
-                file = lod["file"]
-                output_name("model_file", file)
-                source = model_lod_source(roots, root, file)
-                if source is None:
-                    raise WeaponError(f'model geometry {file} is absent from the map and resolved WaW stock assets')
-                data = json.loads(source.read_text(encoding="utf-8"))
-                parents = {c: i for i, node in enumerate(data.get("nodes", []))
-                           for c in node.get("children", [])}
-                for skin in data.get("skins", []):
-                    joints = set(skin.get("joints", []))
-                    root_joints = sorted(j for j in joints if parents.get(j) not in joints)
-                    if len(root_joints) > 1 and model.get("type") == "rigid" and \
-                            _merge_equal_roots(data, root_joints):
-                        reparented[name] = [data["nodes"][r].get("name") for r in root_joints]
-                        continue
-                    if len(root_joints) != 1:
-                        raise WeaponError("multiple/absent skin roots: skeleton preserved at source, not stripped")
-                # OAT resolves engine materials by the GLTF material NAME;
-                # GLTF images/textures are exporter previews, not dependencies
-                # of its xmodel reader (GltfLoader::LoadMaterials). Keep their
-                # source metadata, but do not mistake DDS preview URIs for
-                # skeleton buffers or reject otherwise valid animated models.
-                for resource in data.get("buffers", []):
-                    uri = resource.get("uri", "")
-                    if uri and not uri.startswith("data:"):
-                        raise WeaponError(f"external GLTF resource needs dependency staging: {uri}")
-                for material in data.get("materials", []):
-                    material_name = material["name"]
-                    material["name"] = output_name("material", material_name)
-                    materials.add(material_name)
-                    model_materials.add(material_name)
-                destination = Path("model_export") / f"{renamed}_lod{index}.gltf"
-                lods.append((dict(lod, file=destination.as_posix()), destination, data))
-            if not lods:
-                raise WeaponError("xmodel has no LODs")
-        except (WeaponError, OSError, KeyError, ValueError) as exc:
-            unsupported[name] = str(exc)
-            continue
+        if model.get("flags", 0):
+            raise WeaponError("nonzero T4 xmodel flags need measured T6 translation")
+        if model.get("physPreset"):
+            model["physPreset"] = stage_physpreset(roots, project, model["physPreset"], physpresets)
+        lods = []
+        for index, lod in enumerate(model.get("lods", [])):
+            file = lod["file"]
+            output_name("model_file", file)
+            source = model_lod_source(roots, root, file)
+            if source is None:
+                raise WeaponError(f'model geometry {file} is absent from the map and resolved WaW stock assets')
+            data = json.loads(source.read_text(encoding="utf-8"))
+            parents = {c: i for i, node in enumerate(data.get("nodes", []))
+                       for c in node.get("children", [])}
+            for skin in data.get("skins", []):
+                joints = set(skin.get("joints", []))
+                root_joints = sorted(j for j in joints if parents.get(j) not in joints)
+                if len(root_joints) > 1 and model.get("type") == "rigid" and \
+                        _merge_equal_roots(data, root_joints):
+                    reparent = [data["nodes"][r].get("name") for r in root_joints]
+                    continue
+                if len(root_joints) != 1:
+                    raise WeaponError("multiple/absent skin roots: skeleton preserved at source, not stripped")
+            # OAT resolves engine materials by the GLTF material NAME;
+            # GLTF images/textures are exporter previews, not dependencies
+            # of its xmodel reader (GltfLoader::LoadMaterials). Keep their
+            # source metadata, but do not mistake DDS preview URIs for
+            # skeleton buffers or reject otherwise valid animated models.
+            for resource in data.get("buffers", []):
+                uri = resource.get("uri", "")
+                if uri and not uri.startswith("data:"):
+                    raise WeaponError(f"external GLTF resource needs dependency staging: {uri}")
+            for material in data.get("materials", []):
+                material_name = material["name"]
+                material["name"] = output_name("material", material_name)
+                model_materials.add(material_name)
+            destination = Path("model_export") / f"{renamed}_lod{index}.gltf"
+            lods.append((dict(lod, file=destination.as_posix()), destination, data))
+        if not lods:
+            raise WeaponError("xmodel has no LODs")
         # Validate every LOD before producing any model with partial geometry.
         for _, destination, data in lods:
             dst = project / destination
@@ -429,7 +431,7 @@ def stage_models(roots: list[Path], project: Path, names: set[str]) -> dict:
         # T4 plane/svec/tvec triangles). Model collision is for world entities
         # (map zone, our bridge linker); weapon models do not carry it here.
         if model.pop("collSurfs", None):
-            no_collision.append(name)
+            no_collision = True
         model.pop("contents", None)
         # The gameplay-mod linker has a different boneInfo JSON schema
         # (its mins/maxs are vector objects). Keep the original metadata in
@@ -443,8 +445,46 @@ def stage_models(roots: list[Path], project: Path, names: set[str]) -> dict:
         dst = project / "xmodel" / f"{renamed}.json"
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(json.dumps(model, indent=2) + "\n", encoding="utf-8")
-        staged.append({"name": renamed, "waw": name, "source": str(root / relative), "lods": len(lods),
-                       "materials": sorted(model_materials)})
+        staged = {"name": renamed, "waw": name, "source": str(root / relative), "lods": len(lods),
+                  "materials": sorted(model_materials)}
+    except (WeaponError, OSError, KeyError, ValueError) as exc:
+        error = str(exc)
+    return {"name": name, "materials": model_materials, "physpresets": physpresets,
+            "reparent": reparent, "no_collision": no_collision, "staged": staged, "error": error}
+
+
+def stage_models(roots: list[Path], project: Path, names: set[str]) -> dict:
+    """Preserve weapon skeletons and LODs; never use the static-prop skin stripper.
+
+    Models/material names are isolated from stock BO2. Multi-root skeletons
+    require a loader fix and are explicitly rejected, not made rigid. Materials
+    and image dependencies are reported for the subsequent translation stage.
+
+    Each weapon xmodel is an independent CPU-bound GLTF job, so they run in
+    worker processes (not GIL-bound threads); fragments merge in input (sorted)
+    order, keeping output identical to a serial run.
+    """
+    staged, missing, unsupported, materials = [], [], {}, set()
+    physpresets: dict[str, dict] = {}
+    reparented: dict[str, list[str]] = {}
+    no_collision: list[str] = []
+    ctx = dict(roots=roots, project=project)
+    for frag in ordered_map(partial(_stage_one_weapon, ctx), sorted(names),
+                            label='Weapon models', processes=True):
+        name = frag["name"]
+        if frag.get("missing"):
+            missing.append(name)
+            continue
+        materials |= frag["materials"]
+        physpresets.update(frag["physpresets"])
+        if frag["reparent"] is not None:
+            reparented[name] = frag["reparent"]
+        if frag["no_collision"]:
+            no_collision.append(name)
+        if frag["error"] is not None:
+            unsupported[name] = frag["error"]
+            continue
+        staged.append(frag["staged"])
     return {"status": "source_models_staged_materials_not_translated", "models": staged, "missing": missing,
             "unsupported": unsupported, "materials": sorted(materials), "physpresets": physpresets,
             "reparented_roots": reparented, "collision_not_carried": no_collision}
@@ -500,8 +540,9 @@ def stage_physpreset(roots: list[Path], project: Path, name: str, staged: dict[s
     if pairs.get("sndAliasPrefix"):
         pairs["sndAliasPrefix"] = "waw/" + pairs["sndAliasPrefix"]
     dst = project / "physic" / renamed
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text("PHYSIC" + "".join(f"\\{k}\\{v}" for k, v in pairs.items()), encoding="utf-8")
+    # Different weapons may share a physpreset, so staging runs in parallel worker
+    # processes can race on this path; write_shared publishes it atomically.
+    write_shared(dst, ("PHYSIC" + "".join(f"\\{k}\\{v}" for k, v in pairs.items())).encode("utf-8"))
     staged[name] = {"name": renamed, "source": str(source)}
     return renamed
 
@@ -804,6 +845,22 @@ def separate_alt_ammo(fields: dict[str, str], fields_by_weapon: dict[str, dict[s
         return False
     primary = fields_by_weapon.get(fields.get("altWeapon", ""))
     return primary is not None and primary.get("ammoName") != fields.get("ammoName")
+BO2_WEAPON_TABLE = Path(__file__).parent / "compat" / "bo1_bo2_weapons.json"
+
+
+def bo2_weapon_substitute(name: str, reserved: set[str]) -> str | None:
+    """With WAW2BO2_BO2_WEAPONS set, the BO2 weapon a source weapon is replaced by instead of being
+    ported: its own name when BO2 has a weapon of that name, else compat/bo1_bo2_weapons.json.
+    ``reserved`` holds lowercased BO2 weapon names, possibly with an mp/ or sp/ folder."""
+    if not os.environ.get("WAW2BO2_BO2_WEAPONS"):
+        return None
+    available = {n.split("/")[-1] for n in reserved}
+    table = {k.lower(): v for k, v in json.loads(BO2_WEAPON_TABLE.read_text(encoding="utf-8")).items()
+             if not k.startswith("_")}
+    target = table.get(name.lower(), name)
+    return target if target.lower() in available else None
+
+
 WAW_WEAPON_PREFIX = "waw_"
 PREFIXES = {"xmodel": "waw_xmodel/", "material": "waw_material/", "xanim": "waw_xanim/",
             "accuracy": "waw_accuracy/"}
@@ -845,6 +902,11 @@ def stage_runtime(project: Path, ipak: str, equivalents=None, loaded: dict[str, 
         if name.lower() in ENGINE_WEAPONS:
             # both engines' null weapon; BO2 always provides its own
             table[name] = name
+            continue
+        substitute = bo2_weapon_substitute(name, reserved)
+        if substitute:
+            table[name] = replacements[name] = substitute
+            notes.append(f"BO2_WEAPON {name} -> {substitute}: BO2's own weapon is used (WAW2BO2_BO2_WEAPONS)")
             continue
         table[name] = name if name.lower() not in reserved else WAW_WEAPON_PREFIX + name
         if table[name] != name:
@@ -979,7 +1041,11 @@ def stage_runtime(project: Path, ipak: str, equivalents=None, loaded: dict[str, 
     # converted effects live in the map zone; mod.ff only references them
     lines += [f"fx,,{n}" for n in sorted(effects)]
     lines += [f"weapon,{table[n]}" for n in runtime]
-    lines += [f"weapon,{n}" for n in sorted(set(replacements.values()))]
+    # a replacement the template zone already carries (as mp/<name> or sp/<name>) or an always-loaded
+    # zone defines needs no line of its own: a bare-name line would look for raw/weapons/<name>
+    present = {n.lower() for n in reserved_weapons if "/" in n} | {n.lower() for n in (loaded or {}).get("weapon", ())}
+    lines += [f"weapon,{n}" for n in sorted(set(replacements.values()))
+              if not {n.lower(), f"mp/{n.lower()}", f"sp/{n.lower()}"} & present]
     # every WaW weapon: its BO2 name, or "" when mod.ff does not carry it
     table = {w: (b if w in runtime or w in replacements or w.lower() in ENGINE_WEAPONS else "")
              for w, b in table.items()}

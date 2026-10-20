@@ -292,6 +292,10 @@ def _stage_bridge(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
     if len(report.errors) > 40:
         print(f"... {len(report.errors) - 40} more errors in the report", file=sys.stderr)
+    if report.errors and os.environ.get("WAW2BO2_ALLOW_STAGE_ERRORS"):
+        # BO1 bring-up: keep building with the reported gaps (all listed in the stage report)
+        print(f"WAW2BO2_ALLOW_STAGE_ERRORS: continuing past {len(report.errors)} staging errors", file=sys.stderr)
+        return 0
     return 1 if report.errors else 0
 
 
@@ -417,6 +421,23 @@ def parser() -> argparse.ArgumentParser:
     desktop_p.add_argument('--waw-cache-root', type=Path)
     desktop_p.add_argument('--bo2-cache-root', type=Path)
     desktop_p.set_defaults(func=_build_map)
+    import_p = sub.add_parser('import-map', help='one-shot: discover installs, build a WaW map and install it to Plutonium')
+    source = import_p.add_mutually_exclusive_group(required=True)
+    source.add_argument('--folder', help='folder holding the WaW map fastfile (its single map .ff is found automatically)')
+    source.add_argument('--fastfile', help='the WaW map fastfile (.ff) directly, when a folder has several')
+    import_p.add_argument('--project', help='BO2 map name (zm_..._waw); default derived from the fastfile name')
+    import_p.add_argument('--work', help='build workspace folder; default: %%LOCALAPPDATA%%\\WawConverter\\builds')
+    import_p.add_argument('--source-fx', action='store_true', help='compile effects missing from every WaW zone from the Mod Tools sources')
+    import_p.add_argument('--bo2-stock-perks', action='store_true', help='use stock BO2 perk machines/gameplay')
+    import_p.add_argument('--remaster', action='store_true', help='draw ported BO2 materials with their original BO2 material')
+    import_p.add_argument('--redump', action='store_true', help='force a fresh stock re-dump')
+    import_p.add_argument('--verbose', action='store_true', help='name each asset as it is staged')
+    import_p.set_defaults(func=_import_map)
+    check_p = sub.add_parser('check', help='fast pre-check: report which installs/tools a WaW import needs are missing')
+    check_p.add_argument('--folder', help='also check that this folder holds a single resolvable map .ff')
+    check_p.add_argument('--fastfile', help='also check this specific map .ff')
+    check_p.add_argument('--json', action='store_true', help='emit a machine-readable JSON report')
+    check_p.set_defaults(func=_check)
     extract_p = sub.add_parser('all2raw', help='Extract All installed WaW/BO2 zones once into shared caches')
     extract_p.add_argument('--settings-json', required=True)
     extract_p.add_argument('--waw-cache-root', type=Path)
@@ -594,6 +615,76 @@ def _translate_shader(args: argparse.Namespace) -> int:
     report = shaders.translate_file(args.source, args.output, bindings, compile=not args.no_compile)
     print(json.dumps(report, indent=2))
     return 0
+
+
+def _import_map(args: argparse.Namespace) -> int:
+    """End-to-end WaW map import for the ZM Workshop tool: discover installs,
+    build, and install to the Plutonium mods folder, streaming the build driver's
+    `== N.` step markers and `[staging]` phase lines for a progress bar.
+
+    Custom maps routinely edit stock scripts in ways with no faithful BO2
+    equivalent (e.g. a _zombiemode damage override that applies damage itself).
+    Like the BO1 import path, we build the map anyway and list each gap in the
+    stage report rather than failing the whole import for one unportable rule;
+    the env var propagates to the stage-bridge subprocess, which honours it."""
+    import os
+    os.environ.setdefault("WAW2BO2_ALLOW_STAGE_ERRORS", "1")
+    from .launcher import ProcessRunner, perform_import, resolve_import_settings
+    settings = resolve_import_settings(folder=args.folder, fastfile=args.fastfile,
+                                       project=args.project, work=args.work,
+                                       source_fx=args.source_fx, bo2_stock_perks=args.bo2_stock_perks,
+                                       remaster=args.remaster, redump=args.redump, verbose=args.verbose)
+    print(f"== importing {Path(settings.fastfile).name} as {settings.project}", flush=True)
+    runner = ProcessRunner(lambda kind, line: print(line, flush=True) if kind == 'line' else None,
+                           verbose=args.verbose)
+    return perform_import(settings, runner)
+
+
+def _check(args: argparse.Namespace) -> int:
+    """Fast install pre-check for the ZM Workshop tool: discover installs the same
+    way an import would, then report which REQUIRED games/tools are missing, so the
+    tool can warn BEFORE starting a (long) import instead of failing deep in preflight.
+
+    Exit 0 = everything a WaW import needs is present; 2 = something required is missing.
+    The first missing item is World at War when that is the problem, so the tool can
+    show the one message that matters ("World at War is not installed")."""
+    from .launcher import Settings, discover, preflight, map_fastfiles
+    settings = discover(Settings.load())
+    checks = preflight(settings, include_map=False)
+    missing = [c for c in checks if c.required and not c.ready]
+
+    # Optional: confirm a specific source folder/.ff resolves to exactly one map.
+    source_problem = None
+    if args.fastfile or args.folder:
+        try:
+            if args.fastfile:
+                src = Path(args.fastfile)
+                if not (src.is_file() and src.suffix.lower() == '.ff'):
+                    source_problem = f'Not a fastfile (.ff): {src}'
+            else:
+                found = map_fastfiles(Path(args.folder))
+                if not found:
+                    source_problem = (f'No map fastfile (.ff) found in {args.folder}. Choose the folder '
+                                      f'that holds the map’s .ff (not mod.ff/common.ff).')
+                elif len(found) > 1:
+                    source_problem = 'Several map fastfiles found; pick one: ' + ', '.join(p.name for p in found)
+        except OSError as error:
+            source_problem = str(error)
+
+    ok = not missing and source_problem is None
+    if args.json:
+        print(json.dumps({'ok': ok, 'waw': settings.waw, 'bo2': settings.bo2,
+                          'missing': [{'name': c.name, 'detail': c.detail} for c in missing],
+                          'source_problem': source_problem}, indent=2), flush=True)
+    else:
+        if missing:
+            for c in missing:
+                print(f'MISSING  {c.name}: {c.detail}', flush=True)
+        if source_problem:
+            print(f'MISSING  Source map: {source_problem}', flush=True)
+        if ok:
+            print('OK  all required installs and tools are present', flush=True)
+    return 0 if ok else 2
 
 
 def _build_map(args: argparse.Namespace) -> int:

@@ -71,7 +71,7 @@ def build_command(settings, paths, *, redump: bool) -> list[str]:
     configure_localappdata()
     payload = asdict(settings)
     for field in ('waw', 'bo2', 'waw_tools', 't4', 't6', 'decoder', 'work', 'fastfile',
-                  'menu_blit', 'menu_large', 'menu_blur', 'loading_song'):
+                  'menu_blit', 'menu_large', 'menu_blur', 'menu_icon', 'menu_preview', 'loading_song'):
         if payload.get(field):
             payload[field] = windows_path(payload[field])
     command = [wine(), str(worker), '-m', 'waw2bo2.cli', 'build-map',

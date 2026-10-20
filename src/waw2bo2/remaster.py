@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import subprocess
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -121,17 +122,45 @@ def asset_index(bo2_root: Path, tool: Path, cache: Path) -> dict[str, dict[str, 
     return assets
 
 
-def find_matches(names, materials: dict[str, tuple[str, str]]) -> list[Match]:
+def material_zones(bo2_root: Path, cache: Path) -> dict[str, list[str]]:
+    """material name (lower) -> every zone/all fastfile defining it, in _zones order, read from the
+    per-zone listings asset_index leaves in ``cache``."""
+    from .all2raw import listing
+    where: dict[str, list[str]] = {}
+    for zone in _zones(bo2_root):
+        log = cache / f"{zone.stem}.assets.log"
+        if log.is_file():
+            for name in listing(log.read_text(encoding="utf-8", errors="replace")).get("material", []):
+                where.setdefault(name.lower(), []).append(str(zone))
+    return where
+
+
+def find_matches(names, materials: dict[str, tuple[str, str]],
+                 where: dict[str, list[str]] | None = None) -> list[Match]:
     """WaW model materials with a same-class BO2 material of the same name
-    (after the remaster prefix)."""
-    matches = []
+    (after the remaster prefix). With ``where`` (material_zones), each material is taken from
+    as few zones as possible: every zone dump extracts a whole level's materials and images."""
+    hits = []
     for waw in sorted(names):
         if split_name(waw)[0] != MODEL_CLASS:
             continue
-        hit = next((materials[c] for c in bo2_candidates(waw) if c in materials), None)
-        if hit is not None:
-            matches.append(Match(waw, hit[0], Path(hit[1])))
-    return matches
+        key = next((c for c in bo2_candidates(waw) if c in materials), None)
+        if key is not None:
+            hits.append((waw, key))
+    zone_of = {key: materials[key][1] for _, key in hits}
+    if where:
+        # greedy set cover over the defining zones, Zombies zones first on ties
+        uncovered = {key for _, key in hits if where.get(key)}
+        while uncovered:
+            counts: dict[str, int] = {}
+            for key in uncovered:
+                for zone in where[key]:
+                    counts[zone] = counts.get(zone, 0) + 1
+            best = min(counts, key=lambda z: (-counts[z], not Path(z).stem.startswith(("zm_", "common_zm")), z))
+            for key in [k for k in uncovered if best in where[k]]:
+                zone_of[key] = best
+                uncovered.discard(key)
+    return [Match(waw, materials[key][0], Path(zone_of[key])) for waw, key in hits]
 
 
 class _Extractor:
@@ -167,8 +196,9 @@ class _Extractor:
     def dump(self, zone: Path, assets: str) -> Path:
         key = (str(zone), assets)
         if key not in self.dumps:
-            # short names: shader file names are long and Windows paths end at 260
-            out = self.work / f"{zone.stem}.{len(self.dumps)}"
+            # short names: shader file names are long and Windows paths end at 260; named per
+            # (zone, assets) so zones can be dumped from several threads at once
+            out = self.work / f"{zone.stem}.{zlib.crc32(assets.encode()) % 1000}"
             shutil.rmtree(out, ignore_errors=True)
             self.log(f"[staging] Remaster: reading {assets.replace(',', ', ')} from {zone.name}")
             self.logs[out] = self._unlink(zone, assets, out)
@@ -294,6 +324,11 @@ def extract(matches: list[Match], bo2_root: Path, tool: Path, cache: Path, views
         kept = []
         reasons: dict[str, str] = {}
         needed: dict[Path, set[str]] = {}
+        # every zone dump is an independent native extraction: run them concurrently
+        from concurrent.futures import ThreadPoolExecutor
+        zones = sorted({zone for _, zone in wanted})
+        with ThreadPoolExecutor(max_workers=max(1, min(len(zones), os.cpu_count() or 1))) as pool:
+            list(pool.map(lambda zone: ex.dump(Path(zone), "material,techniqueset,image"), zones))
         for material, zone in wanted:
             home = ex.dump(Path(zone), "material,techniqueset,image")
             rel = techsets.oat_material_path(material)

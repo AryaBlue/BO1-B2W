@@ -150,6 +150,79 @@ if __name__ == '__main__':
     unittest.main()
 
 
+    def _fake_build_run(self, commands, paths):
+        """A fake native runner: records commands, fabricates staging + link output."""
+        staged = paths.stage / 'zone_raw/zm_bankjob/content_source/weapons/ak47'
+        def fake_run(command, log=None):
+            commands.append(command)
+            if 'stage-bridge' in command:
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                staged.write_text('weapon fields')
+            if 'bridge-link' in command:
+                for ff in (paths.stage / 'zone_out/zm_bankjob/zm_bankjob.ff', paths.mod / 'out/mod.ff'):
+                    ff.parent.mkdir(parents=True, exist_ok=True)
+                    ff.touch()
+        return fake_run, staged
+
+    def test_stage_cache_is_dormant_without_the_opt_in(self):
+        paths = BuildPaths.for_settings(self.settings)
+        for build in range(2):
+            commands = []
+            fake_run, _ = self._fake_build_run(commands, paths)
+            with patch.object(builddriver, 'run', side_effect=fake_run):
+                self.assertEqual(builddriver.build(self.settings), 0)
+            self.assertTrue(any('stage-bridge' in c for c in commands),
+                            f'staging must always run when the cache is off (build {build})')
+        self.assertFalse((Path(self.settings.work) / 'asset_cache/stage_cache').exists())
+
+    def test_stage_cache_skips_staging_on_identical_rebuild(self):
+        # The input digest hashes the real Unlinker binaries; create them.
+        for engine in ('t4', 't6'):
+            tool = Path(getattr(self.settings, engine)) / 'Unlinker.exe'
+            tool.parent.mkdir(parents=True, exist_ok=True)
+            tool.write_bytes(b'unlinker')
+        paths = BuildPaths.for_settings(self.settings)
+        with patch.dict(os.environ, {'WAW2BO2_STAGE_CACHE': '1'}):
+            first = []
+            fake_run, staged = self._fake_build_run(first, paths)
+            with patch.object(builddriver, 'run', side_effect=fake_run):
+                self.assertEqual(builddriver.build(self.settings), 0)
+            self.assertTrue(any('stage-bridge' in c for c in first))
+
+            # Delete the staged output; an identical rebuild must restore it
+            # from cache and never re-run the stage-bridge step.
+            staged.unlink()
+            second = []
+            fake_run, _ = self._fake_build_run(second, paths)
+            with patch.object(builddriver, 'run', side_effect=fake_run):
+                self.assertEqual(builddriver.build(self.settings), 0)
+            self.assertFalse(any('stage-bridge' in c for c in second),
+                             'identical rebuild should restore staging from cache')
+            self.assertEqual(staged.read_text(), 'weapon fields')
+
+    def test_stage_cache_reruns_staging_when_inputs_change(self):
+        for engine in ('t4', 't6'):
+            tool = Path(getattr(self.settings, engine)) / 'Unlinker.exe'
+            tool.parent.mkdir(parents=True, exist_ok=True)
+            tool.write_bytes(b'unlinker')
+        paths = BuildPaths.for_settings(self.settings)
+        with patch.dict(os.environ, {'WAW2BO2_STAGE_CACHE': '1'}):
+            first = []
+            fake_run, staged = self._fake_build_run(first, paths)
+            with patch.object(builddriver, 'run', side_effect=fake_run):
+                builddriver.build(self.settings)
+            staged.unlink()
+            # A changed option (remaster) changes the digest -> cache miss.
+            from dataclasses import replace
+            changed = replace(self.settings, remaster=True)
+            second = []
+            fake_run, _ = self._fake_build_run(second, paths)
+            with patch.object(builddriver, 'run', side_effect=fake_run):
+                builddriver.build(changed)
+            self.assertTrue(any('stage-bridge' in c for c in second),
+                            'a changed build option must not reuse the cached staging')
+
+
 class WorldNameTests(unittest.TestCase):
     def test_map_world_found_inside_mod_ff(self):
         with tempfile.TemporaryDirectory() as tmp:

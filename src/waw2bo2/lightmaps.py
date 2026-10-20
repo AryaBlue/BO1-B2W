@@ -19,6 +19,17 @@ Two encodings of each page are produced:
     shape; translated WaW programs sample it through an exact UV remap
     (``WAW_PAGE_UV``). The primary is box-filtered to the W x H layer size
     (reported: sun shadow detail at half resolution).
+
+BO1 (T5) pages differ (measured on ps_pimp_shader_layer_lmap_* of zombie_theater):
+  * secondary, W x 2H R5G6B5 (D3D format 23): top half A, bottom half B; per texel
+    .x / .z = red / blue share, .y = one direction component (A: x, B: y, decoded * 4 - 2).
+  * secondaryB, W x H G16R16 (format 34): .x / .y = brightness of A / B (* 31.875).
+    Colour = brightness * (4 red, 2 (1 - red - blue), 4 blue): equal shares of 0.25 are grey.
+  * primary, 2W x H L8: sun visibility (.y).
+  Lighting = A + B * (0.6 exp(-|d|^2) + 0.4) at a flat normal, already linear (BO1 multiplies
+  albedo^2 like T6), so the T6 page takes it without squaring. OAT has no loader for formats
+  23 / 34: the dumper writes their raw pixels as <image>.loaddef.bin (int32 format, size,
+  width, height, depth, flags, then the pixels).
   * T6-encoded, for surfaces still drawn by T6 donor programs: ambient =
     WaW's own lighting at a flat normal, squared into T6's linear units
     (hdrControl0.x assumed 1), directional colour 0, sun visibility from the
@@ -40,6 +51,13 @@ WAW_PAGE_UV = {
     'lightmapSamplerSecondary': (2.0 / 3.0, 0.0),
     'lightmapSamplerPrimary': (1.0 / 3.0, 2.0 / 3.0),
 }
+# BO1 secondaryB (G16R16 brightness) in the WaW-layout page of build_page_t5:
+# high bytes in the alpha of thirds A / B, low bytes in .z / .w of the third.
+# Filtering is linear, so hi * 256 + lo of filtered bytes is the filtered word.
+T5_BRIGHTNESS_TAPS = ((1.0 / 3.0, 0.0), (1.0 / 3.0, 1.0 / 3.0), (1.0 / 3.0, 2.0 / 3.0))
+T5_BRIGHTNESS_TEXEL = ('float4((T0.w * 65280.0 + T2.z * 255.0) / 65535.0, '
+                       '(T1.w * 65280.0 + T2.w * 255.0) / 65535.0, 1.0, 1.0)')
+PAGE_SAMPLERS = {*WAW_PAGE_UV, 'lightmapSamplerSecondaryB'}
 # WaW lm_* direction decode, per alpha pair (measured literal c1 of the programs)
 _DIR_SCALE = (4.07999992, 4.06451607)
 _DIR_BIAS = (-2.07999992, -2.06451607)
@@ -60,15 +78,20 @@ def _rgba(path: Path) -> tuple[int, int, bytes]:
             out[c::4] = level
         out[3::4] = level
         return img.width, img.height, bytes(out)
+    if img.iwi_format in (iwi.FMT_DXT1, iwi.FMT_DXT3, iwi.FMT_DXT5):
+        # BO1 sun visibility pages are DXT1
+        from PIL import Image
+        with Image.open(path) as dds:
+            return dds.width, dds.height, dds.convert('RGBA').tobytes()
     raise LightmapError(f'{path.name}: unsupported lightmap pixel format {img.iwi_format}')
 
 
-def _box_luminance(width: int, height: int, rgba: bytes, out_w: int, out_h: int) -> bytes:
-    """Average the red channel down to out_w x out_h (integer factor)."""
+def _box_luminance(width: int, height: int, rgba: bytes, out_w: int, out_h: int, channel: int = 0) -> bytes:
+    """Average one channel (default red) down to out_w x out_h (integer factor)."""
     fx, fy = width // out_w, height // out_h
     if fx * out_w != width or fy * out_h != height:
         raise LightmapError('primary lightmap is not an integer multiple of the page size')
-    red = rgba[0::4]
+    red = rgba[channel::4]
     out = bytearray(out_w * out_h)
     n = fx * fy
     for y in range(out_h):
@@ -142,9 +165,79 @@ def build_page(secondary: Path, primary: Path | None) -> tuple[int, int, bytes, 
     return sw, height, waw, t6
 
 
+T5_SECONDARY_FORMAT, T5_SECONDARY_B_FORMAT = 23, 34      # D3DFMT_R5G6B5, D3DFMT_G16R16
+T5_BRIGHTNESS = 31.875
+
+
+def _loaddef(path: Path, expected_format: int) -> tuple[int, int, bytes]:
+    fmt, size, width, height, _depth, _flags = struct.unpack_from('<6i', path.read_bytes())
+    if fmt != expected_format:
+        raise LightmapError(f'{path.name}: D3D format {fmt}, expected {expected_format}')
+    data = path.read_bytes()[24:24 + size]
+    bpp = 2 if fmt == T5_SECONDARY_FORMAT else 4
+    if len(data) != size or size < width * height * bpp:
+        raise LightmapError(f'{path.name}: {len(data)} bytes for {width}x{height}')
+    return width, height, data[:width * height * bpp]
+
+
+def build_page_t5(secondary: Path, secondary_b: Path, primary: Path | None) -> tuple[int, int, bytes, bytes]:
+    """(layer width, layer height, WaW-layout RGBA, T6 RGBA) for one BO1 page (see the module docstring).
+    WaW layout here: thirds A / B as (red share, direction, blue share, brightness high byte) and a third
+    (visibility, visibility, brightness A low byte, brightness B low byte)."""
+    sw, sh, sec = _loaddef(secondary, T5_SECONDARY_FORMAT)
+    bw, bh, sec_b = _loaddef(secondary_b, T5_SECONDARY_B_FORMAT)
+    if sh % 2 or (bw, bh) != (sw, sh // 2):
+        raise LightmapError(f'{secondary.name}: {sw}x{sh} secondary does not match {bw}x{bh} secondaryB')
+    width, height = sw, sh // 2
+    pixels = width * height
+    words = struct.unpack(f'<{pixels * 2}H', sec)
+    scales = struct.unpack(f'<{pixels * 2}H', sec_b)        # per texel: A (.x, low word), B (.y, high word)
+    if primary is not None:
+        pw, ph, pri = _rgba(primary)
+        vis = _box_luminance(pw, ph, pri, width, height, channel=1)   # BO1 reads .y (DXT1 green)
+    else:
+        vis = bytes([255]) * pixels
+    waw = bytearray(pixels * 12)
+    ambient = bytearray(pixels * 4)
+    for i in range(pixels):
+        dirs = []
+        for half in (0, 1):
+            v = words[half * pixels + i]
+            red, d, blue = (v >> 11) / 31.0, ((v >> 5) & 63) / 63.0, (v & 31) / 31.0
+            raw = scales[2 * i + half]
+            o = half * pixels * 4 + i * 4
+            waw[o:o + 4] = bytes(((v >> 11) * 255 // 31, ((v >> 5) & 63) * 255 // 63, (v & 31) * 255 // 31, raw >> 8))
+            dirs.append(d * 4.0 - 2.0)
+            bright = raw / 65535.0 * T5_BRIGHTNESS
+            colour = (4.0 * red * bright, 2.0 * max(0.0, 1.0 - red - blue) * bright, 4.0 * blue * bright)
+            if half == 0:
+                top = colour
+            else:
+                bottom = colour
+        weight = 0.6 * math.exp(-(dirs[0] * dirs[0] + dirs[1] * dirs[1])) + 0.4
+        light = [top[c] + bottom[c] * weight for c in range(3)]
+        o = pixels * 8 + i * 4
+        waw[o:o + 4] = bytes((vis[i], vis[i], scales[2 * i] & 255, scales[2 * i + 1] & 255))
+        peak = max(1.0, max(light))
+        p = i * 4
+        for c in range(3):
+            ambient[p + c] = min(255, int(round(light[c] / peak * 255.0)))
+        ambient[p + 3] = min(255, max(1, int(round(255.0 / peak))))
+    directional = bytes([0, 0, 0, 255]) * pixels
+    direction = bytearray(pixels * 4)
+    direction[0::4] = bytes([128]) * pixels
+    direction[1::4] = bytes([128]) * pixels
+    direction[2::4] = bytes([255]) * pixels
+    direction[3::4] = vis
+    return width, height, bytes(waw), bytes(ambient) + directional + bytes(direction)
+
+
 def _stage_page(task):
-    index, secondary, primary, project_root = task
-    width, height, waw, t6 = build_page(secondary, primary)
+    index, secondary, primary, project_root, secondary_b = task
+    if secondary_b is not None:
+        width, height, waw, t6 = build_page_t5(secondary, secondary_b, primary)
+    else:
+        width, height, waw, t6 = build_page(secondary, primary)
     names = {'waw': f'lightmap{index}_waw_secondary', 't6': f'lightmap{index}_t6_secondary'}
     for key, data in (('waw', waw), ('t6', t6)):
         if os.environ.get('WAW2BO2_DIAG_PAGEID'):
@@ -175,9 +268,15 @@ def stage(world, image_roots: list[Path], project_root: Path, waw_materials: set
     report = {'pages': [], 'warnings': [], 'errors': []}
     pages = []
 
-    def find(index, kind):
-        name = f'_lightmap{index}_{kind}.dds'
+    def find(index, kind, suffix='.dds'):
+        name = f'_lightmap{index}_{kind}{suffix}'
         return next((r / name for r in image_roots if (r / name).exists()), None)
+
+    # BO1 pages: secondary + secondaryB raw dumps (formats OAT cannot load, see the module docstring)
+    t5 = find(0, 'secondary') is None and find(0, 'secondary', '.loaddef.bin') is not None
+    if t5:
+        base_find = find
+        find = lambda index, kind: base_find(index, kind, '.dds' if kind == 'primary' else '.loaddef.bin')
 
     # WaW lightmap pages are *lightmap0.. up to the world's lightmap count; a
     # surface index past them (31 on the measured map) means "no lightmap".
@@ -194,7 +293,11 @@ def stage(world, image_roots: list[Path], project_root: Path, waw_materials: set
         secondary, primary = find(index, 'secondary'), find(index, 'primary')
         if primary is None:
             report['warnings'].append(f'lightmap page {index}: primary (sun visibility) absent; fully visible')
-        tasks.append((index, secondary, primary, project_root))
+        secondary_b = find(index, 'secondaryb') if t5 else None
+        if t5 and secondary_b is None:
+            report['errors'].append(f'lightmap page {index}: BO1 secondaryB (brightness) absent')
+            continue
+        tasks.append((index, secondary, primary, project_root, secondary_b))
     from .parallel import ordered_map
     for result in ordered_map(_stage_page, tasks, label='Lightmaps', processes=True):
         pages.append({key: result[key] for key in ('waw', 't6')})
@@ -205,6 +308,9 @@ def stage(world, image_roots: list[Path], project_root: Path, waw_materials: set
                                         encoding='utf-8')
     if pages:
         report['warnings'].append('lightmap sun visibility (WaW primary) box-filtered to the secondary page resolution')
+        if t5:
+            report['warnings'].append('BO1 lightmaps decoded (R5G6B5 + G16R16 brightness) for T6 programs; translated '
+                                      'BO1 programs reading lightmapSamplerSecondaryB are not adapted yet')
         if len(waw_materials) < len({s.material for s in world.surfaces if s.lightmap_index < count}):
             report['warnings'].append('APPROXIMATED lightmaps for T6 donor materials: WaW flat-normal lighting, no '
                                       'directional term, hdrControl0.x assumed 1')

@@ -18,6 +18,21 @@ import uuid
 SCHEMA = 3
 WAW_ASSETS = ('clipmap,mapents,gfxworld,gameworldsp,material,image,fx,xmodel,weapon,xanim,sound,'
               'loadedsound,rawfile,comworld,lightdef,physpreset,snddriverglobals,localize')
+# Black Ops (T5) source maps: same world/gameplay set; BO1 keeps both clipmap slots and has no WaW
+# loaded-sound assets (sound banks are converted separately)
+BO1_ASSETS = ('clipmap,clipmap_unused,mapents,gfxworld,gameworldsp,material,image,fx,xmodel,weapon,xanim,'
+              'rawfile,comworld,lightdef,physpreset,localize')
+# BO1 zones that hold the zombies framework and shared runtime assets
+BO1_STOCK_ZONES = {'common', 'common_zombie', 'common_zombie_patch', 'code_pre_gfx', 'code_post_gfx', 'patch'}
+
+
+def source_engine(game: Path) -> str:
+    """Engine of the source game install: Black Ops (T5) or World at War (T4)."""
+    return 'T5' if (Path(game) / 'BlackOps.exe').is_file() else 'T4'
+
+
+def source_assets(engine: str) -> str:
+    return BO1_ASSETS if engine == 'T5' else WAW_ASSETS
 
 
 # Only the converter's patched T4 Unlinker (vendor/OpenAssetTools.patch) writes
@@ -50,7 +65,7 @@ def require_waw_extractor(tool: Path) -> None:
 
 def stock_assets(engine: str, ff: Path) -> str:
     """Cache conversion metadata across maps without exporting entire games."""
-    if engine == 'T4':
+    if engine in ('T4', 'T5'):
         if ff.stem == 'code_post_gfx':
             return 'rawfile,image,lightdef'
         # Keep scripts and a complete definition index. Other stock payloads
@@ -512,6 +527,8 @@ def _rank(name: str) -> tuple[int, str]:
 
 def stock_zones(game: Path, engine: str) -> list[Path]:
     zones = (game / 'zone').rglob('*.ff')
+    if engine == 'T5':
+        zones = (p for p in zones if p.stem in BO1_STOCK_ZONES)
     if engine == 'T6':
         # Nuketown donors and its always-loaded Zombies framework. The basic
         # wooden barrier is defined in prison, not in Nuketown's magic box.
@@ -564,7 +581,7 @@ def prepare(game: Path, tool: Path, root: Path, *, engine: str, refresh: bool = 
     zones = stock_zones(game, engine)
     if not zones:
         raise FileNotFoundError(f'No installed fastfiles found in {game / "zone"}')
-    if engine == 'T4':
+    if engine in ('T4', 'T5'):
         require_waw_extractor(tool)
     inputs = inventory(game, tool, engine)
     tool_hash = inputs['tool']
@@ -579,7 +596,7 @@ def prepare(game: Path, tool: Path, root: Path, *, engine: str, refresh: bool = 
             folder, data = extract_zone(ff, tool, zone_root,
                 search_paths((ff.parent, game / 'zone/all', game / 'main', game / 'sound', game)),
                 assets=stock_assets(engine, ff),
-                image_format='DDS' if engine == 'T4' else 'IWI', tool_digest=tool_hash,
+                image_format='DDS' if engine in ('T4', 'T5') else 'IWI', tool_digest=tool_hash,
                 dependencies=archives, refresh=refresh)
             if engine == 'T6' and ff.stem == 'zm_prison':
                 data = trim_barrier_payload(folder, data)
@@ -633,7 +650,8 @@ def prepare(game: Path, tool: Path, root: Path, *, engine: str, refresh: bool = 
 
 def extract_all(settings, *, refresh=False, cache_paths: CachePaths | None = None) -> tuple[Path, Path]:
     paths = cache_paths or CachePaths.for_settings(settings)
-    waw = prepare(Path(settings.waw), Path(settings.t4) / 'Unlinker.exe', paths.waw, engine='T4', refresh=refresh)
+    waw = prepare(Path(settings.waw), Path(settings.t4) / 'Unlinker.exe', paths.waw, engine=source_engine(settings.waw),
+                  refresh=refresh)
     bo2 = prepare(Path(settings.bo2), Path(settings.t6) / 'Unlinker.exe', paths.bo2, engine='T6', refresh=refresh)
     if settings.fastfile and Path(settings.fastfile).is_file():
         source_dumps(settings, paths, refresh=refresh)
@@ -662,6 +680,12 @@ def source_dumps(settings, paths: CachePaths, *, refresh=False) -> dict[str, Pat
                           'localized_' + source.stem + '_patch'}
             extras = [ff for ff in extras if ff.stem in companions]
         selected += [('extra:' + ff.stem, ff) for ff in extras if ff not in expected]
+        if source_engine(Path(settings.waw)) == 'T5':
+            # BO1 splits each level: zone/<Language>/<xx>_<map>.ff holds part of its images and models
+            # (Kino's main door, lobby door). English first, else any installed language.
+            languages = sorted((Path(settings.waw) / 'zone').glob(f'*/??_{source.stem}.ff'),
+                               key=lambda p: (p.parent.name.lower() != 'english', str(p)))
+            selected += [('extra:' + ff.stem, ff) for ff in languages[:1]]
         selected = [(role, ff) for role, ff in selected if ff.is_file()]
         unique = list(dict.fromkeys(ff for _, ff in selected))
         # ":short-staging" retires custom-map dumps published before exports
@@ -670,7 +694,7 @@ def source_dumps(settings, paths: CachePaths, *, refresh=False) -> dict[str, Pat
         def extract(ff):
             print(f'Extract All: custom map starting {ff.name}', flush=True)
             output, data = extract_zone(ff, tool, root / key(str(ff)),
-                search_paths((folder, Path(settings.waw) / 'main')), assets=WAW_ASSETS,
+                search_paths((folder, Path(settings.waw) / 'main')), assets=source_assets(source_engine(settings.waw)),
                 image_format='DDS', tool_digest=tool_hash, dependencies=dependencies, refresh=refresh)
             require_world_dumps(ff, output, data, tool)
             return output

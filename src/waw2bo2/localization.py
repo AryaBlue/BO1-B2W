@@ -166,6 +166,18 @@ def stage(project: Path, roots: list[Path], iwd_dirs: list[Path], stock=None,
             prepared[str(Path(data['inputs']['file']).resolve())] = root
     if unlinker is not None:
         zones = {ff for directory in iwd_dirs if directory.is_dir() for ff in directory.glob('*.ff')}
+        # A BO1 map's folder is the game's zone/Common, holding every map's zones: keep the ones
+        # already prepared for this map (keys from other stock zones are found through ``stock`` below)
+        zones = {ff for ff in zones if ff.parent.name.lower() != 'common' or str(ff.resolve()) in prepared}
+        # BO1 keeps its text in zone/<Language>/<xx>_<zone>.ff beside zone/Common (Kino's barrier
+        # prompts are in en_common_zombie, not in any map zone or IWD)
+        for directory in iwd_dirs:
+            lang_dir = directory.parent / language.title()
+            if directory.name.lower() != 'common' or not lang_dir.is_dir():
+                continue
+            stems = {'common_zombie', *(ff.stem.lower() for ff in zones if ff.parent == directory)}
+            zones |= {lang_dir / f'{language[:2]}_{stem}.ff' for stem in stems
+                      if (lang_dir / f'{language[:2]}_{stem}.ff').is_file()}
         # Patched definitions win; common localization is the map's baseline.
         for ff in sorted(zones, key=lambda p: ('patch' not in p.stem.lower(),
                                               'common' in p.stem.lower(), p.name)):

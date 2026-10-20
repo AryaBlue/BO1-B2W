@@ -178,6 +178,8 @@
   },
   "compat_wrappers": [
     "clientnotify",
+    "battlechatter_off",
+    "battlechatter_on",
     "gettagorigin",
     "newhudelem",
     "newclienthudelem",

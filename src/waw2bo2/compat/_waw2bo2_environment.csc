@@ -66,3 +66,31 @@ sun_state( localclientnum, state )
     setsaveddvar( "r_lightTweakSunColor", color );
     setsaveddvar( "r_lightTweakSunLight", strength );
 }
+
+// Client loop watchdog: see the compat GSC's waw_loop_guard.
+waw_loop_guard( id )
+{
+    now = gettime();
+    if ( !isdefined( level.waw2bo2_loop_time ) )
+    {
+        level.waw2bo2_loop_time = [];
+        level.waw2bo2_loop_count = [];
+        level.waw2bo2_loop_reported = [];
+    }
+    if ( !isdefined( level.waw2bo2_loop_time[id] ) || level.waw2bo2_loop_time[id] != now )
+    {
+        level.waw2bo2_loop_time[id] = now;
+        level.waw2bo2_loop_count[id] = 0;
+        return;
+    }
+    level.waw2bo2_loop_count[id]++;
+    if ( level.waw2bo2_loop_count[id] < 500 )
+        return;
+    level.waw2bo2_loop_count[id] = 0;
+    if ( !isdefined( level.waw2bo2_loop_reported[id] ) )
+    {
+        level.waw2bo2_loop_reported[id] = 1;
+        println( "WAW2BO2 SPIN client " + id + " (500 passes in one frame; waiting a frame so the thread survives)" );
+    }
+    wait 0.01;
+}

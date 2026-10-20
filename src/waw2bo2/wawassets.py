@@ -20,8 +20,10 @@ DUMP_MARKER = ".waw2bo2_dump_v5_collsurfs"  # v5: xmodel collSurfs/contents in t
 
 
 def _zone_rank(zone: str) -> tuple:
-    # zombie zones first (closest to a zombies map), then localized last
-    return (0 if zone.startswith("nazi_zombie") else 2 if zone.startswith("localized") else 1, zone)
+    # zombie zones first (closest to a zombies map; BO1 patch zones before the zones they update),
+    # then localized last
+    return (0 if zone.startswith("nazi_zombie") or zone.startswith("common_zombie") else
+            2 if zone.startswith("localized") else 1, not zone.endswith("_patch"), zone)
 
 
 @dataclass
@@ -42,7 +44,8 @@ class StockWawAssets:
         if shared.is_file():
             data = json.loads(shared.read_text(encoding='utf-8'))
             for filename, entry in data['zones'].items():
-                if Path(filename).parent.name.lower() == 'english':
+                # WaW stock zones live in zone/english, BO1's in zone/Common
+                if Path(filename).parent.name.lower() in ('english', 'common'):
                     zone = Path(filename).stem
                     self.index[zone] = entry['index']
                     self.prepared[zone] = Path(entry['folder'])

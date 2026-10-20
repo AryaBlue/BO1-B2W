@@ -417,6 +417,20 @@ def rename_level_fields(tokens: list[gsc.Token]) -> int:
     return renamed
 
 
+def lower_bo1_mutators(tokens: list[gsc.Token]) -> int:
+    """BO1 game mutators (level.mutators["mutator_noPerks"], ...): its _zombiemode fills them from the
+    lobby; the port has no lobby mutators, so every check is false, as in a default BO1 game."""
+    lowered = 0
+    for i in range(len(tokens) - 5):
+        if (tokens[i].low == "level" and tokens[i + 1].text == "." and tokens[i + 2].low == "mutators"
+                and tokens[i + 3].text == "[" and tokens[i + 4].kind == gsc.STRING and tokens[i + 5].text == "]"):
+            tokens[i].text, tokens[i].kind = "false", gsc.IDENT
+            for t in tokens[i + 1:i + 6]:
+                t.text, t.pre, t.kind = "", "", gsc.PUNCT
+            lowered += 1
+    return lowered
+
+
 def level_fields_read(tokens: list[gsc.Token], start: int = 2, end: int | None = None) -> set[str]:
     """``level.<field>`` names (lower-case) used in tokens[start:end]."""
     end = len(tokens) if end is None else end
@@ -878,6 +892,149 @@ def lower_hud_fields(tokens: list[gsc.Token]) -> int:
     return changed
 
 
+# T6 builtins, methods and entity fields taking vectors that a ported map
+# script may feed a bad value (undefined, a string, a struct): routed through
+# compat waw_safe_<name> / waw_safe_m_<name> / waw_safe_field, which log
+# "WAW2BO2 BAD VECTOR ... at <script>:<line>" and fall back to a neutral result
+# instead of aborting the calling thread or passing garbage on to the engine.
+VECTOR_GUARDS = frozenset((
+    "anglestoforward", "anglestoright", "anglestoup", "vectortoangles", "vectornormalize",
+    "distance", "distancesquared", "distance2d", "distance2dsquared", "length", "lengthsquared",
+    "vectordot", "vectorcross", "playfx", "playsoundatposition", "spawn", "bullettrace",
+    "bullettracepassed", "sighttracepassed", "physicstrace", "radiusdamage", "earthquake", "magicbullet"))
+VECTOR_METHOD_GUARDS = frozenset((
+    "moveto", "rotateto", "setorigin", "setplayerangles", "setvelocity", "setgoalpos", "forceteleport",
+    "teleport", "linkto", "physicslaunch", "launchragdoll", "movegravity", "magicgrenadetype"))
+VECTOR_FIELDS = frozenset(("origin", "angles"))
+# keywords that may directly precede a function-form call
+CALL_PREFIX_KEYWORDS = frozenset(("return", "thread", "childthread", "else", "wait", "in", "case"))
+
+
+def guard_vector_calls(tokens: list[gsc.Token], label: str, local_functions: set[str] = frozenset()) -> int:
+    """Vector builtins, methods and ``<name>.origin/.angles =`` assignments ->
+    compat checked versions that name their call site (``label:<line>``).
+    Runs after reference resolution: a map function sharing a builtin's name is
+    renamed waw_<name> by then, so a remaining bare function name is the
+    builtin; a method name the script defines itself (``local_functions``) is
+    the map's own. Pointers, qualified names and longer receivers
+    (``a.b.origin``) are left alone."""
+    changed = 0
+    for i in range(1, len(tokens) - 1):
+        t = tokens[i]
+        if t.kind != gsc.IDENT or tokens[i + 1].text != "(":
+            continue
+        prev = tokens[i - 1]
+        method = prev.text in (")", "]") or (prev.kind == gsc.IDENT and prev.low not in CALL_PREFIX_KEYWORDS
+                                             and prev.low not in gsc.KEYWORDS - {"self", "level", "game", "anim"})
+        if prev.text in (".", "::"):
+            continue
+        if method and t.low in VECTOR_METHOD_GUARDS and t.low not in local_functions:
+            name = f"{COMPAT}::waw_safe_m_{t.low}"
+        elif not method and t.low in VECTOR_GUARDS:
+            name = f"{COMPAT}::waw_safe_{t.low}"
+        else:
+            continue
+        t.text = name
+        # a complete target call (see lower_zombie_weapon_keys)
+        t.kind = gsc.PUNCT
+        site = f'"{label}:{t.line}"'
+        tokens[i + 1].text += f" {site}" + ("" if tokens[i + 2].text == ")" else ",")
+        changed += 1
+    for i in range(3, len(tokens) - 2):
+        field, receiver = tokens[i], tokens[i - 2]
+        if field.low not in VECTOR_FIELDS or tokens[i - 1].text != "." or receiver.kind != gsc.IDENT:
+            continue
+        if tokens[i - 3].text in (".", "]", ")", "::") or tokens[i + 1].text != "=" or tokens[i + 2].text == "=":
+            continue
+        depth, j = 0, i + 2
+        while j < len(tokens) and not (depth == 0 and tokens[j].text == ";"):
+            depth += (tokens[j].text in "([{") - (tokens[j].text in ")]}")
+            j += 1
+        if j >= len(tokens) or j == i + 2:
+            continue
+        if not any(x.kind in (gsc.IDENT, gsc.STRING, gsc.PATH) for x in tokens[i + 2:j]):
+            continue  # a literal vector cannot be wrong
+        tokens[i + 2].pre +=f'{COMPAT}::waw_safe_field( "{label}:{field.line}", '
+        tokens[j - 1].text += f', {receiver.text}.{field.text}, "{field.low}" )'
+        changed += 1
+    return changed
+
+
+LOOP_GUARD_SERVER = COMPAT + "::waw_loop_guard"
+LOOP_GUARD_CLIENT = "clientscripts\\mp\\waw\\_waw2bo2_environment::waw_loop_guard"
+
+
+def guard_loop_tokens(tokens: list[gsc.Token], label: str, guard: str) -> int:
+    """Put ``guard( "<label>:<line>" );`` at the top of every braced while, for
+    and foreach loop: T6 also kills a thread doing too much work in one frame,
+    e.g. a nested counted loop over a large array. Idempotent."""
+    changed = 0
+    for i, t in enumerate(tokens[:-1]):
+        if t.kind != gsc.IDENT or t.low not in ("while", "for", "foreach") or tokens[i + 1].text != "(":
+            continue
+        depth, j = 0, i + 1
+        while j < len(tokens):
+            depth += (tokens[j].text == "(") - (tokens[j].text == ")")
+            if depth == 0:
+                break
+            j += 1
+        if j + 1 >= len(tokens) or tokens[j + 1].text != "{":
+            continue
+        brace = tokens[j + 1]
+        # re-tokenized, the guard call is split (path, ::, name)
+        if guard in brace.text or "".join(x.text for x in tokens[j + 2:j + 6]).lower().startswith(guard.lower()):
+            continue
+        brace.text += f' {guard}( "{label}:{t.line}" );'
+        changed += 1
+    return changed
+
+
+def guard_spinning_loops(project_root: Path, project: str) -> int:
+    """Loop watchdog calls (compat waw_loop_guard) in the map's ported and
+    generated server and client scripts; the watchdog files themselves excepted."""
+    targets = [(p, LOOP_GUARD_SERVER) for p in (project_root / "maps/mp/waw").rglob("*.gsc")
+               if p.name != "_waw2bo2_compat.gsc"]
+    targets += [(p, LOOP_GUARD_CLIENT) for p in (project_root / "clientscripts/mp/waw").rglob("*.csc")
+                if p.name != "_waw2bo2_environment.csc"]
+    targets += [(project_root / "maps/mp" / f"{project}.gsc", LOOP_GUARD_SERVER),
+                (project_root / "clientscripts/mp" / f"{project}.csc", LOOP_GUARD_CLIENT)]
+    total = 0
+    for path, guard in targets:
+        if not path.is_file():
+            continue
+        tokens = gsc.tokenize(path.read_text(encoding="utf-8"))
+        changed = guard_loop_tokens(tokens, path.relative_to(project_root).with_suffix("").as_posix(), guard)
+        if changed:
+            path.write_text("".join(t.pre + t.text for t in tokens), encoding="utf-8")
+            total += changed
+    return total
+
+
+# fields a WaW script may read before anything set them, with the value WaW/BO2 assume
+FIELD_FALLBACKS = {"maxhealth": "100"}
+
+
+def fallback_field_reads(tokens: list[gsc.Token]) -> int:
+    """``<name>.maxhealth`` reads -> compat ``waw_or( <name>.maxhealth, 100 )``.
+    Assignments (``x.maxhealth = ...``) and longer receivers (``a.b.maxhealth``,
+    ``a[i].maxhealth``) are left alone."""
+    changed = 0
+    for i in range(2, len(tokens) - 1):
+        field = tokens[i].low
+        if field not in FIELD_FALLBACKS or tokens[i - 1].text != "." or tokens[i - 2].kind != gsc.IDENT:
+            continue
+        if tokens[i - 3].text in (".", "]", ")", "::") or tokens[i - 3].low == "waw_or":
+            continue
+        after = tokens[i + 1].text
+        if after == "=" and tokens[i + 2].text != "=" or after in ("+=", "-=", "*=", "/=", "++", "--")                 or after in ("+", "-") and tokens[i + 2].text == after:
+            continue
+        receiver = tokens[i - 2]
+        receiver.text = f"{COMPAT}::waw_or( {receiver.text}"
+        tokens[i].text = f"{tokens[i].text}, {FIELD_FALLBACKS[field]} )"
+        changed += 1
+    return changed
+
+
 def lower_zombie_weapon_keys(tokens: list[gsc.Token]) -> int:
     """`GetArrayKeys( level.zombie_weapons )` -> the WaW-registered keys only
     (compat waw_zombie_weapon_keys): the WaW box chooser offers every key, and
@@ -1194,6 +1351,7 @@ class Translator:
             self._split_main(script)
         self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
         self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
+        self.report.rewrites["BO1 mutator checks lowered to false"] += lower_bo1_mutators(tokens)
         self.report.rewrites["WaW deathanim assignments kept BO2's (ASD state)"] += keep_bo2_deathanims(tokens)
         defs = {fn.start for fn in script.functions.values()}
         for name, fn in script.functions.items():
@@ -1202,6 +1360,9 @@ class Translator:
                 self.report.rewrites["map functions named like T6 builtins renamed (waw_*)"] += 1
         self.resolve_refs(tokens, script, where_file, included_bo2, defs,
                           neutralized_ranges=neutralized_ranges)
+        self.report.rewrites["vector builtins/methods/fields checked (compat waw_safe_*)"] += guard_vector_calls(
+            tokens, norm(path).replace("\\", "/"), {name.lower() for name in script.functions})
+        self.report.rewrites["field reads with fallbacks (compat waw_or)"] += fallback_field_reads(tokens)
         self.report.rewrites["WaW contact-kill monitors own AI attacks"] += bridge_contact_kill_attacks(tokens, script)
         self.report.rewrites["WaW being_revived reads bridged to T6 revive state"] += bridge_revive_reads(tokens)
         self.report.rewrites["WaW session stat reads bridged to T6 counters"] += bridge_player_stat_reads(tokens)
@@ -1456,6 +1617,7 @@ class Translator:
         where = self.sources.origin.get(core + ".gsc", core)
         self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
         self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
+        self.report.rewrites["BO1 mutator checks lowered to false"] += lower_bo1_mutators(tokens)
         self.report.rewrites["WaW deathanim assignments kept BO2's (ASD state)"] += keep_bo2_deathanims(tokens)
         self.resolve_refs(tokens, script, where, set(CORE_INCLUDES), {0}, extracting=core)
         self.report.extracted.append(f"{core}::{init} (level state)")
@@ -1586,6 +1748,7 @@ class Translator:
         tokens[0].pre = f"\n// {core}::{function}: the map's leading rules, as a BO2 damage callback\n"
         self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
         self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
+        self.report.rewrites["BO1 mutator checks lowered to false"] += lower_bo1_mutators(tokens)
         self.resolve_refs(tokens, script, where, set(CORE_INCLUDES), {0}, extracting=core)
         self.report.extracted.append(f"{core}::{function} (map prelude -> damage callback)")
         self.level_state_parts.append(gsc.emit(tokens) + f"\n{name}_register()\n{{\n"
@@ -1641,6 +1804,7 @@ class Translator:
         tokens[0].pre = f"\n// {core}::{function}: the source round count formula, as BO2's max_zombie_func\n"
         self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
         self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
+        self.report.rewrites["BO1 mutator checks lowered to false"] += lower_bo1_mutators(tokens)
         self.resolve_refs(tokens, script, where, set(CORE_INCLUDES), {0}, extracting=core)
         self.report.extracted.append(f"{core}::{function} (round count formula -> max_zombie_func)")
         self.level_state_parts.append(gsc.emit(tokens) + f"\n{name}_register()\n{{\n"
@@ -1803,6 +1967,7 @@ class Translator:
         self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
         self.source_lowerings(tokens)
         self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
+        self.report.rewrites["BO1 mutator checks lowered to false"] += lower_bo1_mutators(tokens)
         self.report.rewrites["WaW deathanim assignments kept BO2's (ASD state)"] += keep_bo2_deathanims(tokens)
         self.resolve_refs(tokens, script, where, set(CORE_INCLUDES), {0}, extracting=core)
         self.report.rewrites["WaW HUD network font scales decoded"] += bridge_font_scales(tokens)
@@ -1892,6 +2057,7 @@ class Translator:
                       *copy.deepcopy(body), gsc.Token(gsc.PUNCT, "}", "\n"), gsc.Token(gsc.EOF, "")]
             self.report.rewrites["syntax fixes (T6 compiler)"] += fix_syntax(tokens)
             self.report.rewrites["WaW-owned level fields renamed (level.waw_*)"] += rename_level_fields(tokens)
+            self.report.rewrites["BO1 mutator checks lowered to false"] += lower_bo1_mutators(tokens)
             self.resolve_refs(tokens, script, where, set(CORE_INCLUDES), {0}, extracting=ZOMBIEMODE)
             tokens[-2].text = tail + tokens[-2].text
             self.level_state_parts.append(gsc.emit(tokens))
@@ -2916,6 +3082,10 @@ def waw_pack_a_punch_source(source: str, path: str) -> tuple[str, set[str]] | No
     kept = []
     for start, end in top_level_statements(toks, init.body_open, init.body_close):
         text = "".join(t.low for t in toks[start:end])
+        if text.startswith("if(level.mutators[") and "else" not in text:
+            # a BO1 lobby-mutator branch never runs in the port (lower_bo1_mutators) and may use
+            # perk-machine locals this reduction removes (BO1 mutator_noPerks: vending_triggers)
+            continue
         relays = [script.functions[n] for n in callees(start, end) if n != "init"]
         if any(m in text for m in PACK_A_PUNCH_MARKERS) or \
                 (relays and all(_power_relay(script, fn) for fn in relays) and "thread" in text):
@@ -3248,6 +3418,71 @@ def ensure_owned_client_bootstrap(out_root: Path, bo2_root: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(PERK_OVERRIDE_HEADER + bootstrap.replace(native, owned), encoding="utf-8")
     return destination
+
+
+# BO2 _zm_traps overlays per trap type: the server registers them from zombie_trap triggers, the
+# client (clientscripts _zm_traps::init) only from zm_traps structs, which source maps do not have
+CLIENT_TRAP_OVERLAYS = {
+    "electric": 'clientscripts\\mp\\_visionset_mgr::vsmgr_register_overlay_info_style_electrified( "zm_trap_electric", 16000, 15, 1.25 );',
+    "fire": 'clientscripts\\mp\\_visionset_mgr::vsmgr_register_overlay_info_style_burn( "zm_trap_burn", 16000, 15, 1.25 );',
+}
+TRAP_INIT_CALL = "clientscripts\\mp\\zombies\\_zm_traps::init();"
+
+
+def register_client_trap_overlays(out_root: Path) -> list[str]:
+    """Register on the client the trap overlays the server registers for the map's zombie_trap triggers,
+    right after the client trap init (idempotent). Without them the overlay clientfields exist on the
+    server only and the game disconnects with EXE_CLIENT_FIELD_MISMATCH. Returns the trap types."""
+    entities_json = out_root / "BSP" / "entities.json"
+    bootstrap = out_root / "clientscripts/mp/waw/_waw2bo2_zm.csc"
+    if not entities_json.is_file() or not bootstrap.is_file():
+        return []
+    entities = json.loads(entities_json.read_text(encoding="utf-8"))["entities"]
+    types = sorted({e["script_noteworthy"] for e in entities if e.get("targetname") == "zombie_trap"
+                    and e.get("script_noteworthy") in CLIENT_TRAP_OVERLAYS})
+    source = bootstrap.read_text(encoding="utf-8")
+    marker = "// waw2bo2: map trap overlays"
+    if not types or marker in source:
+        return types
+    match = re.search(r"^([ \t]*)" + re.escape(TRAP_INIT_CALL) + r"[ \t]*\n", source, re.M)
+    if match is None:
+        raise ValueError(f"{bootstrap}: no {TRAP_INIT_CALL} to register the map's trap overlays after")
+    lines = [f"{match[1]}{marker}"] + [f"{match[1]}{CLIENT_TRAP_OVERLAYS[t]}" for t in types]
+    bootstrap.write_text(source[:match.end()] + "\n".join(lines) + "\n" + source[match.end():], encoding="utf-8")
+    return types
+
+
+SERVER_POWERUP_INCLUDE_RE = re.compile(r'^[ \t]*(?:[\w\\]+::)?include_zombie_powerup\s*\(\s*"(\w+)"', re.M)
+CLIENT_POWERUP_INCLUDE_RE = re.compile(r'^([ \t]*)(?:[\w\\]+::)?include_powerup\s*\(\s*"(\w+)"[^\n]*\n', re.M)
+CLIENT_POWERUP_ADD_RE = re.compile(r'^[ \t]*add_zombie_powerup\s*\(\s*"(\w+)"', re.M)
+
+
+def sync_client_powerups(out_root: Path, project: str, bo2_root: Path) -> list[str]:
+    """Include on the client every powerup the server's map scripts include (idempotent). BO1 maps list
+    some powerups only in their GSC (Five: bonfire_sale, minigun); BO2 registers a toplayer clientfield
+    per included powerup on each side, so a missing client include disconnects with
+    EXE_CLIENT_FIELD_MISMATCH. Returns the powerups added."""
+    client_main = out_root / "clientscripts" / "mp" / f"{project}.csc"
+    stock_client = bo2_root / "raw" / "clientscripts" / "mp" / "zombies" / "_zm_powerups.csc"
+    if not client_main.is_file() or not stock_client.is_file():
+        return []
+    server = set()
+    for script in (out_root / "maps").rglob("*.gsc"):
+        server.update(SERVER_POWERUP_INCLUDE_RE.findall(script.read_text(encoding="utf-8", errors="replace")))
+    known = set(CLIENT_POWERUP_ADD_RE.findall(stock_client.read_text(encoding="utf-8", errors="replace")))
+    source = client_main.read_text(encoding="utf-8")
+    includes = list(CLIENT_POWERUP_INCLUDE_RE.finditer(source))
+    marker = "// waw2bo2: powerups the server includes"
+    # no client includes: BO2's client registers every powerup, nothing to add
+    if not includes or marker in source:
+        return []
+    missing = sorted((server & known) - {m[2] for m in includes})
+    if not missing:
+        return []
+    last = includes[-1]
+    lines = [f"{last[1]}{marker}"] + [f'{last[1]}include_powerup( "{name}" );' for name in missing]
+    client_main.write_text(source[:last.end()] + "\n".join(lines) + "\n" + source[last.end():], encoding="utf-8")
+    return missing
 
 
 PERK_OVERRIDE_HEADER = "// waw2bo2: WaW owns perk gameplay; BO2 runtime support only.\n"

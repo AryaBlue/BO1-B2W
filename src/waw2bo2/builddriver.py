@@ -8,9 +8,45 @@ import shutil
 import struct
 import subprocess
 
-from . import all2raw, modelhitboxes, progress
+from . import all2raw, modelhitboxes, progress, stagecache
 from .launcher import BuildPaths, Settings, cli_command
 from .resources import resource_root
+
+
+def _dump_token(folder: Path):
+    """A content identity for an extracted/dumped source folder.
+
+    Prefers the extraction receipt's ``inputs`` (source stamp + tool digest +
+    dependencies + asset selection -- a complete description of the dump's
+    content); falls back to the content-addressed folder name when no receipt
+    is present (e.g. a merged stock view)."""
+    folder = Path(folder)
+    try:
+        data = json.loads((folder / 'extraction.json').read_text(encoding='utf-8'))
+        if data.get('inputs') is not None:
+            return {'inputs': data['inputs']}
+    except (OSError, ValueError):
+        pass
+    return {'name': folder.name, 'exists': folder.exists()}
+
+
+def staging_inputs(settings: Settings, sources: dict, wawraw: Path, stock: Path,
+                   args: list[str]) -> dict:
+    """Everything the ``stage-bridge`` step's output depends on.
+
+    Conservative on purpose: extra inputs only cause harmless cache misses,
+    whereas a missing input would restore a stale build. ``args`` already
+    carries the map world, option flags and every source path the step reads."""
+    return {
+        'sources': {role: _dump_token(Path(p)) for role, p in sorted(sources.items())},
+        'wawraw': _dump_token(wawraw),
+        'stock': _dump_token(stock),
+        'flags': {'bo2_stock_perks': settings.bo2_stock_perks, 'remaster': settings.remaster,
+                  'source_fx': settings.source_fx, 'project': settings.project},
+        'tools': {'t4': all2raw.digest(Path(settings.t4) / 'Unlinker.exe'),
+                  't6': all2raw.digest(Path(settings.t6) / 'Unlinker.exe')},
+        'args': list(args),
+    }
 
 
 def run(command: list[str], log: Path | None = None) -> None:
@@ -61,7 +97,7 @@ def build(settings: Settings, *, redump: bool = False, root: Path | None = None,
     # Prepare only missing/stale caches before acquiring the read locks.
     # prepare() owns the extraction lock itself and resumes cached zones.
     for game, tool, cache, engine in (
-            (Path(settings.waw), Path(settings.t4) / 'Unlinker.exe', caches.waw, 'T4'),
+            (Path(settings.waw), Path(settings.t4) / 'Unlinker.exe', caches.waw, all2raw.source_engine(settings.waw)),
             (Path(settings.bo2), Path(settings.t6) / 'Unlinker.exe', caches.bo2, 'T6')):
         try:
             all2raw.ready(game, tool, cache, engine=engine)
@@ -91,7 +127,7 @@ def _build(settings: Settings, *, redump: bool = False, root: Path | None = None
     t6 = Path(settings.t6) / 'Unlinker.exe'
     # Builds never extract or list a stock FF. Extract All owns every static
     # asset, index, sound driver and API cache.
-    wawraw = all2raw.ready(waw, t4, caches.waw, engine='T4')
+    wawraw = all2raw.ready(waw, t4, caches.waw, engine=all2raw.source_engine(waw))
     stock = all2raw.ready(bo2, t6, caches.bo2, engine='T6')
     stage, mod = paths.stage, paths.mod
     # Stage in the worker as well: standalone CLI and Wine builds do not
@@ -102,7 +138,7 @@ def _build(settings: Settings, *, redump: bool = False, root: Path | None = None
         folder.mkdir(parents=True, exist_ok=True)
     shutil.copy2(stock / 't6api_cache.json', stage / 't6api_cache.json')
     print('== 0. reusing shared game assets and preparing cached map sources', flush=True)
-    sources = all2raw.source_dumps(settings, caches, refresh=redump)
+    sources = progress.timed('step 0 extract map sources', all2raw.source_dumps, settings, caches, refresh=redump)
     source = Path(settings.fastfile).resolve()
     project = settings.project
     mapraw = sources['map']
@@ -136,16 +172,50 @@ def _build(settings: Settings, *, redump: bool = False, root: Path | None = None
     if settings.source_fx:
         args += ['--waw-mod-tools', settings.waw_tools, '--waw-source-fx',
                  '--waw-source-dumps', str(caches.waw / 'source')]
-    run(cli_command(*args))
+    # WAW2BO2_FROM_STEP resumes a build whose earlier steps' output is unchanged (BO1 bring-up)
+    steps = ['stage', 'build-mod', 'compile-scripts', 'bridge-link', 'audit']
+    first = steps.index(os.environ.get('WAW2BO2_FROM_STEP') or 'stage')
+    if first <= 0:
+        # Opt-in per-map cache (WAW2BO2_STAGE_CACHE): an identical rebuild of the
+        # same map restores staging's output instead of recomputing it. Off by
+        # default; see stagecache.py for the correctness contract.
+        cache = stagecache.StageCache(caches.waw.parent / 'stage_cache') if stagecache.enabled() else None
+        token = cache.token(staging_inputs(settings, sources, wawraw, stock, args)) if cache else None
+        if cache is not None and cache.lookup(token) is not None:
+            print('== 2. restoring staged content from cache (identical inputs)', flush=True)
+            cache.restore(token, stage)
+        else:
+            before = stagecache.snapshot(stage) if cache is not None else None
+            run(cli_command(*args))
+            if cache is not None:
+                files = stagecache.changed(before, stagecache.snapshot(stage))
+                if cache.store(token, stage, files, meta={'project': project}):
+                    print(f'== cached staged content ({len(files)} files) for identical rebuilds', flush=True)
+    else:
+        print(f'== resuming at {steps[first]} (earlier steps reused)', flush=True)
     ensure_laa(linker)
     print('== 3a. linking gameplay mod.ff with the BO2 mod tools linker', flush=True)
-    run(cli_command('build-mod', str(stage), project, '--bo2', str(bo2), '--work', str(mod),
-                    '--unlinker', str(t6), '--linker', str(linker), '--techset-dump', str(stock)))
+    if first <= 1:
+        progress.timed('step 3a build mod.ff (BO2 linker)', run,
+                       cli_command('build-mod', str(stage), project, '--bo2', str(bo2), '--work', str(mod),
+                                   '--unlinker', str(t6), '--linker', str(linker), '--techset-dump', str(stock)))
     print('== 3b. compiling map scripts with the BO2 mod tools linker', flush=True)
-    run(cli_command('compile-scripts', str(stage), project, '--bo2', str(bo2), '--unlinker', str(t6)))
+    if first <= 2:
+        progress.timed('step 3b compile scripts (BO2 linker)', run,
+                       cli_command('compile-scripts', str(stage), project, '--bo2', str(bo2), '--unlinker', str(t6)))
     print(f'== 4. linking {project} with the T6 bridge', flush=True)
-    run(cli_command('bridge-link', str(stage), project, '--linker', str(linker),
-                    '--techset-dump', str(stock), '--log', str(stage / (project + '_bridge.log'))))
+    if first <= 3:
+        progress.timed('step 4 bridge-link (T6 linker)', run,
+                       cli_command('bridge-link', str(stage), project, '--linker', str(linker),
+                                   '--techset-dump', str(stock), '--log', str(stage / (project + '_bridge.log'))))
+    print('== 5. auditing server/client clientfields', flush=True)
+    from . import clientfields
+    report = clientfields.audit(stage / 'zone_raw' / project, project, bo2)
+    findings = clientfields.write_report(report, stage)
+    for finding in findings:
+        print('WARNING clientfield', finding, flush=True)
+    print(f'{len(report["fields"]["server"])} server / {len(report["fields"]["client"])} client clientfields, '
+          f'{len(findings)} likely mismatches; see {stage / "clientfield_audit.txt"}', flush=True)
     print('== 6. auditing built material arguments', flush=True)
     for ff in (stage / 'zone_out' / project / (project + '.ff'), mod / 'out/mod.ff'):
         if not ff.is_file():

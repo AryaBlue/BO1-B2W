@@ -12,15 +12,24 @@ SIZES = {'blit': (512, 256), 'large': (2048, 2048), 'blur': (2048, 2048)}
 # Block compression per role, as in the Nuketown menu art that loads: DXT1 for
 # the opaque backdrops, DXT5 where alpha matters. Uncompressed RGBA made each
 # 2048 backdrop 16 MB, an image the game refused to allocate at startup.
-DXT = {'blit': 'DXT5', 'icon': 'DXT5', 'large': 'DXT1', 'blur': 'DXT1'}
+DXT = {'blit': 'DXT5', 'icon': 'DXT5', 'large': 'DXT1', 'blur': 'DXT1', 'preview': 'DXT1'}
+
+
+# Optional roles, derived from Large when not given: the globe icon and the
+# map card in the custom games lobby (menu_<map>_zclassic_default).
+OPTIONAL_SIZES = {'icon': (256, 256), 'preview': (1024, 1024)}
+ICON_SIZE = OPTIONAL_SIZES['icon']
+DEFAULT_ICON = Path(__file__).parent / 'compat' / 'default_menu_icon.png'
 
 
 def read_art(path: str, role: str) -> Image.Image:
+    # Any size is accepted: the menus draw each canvas stretched to their own
+    # frame, so the image is scaled to the canvas the same way.
+    size = OPTIONAL_SIZES.get(role) or SIZES[role]
     with Image.open(path) as source:
-        if source.size != SIZES[role]:
-            w, h = SIZES[role]
-            raise ValueError(f'{role.title()} requires {w} × {h} pixels; selected image is {source.width} × {source.height}.')
         image = source.convert('RGBA')
+    if image.size != size:
+        image = image.resize(size, Image.Resampling.LANCZOS)
     if role == 'blit' and image.getextrema()[3][0] == 255:
         raise ValueError('Blit needs a transparent background. Choose a PNG or TGA with alpha transparency.')
     return image
@@ -101,9 +110,14 @@ def stage_art(settings, root: Path) -> None:
     if settings.menu_blit:
         images = {role: read_art(getattr(settings, 'menu_' + role), role) for role in SIZES}
         # The three-upload workflow derives lobby and loading artwork from Large.
-        images['icon'] = images['large'].resize((256, 256), Image.Resampling.LANCZOS)
+        # every converted map shares the default globe icon unless it has its own
+        icon = getattr(settings, 'menu_icon', '') or (str(DEFAULT_ICON) if DEFAULT_ICON.is_file() else '')
+        images['icon'] = read_art(icon, 'icon') if icon else images['large'].resize(ICON_SIZE, Image.Resampling.LANCZOS)
+        preview = getattr(settings, 'menu_preview', '')
+        if preview:
+            images['preview'] = read_art(preview, 'preview')
         bindings = {'map': 'large', 'map_blur': 'blur', 'blit': 'blit', 'icon': 'icon',
-                    'zclassic_default': 'large'}
+                    'zclassic_default': 'preview' if preview else 'large'}
         bindings.update({'loadscreen:' + suffix: 'large' for suffix in ('zclassic_default', 'zclassic_')})
         for folder in ('materials', 'images'):
             (root / folder).mkdir(parents=True, exist_ok=True)

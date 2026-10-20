@@ -11,6 +11,9 @@ def add_sound_events(raw: bytes, sound_map: dict[str, str]) -> tuple[bytes, list
     keys = {key: alias for key, alias in sound_map.items() if not key.startswith('sndnt#')}
     if not any(key.encode() + b'\0' in raw for key in keys):
         return raw, []
+    if len(raw) >= 4 and struct.unpack_from('<H', raw)[0] == 19:
+        # BO1 (v19) animations: notetrack sound adaptation is not ported yet; keep the motion as-is
+        return raw, []
     if len(raw) < 4 or struct.unpack_from('<H', raw)[0] != 17:
         raise weapons.WeaponError('weapon sound notifications require a raw v17 animation')
     frames = struct.unpack_from('<H', raw, 2)[0]

@@ -10,7 +10,8 @@ from unittest.mock import patch
 
 from waw2bo2.all2raw import WORLD_DUMPER_MARKER
 from waw2bo2.launcher import (BuildPaths, ProcessRunner, Settings, build_command, discover,
-                             input_stamp, map_fastfiles, perform_build, preflight, project_name, validate_project)
+                             input_stamp, map_fastfiles, perform_build, perform_import, preflight,
+                             project_name, resolve_import_settings, validate_project)
 
 
 
@@ -77,10 +78,89 @@ class LauncherTests(unittest.TestCase):
         settings.save(path)
         self.assertEqual(Settings.load(path).t4, settings.t4)
 
+    def test_resolve_import_finds_single_map_fastfile(self):
+        folder = self.root / 'MyMap'
+        folder.mkdir()
+        for name in ('mod.ff', 'map_patch.ff', 'nazi_zombie_cellar.ff'):
+            (folder / name).touch()
+        with patch('waw2bo2.launcher.discover', side_effect=lambda s: s):
+            settings = resolve_import_settings(folder=str(folder), base=Settings(work=str(self.root / 'w')))
+        self.assertEqual(Path(settings.fastfile).name, 'nazi_zombie_cellar.ff')
+        self.assertEqual(settings.project, 'zm_cellar_waw')      # companions ignored; project derived
+
+    def test_resolve_import_rejects_ambiguous_and_empty_folders(self):
+        with patch('waw2bo2.launcher.discover', side_effect=lambda s: s):
+            empty = self.root / 'empty'
+            empty.mkdir()
+            with self.assertRaises(ValueError):
+                resolve_import_settings(folder=str(empty), base=Settings())
+            two = self.root / 'two'
+            two.mkdir()
+            (two / 'a.ff').touch()
+            (two / 'b.ff').touch()
+            with self.assertRaises(ValueError):
+                resolve_import_settings(folder=str(two), base=Settings())
+
+    def test_perform_import_builds_then_installs_to_plutonium(self):
+        settings = self.settings()
+        paths = BuildPaths.for_settings(settings)
+        paths.root.mkdir(parents=True, exist_ok=True)      # perform_build (mocked) normally creates it
+        calls = []
+
+        class FakeRunner:
+            def __init__(self):
+                self.cancelled = threading.Event()
+
+            def emit(self, kind, line):
+                calls.append((kind, line))
+
+            def run(self, command, log, cwd=None):
+                calls.append(('run', command))
+                return 0
+
+        with patch('waw2bo2.launcher.perform_build', return_value=0) as build:
+            code = perform_import(settings, FakeRunner())
+        self.assertEqual(code, 0)
+        build.assert_called_once()
+        self.assertTrue((paths.root / 'installed.json').is_file())
+        self.assertTrue(any(k == 'run' and 'package' in c for k, c in calls))   # installed via the package step
+        self.assertTrue(any(k == 'line' and str(l).startswith('installed ') for k, l in calls))
+
     def test_map_picker_excludes_companion_fastfiles(self):
         for name in ['mod.ff', 'map_patch.ff', 'map.ff', 'mod_load.ff', 'other.ff']:
             (self.root / name).touch()
         self.assertEqual([p.name for p in map_fastfiles(self.root)], ['map.ff', 'other.ff'])
+
+    def test_map_picker_excludes_localized_and_load_companions(self):
+        # A real installed WaW usermap folder (nazi_zombie_anotherroad): the map
+        # ships localized_* string banks and a *_load loadscreen beside it.
+        for name in ['mod.ff', 'nazi_zombie_anotherroad.ff', 'nazi_zombie_anotherroad_patch.ff',
+                     'localized_mapname.ff', 'localized_nazi_zombie_anotherroad.ff',
+                     'nazi_zombie_anotherroad_load.ff']:
+            (self.root / name).touch()
+        self.assertEqual([p.name for p in map_fastfiles(self.root)], ['nazi_zombie_anotherroad.ff'])
+
+    def test_check_command_reports_missing_waw_first_and_resolves_source(self):
+        from waw2bo2 import cli
+        from waw2bo2.launcher import Check
+        # WaW missing -> exit 2 and the World at War check is reported.
+        with patch('waw2bo2.launcher.Settings.load', return_value=Settings()), \
+             patch('waw2bo2.launcher.discover', side_effect=lambda s: s), \
+             patch('waw2bo2.launcher.preflight', return_value=[Check('World at War', False, 'Missing: main')]):
+            self.assertEqual(cli.main(['check']), 2)
+        # Everything present and the folder resolves to one .ff -> exit 0.
+        (self.root / 'the_map.ff').touch()
+        with patch('waw2bo2.launcher.Settings.load', return_value=Settings()), \
+             patch('waw2bo2.launcher.discover', side_effect=lambda s: s), \
+             patch('waw2bo2.launcher.preflight', return_value=[Check('World at War', True, 'Ready')]):
+            self.assertEqual(cli.main(['check', '--folder', str(self.root)]), 0)
+        # Installs present but the folder has no map .ff -> exit 2 (source problem).
+        (self.root / 'the_map.ff').unlink()
+        (self.root / 'mod.ff').touch()
+        with patch('waw2bo2.launcher.Settings.load', return_value=Settings()), \
+             patch('waw2bo2.launcher.discover', side_effect=lambda s: s), \
+             patch('waw2bo2.launcher.preflight', return_value=[Check('World at War', True, 'Ready')]):
+            self.assertEqual(cli.main(['check', '--folder', str(self.root)]), 2)
 
     def test_preflight_reports_missing_game_data_and_optional_source_tools(self):
         settings = self.settings()

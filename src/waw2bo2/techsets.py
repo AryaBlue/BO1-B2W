@@ -25,8 +25,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-LAYER_RE = re.compile(r"^([rbtam])(\d)((?:[a-z]\d)*)$")
-FEATURE_RE = re.compile(r"([a-z])\d")
+LAYER_RE = re.compile(r"^([rbtam])(\d)((?:[a-z]{1,2}\d)*)$")  # BO1 adds two-letter features (sc0)
+FEATURE_RE = re.compile(r"([a-z]{1,2})\d")
 HASH_RE = re.compile(r"^[0-9a-z]{8}$")
 
 # Maps whose absence in the source can be filled with a neutral code image.
@@ -44,6 +44,8 @@ UNLIT_MAP = {
     # (e.g. wc/caulk_shadow); T6 has a dedicated technique for that.
     "tools": ("shadowcaster", ["tools technique mapped to shadowcaster"]),
     "shadowcaster": ("shadowcaster", []),
+    # BO1 custom (sw4) world shaders: keep the colour map on a plain unlit pass
+    "sw4_3d_projector_ring": ("unlit_blend", ["BO1 projector ring shader drawn as unlit blend"]),
 }
 
 
@@ -108,7 +110,7 @@ def _layer_cost(src, dst, notes: list[str]) -> int | None:
     if sblend != dblend:
         # alpha-test/add have no layered T6 equivalent in zm_nuked; blend is
         # the closest (keeps the alpha channel meaningful).
-        if {sblend, dblend} <= {"t", "b", "a"}:
+        if {sblend, dblend} <= {"t", "b", "a", "m"}:  # BO1 multiply layers (m) drawn blended
             cost += 6
             notes.append(f"layer {sidx}: blend '{sblend}' -> '{dblend}'")
         else:
@@ -162,6 +164,14 @@ MODEL_FALLBACK = {
     "cooktorrance_sm": ("l_sm_r0c0n0s0", "cook-torrance approximated by lit_sm"),
     "projected_decal_unlit": ("l_sm_t0c0", "projected decal drawn as alpha-tested model"),
     "ambient_t0c0_sco": ("l_sm_t0c0", "ambient-only technique lit by the light grid"),
+    # BO1 custom (sw4/cod7) model shaders: nearest stock lit or unlit model pass
+    "sw4_3d_char_cloth": ("l_sm_r0c0n0s0", "BO1 character cloth shader approximated by lit_sm"),
+    "sw4_3d_char_skin": ("l_sm_r0c0n0s0", "BO1 character skin shader approximated by lit_sm"),
+    "cod7modelcloak_ck": ("l_sm_r0c0n0s0", "BO1 cloak shader approximated by lit_sm"),
+    "sw4_3d_rotate": ("l_sm_r0c0", "BO1 rotating-UV shader drawn static"),
+    "sw4_3d_unlit_scroll": ("unlit", "BO1 scrolling unlit shader drawn static"),
+    "sw4_3d_animated_unlit": ("unlit", "BO1 animated unlit shader drawn static"),
+    "sw4_3d_animated_unlit_normals": ("unlit", "BO1 animated unlit shader drawn static"),
 }
 
 
@@ -339,12 +349,24 @@ def as_reference(image: str) -> str:
     return image
 
 
+BO1_SAMPLER_ALIASES = {
+    "Diffuse_MapSampler": "colorMap", "Diffuse_Map": "colorMap", "Color_Map": "colorMap",
+    "diffuseMap": "colorMap",  # cod7modelcloak_ck (BO1 character skins); its cloakMap is the cloak effect
+    "Normal_MapSampler": "normalMap", "Normal_Map": "normalMap",
+    "Specular_MapSampler": "specularMap", "Specular_Map": "specularMap",
+}
+
+
 def build_material(t4: dict, donor: dict, notes: list[str]) -> dict:
     out = copy.deepcopy(donor)
     # The donor's thermal-vision variant belongs to its own (BO2) model; WaW
     # has none, and most stock T6 materials omit the field.
     out.pop("thermalMaterial", None)
     src_tex ={t["name"]: t for t in t4.get("textures", []) if t.get("name") and t.get("image")}
+    # BO1 custom (sw4) shaders name their samplers after the shader graph; use them as the stock slots
+    for alias, slot_name in BO1_SAMPLER_ALIASES.items():
+        if alias in src_tex and slot_name not in src_tex:
+            src_tex[slot_name] = src_tex[alias]
     used = set()
     textures = []
     for slot in donor.get("textures", []):

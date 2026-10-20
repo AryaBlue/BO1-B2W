@@ -54,3 +54,29 @@ def ordered_map(function, values, *, label: str, processes: bool = False):
         for future in pending:
             future.cancel()
         pool.shutdown(wait=True, cancel_futures=True)
+
+
+def write_shared(path, data: bytes) -> None:
+    """Write a file other workers may write with the same content at the same time
+    (content-named shaders, images shared by materials): a private temporary file is
+    moved into place, retrying while another worker holds the target open."""
+    import time
+    from pathlib import Path
+    import threading
+    path = Path(path)
+    try:
+        if path.is_file() and path.stat().st_size == len(data) and path.read_bytes() == data:
+            return
+    except PermissionError:
+        pass  # another worker is replacing it right now; write ours below
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f'{path.name}.{os.getpid()}.{threading.get_ident()}.tmp')
+    temp.write_bytes(data)
+    for attempt in range(50):
+        try:
+            os.replace(temp, path)
+            return
+        except PermissionError:
+            if attempt == 49:
+                raise
+            time.sleep(0.05)

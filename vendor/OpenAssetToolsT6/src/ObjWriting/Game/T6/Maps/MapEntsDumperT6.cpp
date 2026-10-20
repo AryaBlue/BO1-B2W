@@ -391,6 +391,135 @@ namespace
         }
     }
     // Diagnostic: world draw buffers and a sample of surfaces per technique set
+    // waw2bo2 hardening audit (tools/check_world.py): the fill state of every GfxWorld array (count, null) and
+    // per-light/per-cell entries, and every stored index against what it indexes. Diffed against stock BO2
+    // maps, a field stock always leaves empty but a port fills is likely engine-owned at runtime (the
+    // GfxShadowGeometry crash); an index past its limit is read out of bounds by the engine.
+    void DumpGfxWorldAudit(std::ostream& out, const GfxWorld& world)
+    {
+        using nlohmann::json;
+        json fill, ranges;
+        const auto field = [&fill](const char* name, const long long count, const void* pointer)
+        { fill[name] = {{"count", count}, {"null", pointer == nullptr}}; };
+        // char indices are unsigned in the engine; "none" sentinels are left to the comparison with stock
+        const auto range = [&ranges](const char* name, const long long limit, const std::vector<long long>& values)
+        {
+            long long max = -1, bad = 0;
+            for (const auto v : values)
+            {
+                max = std::max(max, v);
+                bad += v >= limit;
+            }
+            ranges[name] = {{"max", max}, {"limit", limit}, {"bad", bad}, {"n", static_cast<long long>(values.size())}};
+        };
+        const auto u8 = [](const char c) { return static_cast<long long>(static_cast<unsigned char>(c)); };
+        const auto& draw = world.draw;
+        const auto& dpvs = world.dpvs;
+        const auto lights = static_cast<long long>(world.primaryLightCount);
+        const auto cells = static_cast<long long>(world.dpvsPlanes.cellCount);
+        field("coronas", world.coronaCount, world.coronas);
+        field("shadowMapVolumes", world.shadowMapVolumeCount, world.shadowMapVolumes);
+        field("exposureVolumes", world.exposureVolumeCount, world.exposureVolumes);
+        field("worldFogVolumes", world.worldFogVolumeCount, world.worldFogVolumes);
+        field("worldFogModifierVolumes", world.worldFogModifierVolumeCount, world.worldFogModifierVolumes);
+        field("lutVolumes", world.lutVolumeCount, world.lutVolumes);
+        field("cells", cells, world.cells);
+        field("models", world.modelCount, world.models);
+        field("materialMemory", world.materialMemoryCount, world.materialMemory);
+        field("outdoorImage", 1, world.outdoorImage);
+        field("siegeSkinInsts", world.numSiegeSkinInsts, world.siegeSkinInsts);
+        field("shadowGeom", lights, world.shadowGeom);
+        field("lightRegion", lights, world.lightRegion);
+        field("occluders", world.numOccluders, world.occluders);
+        field("outdoorBounds", world.numOutdoorBounds, world.outdoorBounds);
+        field("heroLights", world.heroLightCount, world.heroLights);
+        field("heroLightTree", world.heroLightTreeCount, world.heroLightTree);
+        field("reflectionProbes", draw.reflectionProbeCount, draw.reflectionProbes);
+        field("lightmaps", draw.lightmapCount, draw.lightmaps);
+        field("lightGrid.entries", world.lightGrid.entryCount, world.lightGrid.entries);
+        field("lightGrid.colors", world.lightGrid.colorCount, world.lightGrid.colors);
+        field("lightGrid.coeffs", world.lightGrid.coeffCount, world.lightGrid.coeffs);
+        field("lightGrid.skyGridVolumes", world.lightGrid.skyGridVolumeCount, world.lightGrid.skyGridVolumes);
+        field("dpvs.smodelDrawInsts", dpvs.smodelCount, dpvs.smodelDrawInsts);
+        field("dpvs.surfaces", world.surfaceCount, dpvs.surfaces);
+        field("dpvs.sortedSurfIndex", dpvs.staticSurfaceCount, dpvs.sortedSurfIndex);
+
+        long long shadowLists = 0, regions = 0;
+        std::vector<long long> shadowSurf, shadowModel;
+        for (unsigned i = 0; world.shadowGeom && i < world.primaryLightCount; ++i)
+        {
+            const auto& g = world.shadowGeom[i];
+            shadowLists += g.sortedSurfIndex != nullptr || g.smodelIndex != nullptr || g.surfaceCount || g.smodelCount;
+            for (unsigned k = 0; g.sortedSurfIndex && k < g.surfaceCount; ++k)
+                shadowSurf.push_back(g.sortedSurfIndex[k]);
+            for (unsigned k = 0; g.smodelIndex && k < g.smodelCount; ++k)
+                shadowModel.push_back(g.smodelIndex[k]);
+        }
+        for (unsigned i = 0; world.lightRegion && i < world.primaryLightCount; ++i)
+            regions += world.lightRegion[i].hullCount != 0;
+        fill["shadowGeom.nonEmpty"] = shadowLists;
+        fill["lightRegion.nonEmpty"] = regions;
+
+        std::vector<long long> surfLight, surfProbe, surfLmap, sorted, smodelLight, smodelProbe, smodelNullModel, gridLight, aabbModel,
+            aabbSurf, cellProbe, brushSurf;
+        long long portals = 0, aabbTrees = 0, cellsWithProbes = 0;
+        for (int i = 0; dpvs.surfaces && i < world.surfaceCount; ++i)
+        {
+            surfLight.push_back(u8(dpvs.surfaces[i].primaryLightIndex));
+            surfProbe.push_back(u8(dpvs.surfaces[i].reflectionProbeIndex));
+            surfLmap.push_back(u8(dpvs.surfaces[i].lightmapIndex));
+        }
+        for (unsigned i = 0; dpvs.sortedSurfIndex && i < dpvs.staticSurfaceCount; ++i)
+            sorted.push_back(dpvs.sortedSurfIndex[i]);
+        for (unsigned i = 0; dpvs.smodelDrawInsts && i < dpvs.smodelCount; ++i)
+        {
+            smodelLight.push_back(u8(dpvs.smodelDrawInsts[i].primaryLightIndex));
+            smodelProbe.push_back(u8(dpvs.smodelDrawInsts[i].reflectionProbeIndex));
+            smodelNullModel.push_back(dpvs.smodelDrawInsts[i].model == nullptr);
+        }
+        for (unsigned i = 0; world.lightGrid.entries && i < world.lightGrid.entryCount; ++i)
+            gridLight.push_back(u8(world.lightGrid.entries[i].primaryLightIndex));
+        for (int c = 0; world.cells && c < world.dpvsPlanes.cellCount; ++c)
+        {
+            const auto& cell = world.cells[c];
+            portals += cell.portalCount;
+            aabbTrees += cell.aabbTreeCount;
+            cellsWithProbes += cell.reflectionProbeCount != 0;
+            for (int t = 0; cell.aabbTree && t < cell.aabbTreeCount; ++t)
+            {
+                const auto& tree = cell.aabbTree[t];
+                aabbSurf.push_back(static_cast<long long>(tree.startSurfIndex) + tree.surfaceCount);
+                for (unsigned k = 0; tree.smodelIndexes && k < tree.smodelIndexCount; ++k)
+                    aabbModel.push_back(tree.smodelIndexes[k]);
+            }
+            for (int k = 0; cell.reflectionProbes && k < static_cast<unsigned char>(cell.reflectionProbeCount); ++k)
+                cellProbe.push_back(u8(cell.reflectionProbes[k]));
+        }
+        for (int i = 0; world.models && i < world.modelCount; ++i)
+            brushSurf.push_back(static_cast<long long>(world.models[i].startSurfIndex) + world.models[i].surfaceCount);
+        fill["cells.portals"] = portals;
+        fill["cells.aabbTrees"] = aabbTrees;
+        fill["cells.withReflectionProbes"] = cellsWithProbes;
+
+        range("surface.primaryLightIndex", lights, surfLight);
+        range("surface.reflectionProbeIndex", draw.reflectionProbeCount, surfProbe);
+        range("surface.lightmapIndex", draw.lightmapCount, surfLmap);
+        range("sortedSurfIndex", world.surfaceCount, sorted);
+        range("smodel.primaryLightIndex", lights, smodelLight);
+        range("smodel.reflectionProbeIndex", draw.reflectionProbeCount, smodelProbe);
+        range("smodel.nullModel", 1, smodelNullModel);
+        range("lightGrid.primaryLightIndex", lights, gridLight);
+        range("lightGrid.sunPrimaryLightIndex", lights, {static_cast<long long>(world.lightGrid.sunPrimaryLightIndex)});
+        range("sunPrimaryLightIndex", lights, {static_cast<long long>(world.sunPrimaryLightIndex)});
+        range("aabbTree.surfaceEnd", static_cast<long long>(dpvs.staticSurfaceCount) + 1, aabbSurf);
+        range("aabbTree.smodelIndex", dpvs.smodelCount, aabbModel);
+        range("cell.reflectionProbe", draw.reflectionProbeCount, cellProbe);
+        range("brushModel.surfaceEnd", static_cast<long long>(world.surfaceCount) + 1, brushSurf);
+        range("shadowGeom.sortedSurfIndex", dpvs.staticSurfaceCount, shadowSurf);
+        range("shadowGeom.smodelIndex", dpvs.smodelCount, shadowModel);
+        out << json({{"name", world.name ? world.name : ""}, {"fill", fill}, {"ranges", ranges}}).dump(1) << "\n";
+    }
+
     void DumpGfxWorldLayout(std::ostream& out, const GfxWorld& world)
     {
         const auto& grid = world.lightGrid;
@@ -600,6 +729,9 @@ namespace map_ents
                 const auto layoutFile = context.OpenAssetFile(std::format("{}.gfxworld.txt", mapEnts->name));
                 if (layoutFile)
                     DumpGfxWorldLayout(*layoutFile, *gfxWorld->Asset());
+                const auto auditFile = context.OpenAssetFile(std::format("{}.gfxworld_audit.json", mapEnts->name));
+                if (auditFile)
+                    DumpGfxWorldAudit(*auditFile, *gfxWorld->Asset());
                 const auto gridFile = context.OpenAssetFile(std::format("{}.t6lightgrid.bin", mapEnts->name));
                 if (gridFile)
                     DumpLightGrid(*gridFile, gfxWorld->Asset()->lightGrid);

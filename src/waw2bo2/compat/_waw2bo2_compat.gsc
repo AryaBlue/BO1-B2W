@@ -52,6 +52,10 @@ init()
     if ( isdefined( level.waw2bo2_compat_ready ) )
         return;
     level.waw2bo2_compat_ready = 1;
+    // logfile is not saved between sessions; without it a crash leaves no
+    // console_zm.log to read the WAW2BO2 runtime lines from (tools/check_crash.py).
+    if ( getdvarint( "logfile" ) < 2 )
+        setdvar( "logfile", "2" );
     // Converted maps run on Plutonium T6. WaW scorebar libraries use this
     // flag to leave TAB's scoreboard to the native client.
     if ( !isdefined( level.isPlutonium ) )
@@ -94,6 +98,39 @@ init()
     level thread waw_window_paths();
     level thread power_bridge();
     level thread melee_wallbuy_costs();
+    level thread wallbuy_weapon_models();
+    // get_weapon_hint_ammo's only use of the flag: without it a bought wallbuy
+    // shows ZOMBIE_WEAPONCOSTAMMO_UPGRADE, whose "\n" second line cut the
+    // prompt at "Ammo [" on Kino's trigger_use wallbuys.
+    if ( !isdefined( level.has_pack_a_punch ) )
+        level.has_pack_a_punch = 0;
+}
+
+// A WaW/BO1 wallbuy's script_model is the source game's world model with
+// every attachment modelled in (BO1 Kino's M14: scope, grenade launcher,
+// suppressor). BO2 strips them with useweaponhidetags, whose tag list belongs
+// to the BO2 weapon now bought there, so show that weapon's own world model
+// (as add_dynamic_wallbuy does).
+wallbuy_weapon_models()
+{
+    while ( !isdefined( level.zombie_weapons ) )
+        wait 0.05;
+    waittillframeend;
+    triggers = getentarray( "weapon_upgrade", "targetname" );
+    for ( i = 0; i < triggers.size; i++ )
+    {
+        if ( !isdefined( triggers[i].target ) || !isdefined( triggers[i].zombie_weapon_upgrade ) )
+            continue;
+        weapon = waw_weapon( triggers[i].zombie_weapon_upgrade );
+        model = getent( triggers[i].target, "targetname" );
+        if ( !isdefined( weapon ) || !isdefined( model ) || model.classname != "script_model" )
+            continue;
+        world_model = getweaponmodel( weapon );
+        if ( !isdefined( world_model ) || world_model == "" )
+            continue;
+        model setmodel( world_model );
+        model useweaponhidetags( weapon );
+    }
 }
 
 // WaW keeps a boarded window shut to path-finding: its clip brush
@@ -2314,4 +2351,441 @@ waw_settimescale( scale )
 waw_playerpositionvalid( ent )
 {
     return 1;
+}
+
+// Checked vector builtins, methods and fields (gscport.guard_vector_calls). A
+// map script that hands a non-vector to a vector builtin, method or entity
+// field raises "type string is not a vector" (or similar) and aborts its
+// thread on T6, naming nothing; a bad value that reaches the engine can do
+// worse. These log "WAW2BO2 BAD VECTOR <what> arg <n> <value> at <script>:<line>"
+// (first few per call site) and fall back to a neutral result instead.
+waw_vec_ok( v, fn, arg, site )
+{
+    if ( isvec( v ) )
+        return 1;
+    if ( !isdefined( level.waw2bo2_bad_vectors ) )
+        level.waw2bo2_bad_vectors = [];
+    key = fn + " " + site;
+    count = 0;
+    if ( isdefined( level.waw2bo2_bad_vectors[key] ) )
+        count = level.waw2bo2_bad_vectors[key];
+    level.waw2bo2_bad_vectors[key] = count + 1;
+    if ( count < 3 )
+    {
+        kind = "undefined";
+        if ( isdefined( v ) )
+            kind = "'" + v + "'";
+        println( "WAW2BO2 BAD VECTOR " + fn + " arg " + arg + " " + kind + " at " + site + " (skipped, neutral result)" );
+    }
+    return 0;
+}
+
+// a vector field assignment keeps the field's current value when the new one is not a vector
+waw_safe_field( site, value, old, name )
+{
+    if ( isvec( value ) || ( !isdefined( value ) && !isdefined( old ) ) )
+        return value;
+    waw_vec_ok( value, "." + name + " =", 1, site );
+    if ( isvec( old ) )
+        return old;
+    return ( 0, 0, 0 );
+}
+
+waw_safe_anglestoforward( site, a )
+{
+    if ( !waw_vec_ok( a, "anglestoforward", 1, site ) )
+        return ( 1, 0, 0 );
+    return anglestoforward( a );
+}
+
+waw_safe_anglestoright( site, a )
+{
+    if ( !waw_vec_ok( a, "anglestoright", 1, site ) )
+        return ( 0, -1, 0 );
+    return anglestoright( a );
+}
+
+waw_safe_anglestoup( site, a )
+{
+    if ( !waw_vec_ok( a, "anglestoup", 1, site ) )
+        return ( 0, 0, 1 );
+    return anglestoup( a );
+}
+
+waw_safe_vectortoangles( site, v )
+{
+    if ( !waw_vec_ok( v, "vectortoangles", 1, site ) )
+        return ( 0, 0, 0 );
+    return vectortoangles( v );
+}
+
+waw_safe_vectornormalize( site, v )
+{
+    if ( !waw_vec_ok( v, "vectornormalize", 1, site ) )
+        return ( 0, 0, 0 );
+    return vectornormalize( v );
+}
+
+// a bad point is treated as far away, so range checks fail instead of firing
+waw_safe_distance( site, a, b )
+{
+    if ( !waw_vec_ok( a, "distance", 1, site ) || !waw_vec_ok( b, "distance", 2, site ) )
+        return 999999;
+    return distance( a, b );
+}
+
+waw_safe_distancesquared( site, a, b )
+{
+    if ( !waw_vec_ok( a, "distancesquared", 1, site ) || !waw_vec_ok( b, "distancesquared", 2, site ) )
+        return 999999 * 999999.0;
+    return distancesquared( a, b );
+}
+
+waw_safe_distance2d( site, a, b )
+{
+    if ( !waw_vec_ok( a, "distance2d", 1, site ) || !waw_vec_ok( b, "distance2d", 2, site ) )
+        return 999999;
+    return distance2d( a, b );
+}
+
+waw_safe_distance2dsquared( site, a, b )
+{
+    if ( !waw_vec_ok( a, "distance2dsquared", 1, site ) || !waw_vec_ok( b, "distance2dsquared", 2, site ) )
+        return 999999 * 999999.0;
+    return distance2dsquared( a, b );
+}
+
+waw_safe_length( site, v )
+{
+    if ( !waw_vec_ok( v, "length", 1, site ) )
+        return 0;
+    return length( v );
+}
+
+waw_safe_lengthsquared( site, v )
+{
+    if ( !waw_vec_ok( v, "lengthsquared", 1, site ) )
+        return 0;
+    return lengthsquared( v );
+}
+
+waw_safe_vectordot( site, a, b )
+{
+    if ( !waw_vec_ok( a, "vectordot", 1, site ) || !waw_vec_ok( b, "vectordot", 2, site ) )
+        return 0;
+    return vectordot( a, b );
+}
+
+waw_safe_vectorcross( site, a, b )
+{
+    if ( !waw_vec_ok( a, "vectorcross", 1, site ) || !waw_vec_ok( b, "vectorcross", 2, site ) )
+        return ( 0, 0, 0 );
+    return vectorcross( a, b );
+}
+
+waw_safe_playfx( site, fx, origin, forward, up )
+{
+    if ( !isdefined( fx ) || !waw_vec_ok( origin, "playfx", 2, site ) )
+        return;
+    if ( isdefined( up ) && waw_vec_ok( forward, "playfx", 3, site ) && waw_vec_ok( up, "playfx", 4, site ) )
+        playfx( fx, origin, forward, up );
+    else if ( isdefined( forward ) && waw_vec_ok( forward, "playfx", 3, site ) )
+        playfx( fx, origin, forward );
+    else
+        playfx( fx, origin );
+}
+
+waw_safe_playsoundatposition( site, alias, origin )
+{
+    if ( !waw_vec_ok( origin, "playsoundatposition", 2, site ) )
+        return;
+    playsoundatposition( alias, origin );
+}
+
+// spawned at the world origin rather than not at all: callers use the entity
+waw_safe_spawn( site, classname, origin, a3, a4, a5, a6, a7 )
+{
+    if ( !waw_vec_ok( origin, "spawn", 2, site ) )
+        origin = ( 0, 0, 0 );
+    if ( isdefined( a7 ) )
+        return spawn( classname, origin, a3, a4, a5, a6, a7 );
+    if ( isdefined( a6 ) )
+        return spawn( classname, origin, a3, a4, a5, a6 );
+    if ( isdefined( a5 ) )
+        return spawn( classname, origin, a3, a4, a5 );
+    if ( isdefined( a4 ) )
+        return spawn( classname, origin, a3, a4 );
+    if ( isdefined( a3 ) )
+        return spawn( classname, origin, a3 );
+    return spawn( classname, origin );
+}
+
+// a bad trace hits nothing
+waw_safe_bullettrace( site, start, end, hitchars, ignore, a5, a6 )
+{
+    if ( !waw_vec_ok( start, "bullettrace", 1, site ) || !waw_vec_ok( end, "bullettrace", 2, site ) )
+    {
+        trace = [];
+        trace["fraction"] = 1;
+        trace["position"] = ( 0, 0, 0 );
+        if ( isvec( end ) )
+            trace["position"] = end;
+        trace["normal"] = ( 0, 0, 0 );
+        trace["surfacetype"] = "none";
+        return trace;
+    }
+    if ( isdefined( a6 ) )
+        return bullettrace( start, end, hitchars, ignore, a5, a6 );
+    if ( isdefined( a5 ) )
+        return bullettrace( start, end, hitchars, ignore, a5 );
+    return bullettrace( start, end, hitchars, ignore );
+}
+
+waw_safe_bullettracepassed( site, start, end, hitchars, ignore, a5, a6 )
+{
+    if ( !waw_vec_ok( start, "bullettracepassed", 1, site ) || !waw_vec_ok( end, "bullettracepassed", 2, site ) )
+        return 0;
+    if ( isdefined( a6 ) )
+        return bullettracepassed( start, end, hitchars, ignore, a5, a6 );
+    if ( isdefined( a5 ) )
+        return bullettracepassed( start, end, hitchars, ignore, a5 );
+    return bullettracepassed( start, end, hitchars, ignore );
+}
+
+waw_safe_sighttracepassed( site, start, end, hitchars, ignore )
+{
+    if ( !waw_vec_ok( start, "sighttracepassed", 1, site ) || !waw_vec_ok( end, "sighttracepassed", 2, site ) )
+        return 0;
+    return sighttracepassed( start, end, hitchars, ignore );
+}
+
+waw_safe_physicstrace( site, start, end, a3, a4, a5, a6 )
+{
+    if ( !waw_vec_ok( start, "physicstrace", 1, site ) || !waw_vec_ok( end, "physicstrace", 2, site ) )
+    {
+        if ( isvec( start ) )
+            return start;
+        return ( 0, 0, 0 );
+    }
+    if ( isdefined( a6 ) )
+        return physicstrace( start, end, a3, a4, a5, a6 );
+    if ( isdefined( a5 ) )
+        return physicstrace( start, end, a3, a4, a5 );
+    if ( isdefined( a4 ) )
+        return physicstrace( start, end, a3, a4 );
+    if ( isdefined( a3 ) )
+        return physicstrace( start, end, a3 );
+    return physicstrace( start, end );
+}
+
+waw_safe_radiusdamage( site, origin, range, maxdamage, mindamage, a5, a6, a7 )
+{
+    if ( !waw_vec_ok( origin, "radiusdamage", 1, site ) )
+        return;
+    if ( isdefined( a7 ) )
+        radiusdamage( origin, range, maxdamage, mindamage, a5, a6, a7 );
+    else if ( isdefined( a6 ) )
+        radiusdamage( origin, range, maxdamage, mindamage, a5, a6 );
+    else if ( isdefined( a5 ) )
+        radiusdamage( origin, range, maxdamage, mindamage, a5 );
+    else
+        radiusdamage( origin, range, maxdamage, mindamage );
+}
+
+waw_safe_earthquake( site, scale, duration, origin, radius, a5 )
+{
+    if ( !waw_vec_ok( origin, "earthquake", 3, site ) )
+        return;
+    if ( isdefined( a5 ) )
+        earthquake( scale, duration, origin, radius, a5 );
+    else
+        earthquake( scale, duration, origin, radius );
+}
+
+waw_safe_magicbullet( site, weapon, start, end, a4, a5, a6 )
+{
+    if ( !waw_vec_ok( start, "magicbullet", 2, site ) || !waw_vec_ok( end, "magicbullet", 3, site ) )
+        return undefined;
+    if ( isdefined( a6 ) )
+        return magicbullet( weapon, start, end, a4, a5, a6 );
+    if ( isdefined( a5 ) )
+        return magicbullet( weapon, start, end, a4, a5 );
+    if ( isdefined( a4 ) )
+        return magicbullet( weapon, start, end, a4 );
+    return magicbullet( weapon, start, end );
+}
+
+// methods (called on the entity: self is the receiver); a bad target leaves it where it is
+waw_safe_m_moveto( site, point, time, accel, decel )
+{
+    if ( !waw_vec_ok( point, "moveto", 1, site ) )
+        return;
+    if ( isdefined( decel ) )
+        self moveto( point, time, accel, decel );
+    else if ( isdefined( accel ) )
+        self moveto( point, time, accel );
+    else
+        self moveto( point, time );
+}
+
+waw_safe_m_rotateto( site, angles, time, accel, decel )
+{
+    if ( !waw_vec_ok( angles, "rotateto", 1, site ) )
+        return;
+    if ( isdefined( decel ) )
+        self rotateto( angles, time, accel, decel );
+    else if ( isdefined( accel ) )
+        self rotateto( angles, time, accel );
+    else
+        self rotateto( angles, time );
+}
+
+waw_safe_m_setorigin( site, v )
+{
+    if ( waw_vec_ok( v, "setorigin", 1, site ) )
+        self setorigin( v );
+}
+
+waw_safe_m_setplayerangles( site, v )
+{
+    if ( waw_vec_ok( v, "setplayerangles", 1, site ) )
+        self setplayerangles( v );
+}
+
+waw_safe_m_setvelocity( site, v )
+{
+    if ( waw_vec_ok( v, "setvelocity", 1, site ) )
+        self setvelocity( v );
+}
+
+waw_safe_m_setgoalpos( site, v, angles )
+{
+    if ( !waw_vec_ok( v, "setgoalpos", 1, site ) )
+        return;
+    if ( isdefined( angles ) && waw_vec_ok( angles, "setgoalpos", 2, site ) )
+        self setgoalpos( v, angles );
+    else
+        self setgoalpos( v );
+}
+
+waw_safe_m_forceteleport( site, origin, angles )
+{
+    if ( !waw_vec_ok( origin, "forceteleport", 1, site ) )
+        return;
+    if ( isdefined( angles ) && waw_vec_ok( angles, "forceteleport", 2, site ) )
+        self forceteleport( origin, angles );
+    else
+        self forceteleport( origin );
+}
+
+waw_safe_m_teleport( site, origin, angles )
+{
+    if ( !waw_vec_ok( origin, "teleport", 1, site ) )
+        return;
+    if ( isdefined( angles ) && waw_vec_ok( angles, "teleport", 2, site ) )
+        self teleport( origin, angles );
+    else
+        self teleport( origin );
+}
+
+// bad offsets link without them
+waw_safe_m_linkto( site, ent, tag, origin_offset, angles_offset )
+{
+    if ( isdefined( angles_offset ) && waw_vec_ok( origin_offset, "linkto", 3, site ) && waw_vec_ok( angles_offset, "linkto", 4, site ) )
+        self linkto( ent, tag, origin_offset, angles_offset );
+    else if ( isdefined( origin_offset ) && !isdefined( angles_offset ) && waw_vec_ok( origin_offset, "linkto", 3, site ) )
+        self linkto( ent, tag, origin_offset );
+    else if ( isdefined( tag ) )
+        self linkto( ent, tag );
+    else
+        self linkto( ent );
+}
+
+waw_safe_m_physicslaunch( site, point, force )
+{
+    if ( isdefined( force ) && waw_vec_ok( point, "physicslaunch", 1, site ) && waw_vec_ok( force, "physicslaunch", 2, site ) )
+        self physicslaunch( point, force );
+    else if ( isdefined( point ) && !isdefined( force ) && waw_vec_ok( point, "physicslaunch", 1, site ) )
+        self physicslaunch( point );
+    else
+        self physicslaunch();
+}
+
+waw_safe_m_launchragdoll( site, force, tag )
+{
+    if ( !waw_vec_ok( force, "launchragdoll", 1, site ) )
+        return;
+    if ( isdefined( tag ) )
+        self launchragdoll( force, tag );
+    else
+        self launchragdoll( force );
+}
+
+waw_safe_m_movegravity( site, velocity, time )
+{
+    if ( waw_vec_ok( velocity, "movegravity", 1, site ) )
+        self movegravity( velocity, time );
+}
+
+waw_safe_m_magicgrenadetype( site, weapon, origin, velocity, time )
+{
+    if ( !waw_vec_ok( origin, "magicgrenadetype", 2, site ) || !waw_vec_ok( velocity, "magicgrenadetype", 3, site ) )
+        return undefined;
+    if ( isdefined( time ) )
+        return self magicgrenadetype( weapon, origin, velocity, time );
+    return self magicgrenadetype( weapon, origin, velocity );
+}
+
+// Loop watchdog (gscport.guard_spinning_loops puts a call at the top of every
+// while/for/foreach loop of the ported and generated scripts). T6 kills a thread
+// that loops or works too long without waiting and prints only "potential infinite loop in
+// script", naming nothing. A loop that passes 500 times in one frame logs
+// "WAW2BO2 SPIN <script>:<line>" once and waits a frame, so the thread lives.
+waw_loop_guard( id )
+{
+    now = gettime();
+    if ( !isdefined( level.waw2bo2_loop_time ) )
+    {
+        level.waw2bo2_loop_time = [];
+        level.waw2bo2_loop_count = [];
+        level.waw2bo2_loop_reported = [];
+    }
+    if ( !isdefined( level.waw2bo2_loop_time[id] ) || level.waw2bo2_loop_time[id] != now )
+    {
+        level.waw2bo2_loop_time[id] = now;
+        level.waw2bo2_loop_count[id] = 0;
+        return;
+    }
+    level.waw2bo2_loop_count[id]++;
+    if ( level.waw2bo2_loop_count[id] < 500 )
+        return;
+    level.waw2bo2_loop_count[id] = 0;
+    if ( !isdefined( level.waw2bo2_loop_reported[id] ) )
+    {
+        level.waw2bo2_loop_reported[id] = 1;
+        println( "WAW2BO2 SPIN " + id + " (500 passes in one frame; waiting a frame so the thread survives)" );
+    }
+    wait 0.05;
+}
+
+// WaW/BO1 battle chatter runs on the dynamic dialog system (maps\_dds), which
+// a zombies level never initialises (level.dds is undefined): its stock
+// battlechatter_off loops over level.dds and spins (Kino's main calls it).
+// BO2 zombies has no battle chatter to turn on or off.
+waw_battlechatter_off( team )
+{
+}
+
+waw_battlechatter_on( team )
+{
+}
+
+// "value, or a default" for fields a WaW script may read before anything set
+// them (gscport.fallback_field_reads: maxhealth -> 100). An undefined field is
+// fine as an argument, but any comparison or arithmetic on it is a script error.
+waw_or( value, fallback )
+{
+    if ( isdefined( value ) )
+        return value;
+    return fallback;
 }

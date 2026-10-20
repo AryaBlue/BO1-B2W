@@ -793,6 +793,84 @@ def verify_lobby_tables(ff: Path, unlinker: Path, work: Path, project: str) -> N
             raise RuntimeError(f"custom lobby registration missing from {name} in {ff}")
 
 
+def fast_link_enabled() -> bool:
+    """WAW2BO2_FAST_LINK: skip link passes whose outcome an earlier build already
+    learned. Off by default until a rebuild is confirmed identical in game."""
+    import os
+    return os.environ.get('WAW2BO2_FAST_LINK', '') not in ('', '0')
+
+
+# Bump when iwi.convert_file output changes: cached conversions become stale.
+SHARED_IPAK_SCHEMA = 1
+
+
+def shared_ipak_root(stock: Path | None) -> Path | None:
+    """Cross-build cache of ipak images converted from the BO2 install. It sits
+    beside the stock view (keyed on that install), so another BO2 never reuses it."""
+    if stock is None:
+        return None
+    return stock.parent.parent / f'ipak_images_v{SHARED_IPAK_SCHEMA}'
+
+
+def _source_stamp(source: Path) -> dict:
+    stat = source.stat()
+    return {'source': str(source.resolve()), 'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
+
+
+def seed_shared_ipak_images(shared: Path, map_roots: list[Path], output: Path) -> int:
+    """Copy cached stock conversions into this build's ipak image folder before
+    the first link, so it does not fail just to name them.
+
+    Only images no map root provides are seeded: recover_ipak_images would pick
+    the map's own file first, and the seeded copy must never shadow it. An entry
+    whose stock source changed since it was cached is ignored (and recovered
+    again the slow way)."""
+    from . import techsets
+    seeded = 0
+    for stamp_file in sorted((shared / 'images').glob('*.iwi.json')):
+        try:
+            stamp = json.loads(stamp_file.read_text(encoding='utf-8'))
+            cached = stamp_file.with_suffix('')
+            relative = techsets.oat_image_path(stamp['image'])
+            if not cached.is_file() or _source_stamp(Path(stamp['source'])) != stamp['stamp']:
+                continue
+        except (OSError, ValueError, KeyError):
+            continue
+        if any((root / relative).is_file() or (root / relative.with_suffix('.dds')).is_file() for root in map_roots):
+            continue
+        destination = output / relative
+        if destination.is_file():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(cached, destination)
+        seeded += 1
+    return seeded
+
+
+def publish_shared_ipak_images(shared: Path, recovered: list[dict], stock_roots: list[Path]) -> int:
+    """Remember conversions whose source is stock (BO2 install or stock cache),
+    never a map's own file. Each write lands atomically; concurrent builds
+    writing the same image write identical bytes."""
+    import os
+    published = 0
+    stock_roots = [root.resolve() for root in stock_roots]
+    for entry in recovered:
+        source = Path(entry['source']).resolve()
+        if not any(source.is_relative_to(root) for root in stock_roots):
+            continue
+        target = shared / 'images' / Path(entry['output']).name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f'{target.name}.{os.getpid()}.tmp')
+        shutil.copy2(entry['output'], temporary)
+        os.replace(temporary, target)
+        stamp = {'image': entry['image'], 'source': str(source), 'stamp': _source_stamp(source)}
+        temporary = target.with_name(f'{target.name}.json.{os.getpid()}.tmp')
+        temporary.write_text(json.dumps(stamp, sort_keys=True), encoding='utf-8')
+        os.replace(temporary, target.with_name(target.name + '.json'))
+        published += 1
+    return published
+
+
 def recover_ipak_images(log: str, roots: list[Path], output: Path,
                         stock: Path | None, unlinker: Path) -> list[dict]:
     """Stage the exact images requested by the native ipak writer as IWI27."""
@@ -885,6 +963,13 @@ def link_mod(bo2: Path, work: Path, unlinker: Path, extra_lines: list[str] = (),
                 target.resolve().relative_to(table_override.resolve())
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, target)
+    shared = shared_ipak_root(stock_dump) if fast_link_enabled() else None
+    if shared is not None:
+        map_roots = [*([asset_root] if asset_root is not None else []), *map(Path, extra_asset_roots)]
+        # the stock dump is itself an extra root; its images are stock, not the map's
+        map_roots = [root for root in map_roots if stock_dump is None or Path(root).resolve() != stock_dump.resolve()]
+        seeded = seed_shared_ipak_images(shared, map_roots, image_root)
+        print(f"WAW2BO2_FAST_LINK: seeded {seeded} cached stock ipak images", flush=True)
     for _ in range(MAX_DROPS):
         zone_file.write_text(zone_text, encoding="utf-8")
         command = [str(linker), "--no-color", "--base-folder", str(bo2.resolve()), "--source-search-path", str(zone_file.parent),
@@ -916,6 +1001,11 @@ def link_mod(bo2: Path, work: Path, unlinker: Path, extra_lines: list[str] = (),
         if recovered:
             recovered_images.extend(recovered)
             (work / 'ipak_images.report.json').write_text(json.dumps(recovered_images, indent=2) + '\n')
+            if shared is not None:
+                stock_roots = [bo2 / 'raw', bo2 / 'mods' / TEMPLATE_MAP,
+                               *([stock_dump.parent.parent] if stock_dump is not None else [])]
+                count = publish_shared_ipak_images(shared, recovered, stock_roots)
+                print(f"WAW2BO2_FAST_LINK: cached {count} stock ipak images for later builds", flush=True)
             continue
         failed = FAILED_ENTRY_RE.findall(proc.stdout)
         removed = None

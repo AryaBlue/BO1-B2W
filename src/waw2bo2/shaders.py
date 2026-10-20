@@ -10,7 +10,10 @@ import ctypes as ct
 import hashlib
 import json
 import math
+import os
 import re
+import shutil
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -219,6 +222,10 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
 
     for reg, code in sample_texel.items():
         resources.append(f'float4 waw_texel_{reg}(float4 T) {{ return {code}; }}')
+    for reg, entry in bindings.get('samplers', {}).items():
+        if entry.get('v_taps') is not None:
+            params = ', '.join(f'float4 T{i}' for i in range(len(entry['v_taps'])))
+            resources.append(f'float4 waw_taps_{reg}({params}) {{ return {entry["taps_expr"]}; }}')
 
     def interface(kind, declarations):
         result = {}
@@ -344,7 +351,20 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
             if op == 'texldp':
                 uv = f'({uv} / ({coord}).w)'
             constant = bindings.get('samplers', {}).get(sampler, {}).get('constant')
-            if op == 'texldl':
+            taps = bindings.get('samplers', {}).get(sampler, {}).get('v_taps')
+            if taps is not None:
+                # one source texel spread over sub-pages of the target page:
+                # sample each and rebuild the source texel from T0..Tn
+                if samplers[sampler] != '2d' or op not in ('texld', 'texldl') or v_remap or point_load or constant:
+                    raise ShaderError(f'v taps need a plain 2D texld/texldl: {original}')
+                lod = f', ({coord}).w' if op == 'texldl' else ''
+                method = 'SampleLevel' if op == 'texldl' else 'Sample'
+                if method == 'Sample' and stage != 'ps':
+                    raise ShaderError('vertex texture reads must use explicit LOD')
+                texels = [f'tex_{sampler}.{method}(samp_{sampler}, float2(({uv}).x, ({uv}).y * {float(a)!r} + {float(b)!r}){lod})'
+                          for a, b in taps]
+                expr = f'(waw_taps_{sampler}({", ".join(texels)}))'
+            elif op == 'texldl':
                 expr = f'tex_{sampler}.SampleLevel(samp_{sampler}, {uv}, ({coord}).w)'
             elif op == 'texldb':
                 expr = f'tex_{sampler}.SampleBias(samp_{sampler}, {uv}, ({coord}).w)'
@@ -494,16 +514,75 @@ def translate_file(source: Path, output: Path, bindings: dict | None = None, *, 
     return report
 
 
-def _stage_shader(task):
-    name, source, destination = task
-    # T6 donor DXBC is not WaW input. Preserve it through the existing path.
-    if source.read_bytes()[:4] == b'DXBC':
+# Rows of earlier runs are reused while the source bytes and this translator are
+# unchanged (a full Kino stage translates 7380 shaders; most never change).
+CACHE_FILE = 'stage_cache.json'
+_TRANSLATOR = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+def _cached_row(entry, digest, output):
+    if not entry or entry.get('translator') != _TRANSLATOR or entry.get('source_sha256') != digest:
         return None
+    row = entry['row']
+    if row['status'] == 'translated_unbound' and not all(
+            output.with_suffix(suffix).is_file() for suffix in ('.hlsl', '.cso', '.json')):
+        return None
+    return row
+
+
+def _shared(digest):
+    """Folder of the cache shared by every map (WAW2BO2_SHADER_CACHE): one entry per source shader and translator.
+    Maps from the same game mostly use the same shaders, so a map's first build reuses earlier maps' work."""
+    root = os.environ.get('WAW2BO2_SHADER_CACHE')
+    return Path(root) / f'{digest[:2]}/{digest}_{_TRANSLATOR[:12]}' if root else None
+
+
+def _from_shared(shared, name, source, output):
     try:
-        report = translate_file(source, destination / name)
-        return dict(report, name=name, status='translated_unbound')
-    except (ShaderError, OSError, AttributeError) as exc:
-        return {'name': name, 'source': str(source), 'status': 'unsupported', 'error': str(exc)}
+        row = json.loads((shared / 'row.json').read_text(encoding='utf-8'))
+        if row['status'] == 'translated_unbound':
+            output.parent.mkdir(parents=True, exist_ok=True)
+            for suffix in ('.hlsl', '.cso', '.json'):
+                shutil.copyfile(shared / ('out' + suffix), output.with_suffix(suffix))
+    except (OSError, ValueError, KeyError):
+        return None
+    return dict(row, name=name, source=str(source))
+
+
+def _to_shared(shared, row, output):
+    temp = shared.with_name(f'{shared.name}.{os.getpid()}.{threading.get_ident()}.tmp')
+    try:
+        temp.mkdir(parents=True, exist_ok=True)
+        if row['status'] == 'translated_unbound':
+            for suffix in ('.hlsl', '.cso', '.json'):
+                shutil.copyfile(output.with_suffix(suffix), temp / ('out' + suffix))
+        (temp / 'row.json').write_text(json.dumps(row), encoding='utf-8')
+        os.replace(temp, shared)
+    except OSError:
+        shutil.rmtree(temp, ignore_errors=True)  # another map's build stored it first
+
+
+def _stage_shader(task):
+    name, source, destination, cached = task
+    data = source.read_bytes()
+    # T6 donor DXBC is not WaW input. Preserve it through the existing path.
+    if data[:4] == b'DXBC':
+        return None, None, False
+    digest = hashlib.sha256(data).hexdigest()
+    row = _cached_row(cached, digest, destination / name)
+    shared = _shared(digest)
+    if row is None and shared is not None and shared.is_dir():
+        row = _from_shared(shared, name, source, destination / name)
+    reused = row is not None
+    if row is None:
+        try:
+            report = translate_file(source, destination / name)
+            row = dict(report, name=name, status='translated_unbound')
+        except (ShaderError, OSError, AttributeError) as exc:
+            row = {'name': name, 'source': str(source), 'status': 'unsupported', 'error': str(exc)}
+        if shared is not None:
+            _to_shared(shared, row, destination / name)
+    return row, {'translator': _TRANSLATOR, 'source_sha256': digest, 'row': row}, reused
 
 
 def stage(roots: list[Path], destination: Path) -> dict:
@@ -518,12 +597,29 @@ def stage(roots: list[Path], destination: Path) -> dict:
         for folder in (root / 'shader_bin', root / 'content_source/shader_bin'):
             for path in sorted(folder.rglob('*.cso')):
                 sources.setdefault(path.relative_to(folder).as_posix(), path)
-    rows = [row for row in ordered_map(_stage_shader,
-            [(name, source, destination) for name, source in sources.items()], label='Shaders')
-            if row is not None]
+    cache_path = destination / CACHE_FILE
+    try:
+        cache = json.loads(cache_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        cache = {}
+    rows, entries, reused = [], {}, 0
+    # DXBC->SM5 translation is CPU-bound pure Python; run it in worker
+    # processes (not GIL-bound threads) so it uses every core. Each worker
+    # writes uniquely-named outputs and an atomic per-PID shared-cache entry,
+    # so concurrent processes do not collide.
+    results = ordered_map(_stage_shader, [(name, source, destination, cache.get(name))
+                                          for name, source in sources.items()],
+                          label='Shaders', processes=True)
+    for name, (row, entry, hit) in zip(sources, results):
+        if row is not None:
+            rows.append(row)
+            entries[name] = entry
+            reused += hit
+    print(f'[staging] Shaders: {reused}/{len(rows)} reused from the previous run', flush=True)
     report = {'status': 'requires_t6_pass_bindings' if rows else 'no_source_bytecode',
               'translated': sum(r['status'] == 'translated_unbound' for r in rows),
               'unsupported': sum(r['status'] == 'unsupported' for r in rows), 'shaders': rows}
     destination.mkdir(parents=True, exist_ok=True)
     (destination / 'stage.json').write_text(json.dumps(report, indent=2) + '\n')
+    cache_path.write_text(json.dumps(entries) + '\n', encoding='utf-8')
     return report

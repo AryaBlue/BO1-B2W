@@ -14,6 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from . import lightmaps, shaders, techsets
+from .parallel import write_shared
 
 
 def _find(roots, relative):
@@ -32,6 +33,32 @@ def registers(assembly):
         for row in range(int(count)):
             result[f'{bank}{int(first)+row}'] = (name, row)
     return result
+
+
+def declared_width(assembly, name):
+    """Components of a D3DX constant-table parameter row (float3 -> 3), 4 if unknown.
+
+    D3DX only reads the declared components, so a T6 field of that size suffices:
+    both games declare sunFogDir as float3 and sunFog as float2 (T6 packs them
+    12 and 8 bytes wide in PerScene)."""
+    match = re.search(r'^//\s+float(\d)?(?:x\d)?\s+' + re.escape(name) + r'(?:\[\d+\])?;', assembly, re.M)
+    return int(match[1] or 1) if match else 4
+
+
+def fits(assembly, name, row, size):
+    """True when a native field of ``size`` bytes holds source row ``row`` of ``name``."""
+    return size >= row * 16 + declared_width(assembly, name) * 4
+
+
+def unaligned_expr(assembly, name, slot, offset, size):
+    """A scalar/vector field T6 packs mid-row (extraCamParam: cb0+2260): the
+    source reads it from .x upward, so rotate the row's components to match."""
+    shift, width = offset % 16 // 4, declared_width(assembly, name)
+    if slot != 0 or not shift or shift + width > 4 or size < width * 4:
+        return None
+    row = offset // 16
+    swizzle = ('xyzw'[shift:] + 'xyzw'[:shift])
+    return {'expr': f't6_cb0[{row}].{swizzle}', 'uses': [[0, row]]}
 
 
 def embed_literals(assembly, source_pass, stage):
@@ -141,7 +168,7 @@ def pixel_contract(source_assembly, source_pass, native_pass, native_root, sourc
             slot, offset, size = native_fields[name]
             # PerScene is globally maintained by T6. Other buffers need the
             # donor pass's explicit argument routing and cannot be assumed live.
-            if slot != 0 or offset % 16 or size < 16 * (row+1):
+            if slot != 0 or offset % 16 or not fits(source_assembly, name, row, size):
                 raise shaders.ShaderError(f'code uniform requires an adapter: {name}')
             contract['constants'][reg] = {'buffer': slot, 'index': offset//16 + row}
         elif arg['type'] == 6:
@@ -185,7 +212,10 @@ CODE_UNIFORM_ALIASES = {'baseLightingCoords': 'gridLightingCoordsAndVis', 'sunSp
 NEUTRAL_CODE_UNIFORMS = {'destructibleParms': 'float4(0, 0, 0, 0)',
                          # per-entity burn amount of WaW "charred" programs; static
                          # models carry none (unburnt) and no T6 pass routes one
-                         '__characterCharredAmount': 'float4(0, 0, 0, 0)'}
+                         '__characterCharredAmount': 'float4(0, 0, 0, 0)',
+                         # script-set vectors (setshaderconstant) default to 0 in both games;
+                         # T6 keeps them in cb1, which a donor pass may not route
+                         **{f'scriptVector{i}': 'float4(0, 0, 0, 0)' for i in range(8)}}
 # Vertex inputs WaW reads as biased UBYTE4 unit vectors (NORMAL, tangent in
 # TEXCOORD2); T6 feeds decoded floats. Checked against the decode literals.
 PACKED_VECTOR_INPUTS = ('NORMAL0', 'TEXCOORD2')
@@ -250,7 +280,8 @@ WORLD_SURFACE_TEXTURE_SLOTS = {'lightmapSamplerSecondary': (13, '2d'), 'reflecti
 # lightmapSamplerSecondary); without the bit the slot keeps a stale texture.
 CUSTOM_SAMPLER_BITS = {'reflectionProbeSampler': 1, 'lightmapSamplerSecondary': 2}
 # Samplers both engines bind per surface, outside the pass arguments.
-PER_SURFACE_SAMPLERS = {'lightmapSamplerPrimary', 'lightmapSamplerSecondary', 'reflectionProbeSampler'}
+PER_SURFACE_SAMPLERS = {'lightmapSamplerPrimary', 'lightmapSamplerSecondary', 'lightmapSamplerSecondaryB',
+                        'reflectionProbeSampler'}
 
 
 # WaW primary-light code uniforms (WaW sub_742400, sub_7425D0) rebuilt from the
@@ -512,11 +543,26 @@ def paired_pixel_contract(source_assembly, source_pass, native_pass, native_root
             contract.setdefault('unit_conversions', []).append(LIGHT_ADAPTERS[name])
             continue
         name = CODE_UNIFORM_ALIASES.get(name, name) if name not in native_fields else name
+        if name not in native_fields and name in NEUTRAL_CODE_UNIFORMS:
+            contract['constants'][reg] = {'expr': NEUTRAL_CODE_UNIFORMS[name], 'uses': []}
+            contract.setdefault('neutral', []).append(name)
+            continue
         if name not in native_fields:
             raise shaders.ShaderError(f'no native code uniform for {reg}: {names.get(reg)}')
         row = arg.get('firstRow', 0) + int(reg[1:]) - arg['dest']
         slot, offset, size = native_fields[name]
-        if slot != 0 or offset % 16 or size < 16 * (row+1):
+        if not row and (unaligned := unaligned_expr(source_assembly, names[reg][0], slot, offset, size)):
+            contract['constants'][reg] = unaligned
+            continue
+        # Outside PerScene a buffer is only live when the donor pass routes it.
+        routed = slot == 0 or any(
+            a['type'] == 5 and a['buffer'] == slot and a['location'] <= offset + 16 * row < a['location'] + a['size']
+            for a in native_pass['args'])
+        if not routed and name in NEUTRAL_CODE_UNIFORMS:
+            contract['constants'][reg] = {'expr': NEUTRAL_CODE_UNIFORMS[name], 'uses': []}
+            contract.setdefault('neutral', []).append(name)
+            continue
+        if not routed or offset % 16 or not fits(source_assembly, names[reg][0], row, size):
             raise shaders.ShaderError(f'code uniform requires an adapter: {name}')
         index = offset // 16 + row
         if name in ('fogColor', 'sunDiffuse') and sqrt_hdr:  # includes aliased sunSpecular
@@ -557,7 +603,7 @@ def paired_pixel_contract(source_assembly, source_pass, native_pass, native_root
                 contract['samplers'][reg] = {'texture': 0, 'sampler': 0, 'constant': list(SCORCH_NEUTRAL)}
                 contract.setdefault('unit_conversions', []).append(f'{source_name}: unscorched (weight 0)')
                 continue
-            lookup = 'lightmapSamplerSecondary' if source_name in lightmaps.WAW_PAGE_UV else source_name
+            lookup = 'lightmapSamplerSecondary' if source_name in lightmaps.PAGE_SAMPLERS else source_name
             slots = [t for t, (n, _) in native_textures.items() if n == lookup]
             if not slots and lookup in CODE_TEXTURE_ARGS:
                 # the engine fills this code texture for every draw (T6 sub_782FA0
@@ -633,6 +679,12 @@ def paired_pixel_contract(source_assembly, source_pass, native_pass, native_root
                 # from the WaW light def with its sampler state: WaW reads the
                 # same texel (T6 programs square it; WaW uses it directly).
                 pass
+            elif source_name == 'lightmapSamplerSecondaryB':
+                # BO1 brightness page, rebuilt from three thirds of the
+                # WaW-layout page (lightmaps.build_page_t5)
+                entry.update(v_taps=[list(t) for t in lightmaps.T5_BRIGHTNESS_TAPS],
+                             taps_expr=lightmaps.T5_BRIGHTNESS_TEXEL)
+                contract['lightmap'] = 'waw'
             elif source_name in lightmaps.WAW_PAGE_UV:
                 # WaW and T6 lightmap pages are encoded differently (WaW: two
                 # halves, colour + tangent-space direction in alpha, plus a
@@ -655,7 +707,7 @@ def paired_pixel_contract(source_assembly, source_pass, native_pass, native_root
                 raise shaders.ShaderError(f'code texture {source_name} needs a unit adapter')
         contract['samplers'][reg] = entry
         if arg is None or arg['type'] == 4:
-            bit = CUSTOM_SAMPLER_BITS.get('lightmapSamplerSecondary' if source_name in lightmaps.WAW_PAGE_UV else source_name)
+            bit = CUSTOM_SAMPLER_BITS.get('lightmapSamplerSecondary' if source_name in lightmaps.PAGE_SAMPLERS else source_name)
             if bit:
                 native_pass['customSamplerFlags'] = native_pass.get('customSamplerFlags', 0) | bit
     return contract
@@ -849,7 +901,10 @@ def vertex_contract(source_assembly, source_pass, native_pass, native_root, pair
         row = arg.get('firstRow', 0) + int(reg[1:]) - arg['dest']
         slot, offset, size = fields[name]
         at = offset + row * 16
-        if at % 16 or size < (row+1)*16:
+        if not row and (unaligned := unaligned_expr(source_assembly, source_name, slot, offset, size)):
+            contract['constants'][reg] = unaligned
+            continue
+        if at % 16 or not fits(source_assembly, source_name, row, size):
             raise shaders.ShaderError(f'incompatible vertex uniform {name}')
         if slot != 0 and not any(a['type'] == 3 and a['buffer'] == slot and a['location'] <= at and at+16 <= a['location']+a['size'] for a in native_pass['args']):
             raise shaders.ShaderError(f'native pass does not maintain vertex uniform {name}')
@@ -979,27 +1034,42 @@ def native_fog_adapter(hlsl, source_assembly, contract, native_pass, native_root
     return hlsl.replace('Output output;', code + '\nOutput output;')
 
 
-# Matching engine technique meanings. Extended T6 dynamic-light combinations
-# cannot be routed to a differently shaped WaW pass by their ordinal alone.
-SLOTS = {0: 0, 1: 1, 2: 4, 3: 5, 4: 8, 5: 10, 6: 12, 7: 14, 8: 16, 13: 18, 14: 20}
+# Matching engine technique meanings: T6 slot -> source technique index.
+# Extended T6 dynamic-light combinations cannot be routed to a differently
+# shaped WaW pass by their ordinal alone. WaW (T4, 59 techniques) and BO1
+# (T5, 130) number their techniques differently; T6 slot 1 is build shadowmap
+# depth (T6 names: CoDMPServer_PC.exe 0xD1BE90; T4/T5: OAT MaterialTechniqueType).
+WAW_SLOTS = {0: 0, 1: 2, 2: 4, 3: 5, 4: 8, 5: 10, 6: 12, 7: 14, 8: 16, 13: 18, 14: 20}
+BO1_SLOTS = {0: 0, 1: 2, 2: 4, 3: 5, 4: 10, 5: 11, 6: 12, 7: 13, 8: 14, 13: 15, 14: 16}
+SLOTS = WAW_SLOTS  # the T6 slots; both tables share them
+WAW_TECHNIQUE_COUNT = 59
+
+
+def slot_table(count):
+    """The source table for a techset or stateBitsEntry array of ``count`` entries."""
+    return BO1_SLOTS if count > WAW_TECHNIQUE_COUNT else WAW_SLOTS
 
 
 # Self-illuminated WaW techniques T6 draws through UNLIT/EMISSIVE.
 SELF_LIT_KINDS = ('unlit', 'unlit_blend', 'unlit_add', 'unlit_distfalloff', 'unlit_falloff_add', 'objective')
 
 
-def source_slot(present, source_name, slot):
-    """WaW technique index feeding T6 ``slot``; ``present(i)`` tells whether
-    WaW technique ``i`` exists."""
-    index = SLOTS[slot]
+def source_slot(present, source_name, slot, count=WAW_TECHNIQUE_COUNT):
+    """Source technique index feeding T6 ``slot``; ``present(i)`` tells whether
+    source technique ``i`` exists and ``count`` is the source table length."""
+    table = slot_table(count)
+    index = table[slot]
     if present(index):
         return index
     parsed = techsets.parse(source_name)
-    self_lit = source_name.startswith('mc_sky') or (not parsed.lit and parsed.unlit_kind in SELF_LIT_KINDS)
+    # BO1 adds unlit variants (wc_unlitdecalblend_add: Kino's wallbuy chalk,
+    # additive, drawn opaque black over the wall without its WaW state)
+    self_lit = source_name.startswith('mc_sky') or (not parsed.lit and (parsed.unlit_kind in SELF_LIT_KINDS
+                                                                       or (parsed.unlit_kind or '').startswith('unlit')))
     if slot in (2, 3) and self_lit:
         # T6 draws emissive surfaces through UNLIT/EMISSIVE even when WaW
         # draws them through UNLIT or only through lit aliases (objective).
-        for alias in (4, 8):
+        for alias in (table[2], table[4]):
             if present(alias):
                 return alias
     return None
@@ -1014,7 +1084,7 @@ def _output_scale(source_material, source_name, slot):
     entries = source_material.get('stateBitsEntry', [])
     states = source_material.get('stateBits', [])
     present = lambda i: i < len(entries) and 0 <= entries[i] < len(states)
-    index = source_slot(present, source_name, slot)
+    index = source_slot(present, source_name, slot, len(entries))
     state = states[entries[index]] if index is not None else None
     return {'output_rgb_scale': WAW_OUTPUT_SCALE} if scales_output(state) else {}
 
@@ -1055,7 +1125,7 @@ def _source_state(source_material, source_name, slot):
     entries = source_material.get('stateBitsEntry', [])
     states = source_material.get('stateBits', [])
     present = lambda i: i < len(entries) and 0 <= entries[i] < len(states)
-    index = source_slot(present, source_name, slot)
+    index = source_slot(present, source_name, slot, len(entries))
     return states[entries[index]] if index is not None else None
 
 
@@ -1079,14 +1149,14 @@ def _blended_state(source_material, source_name, slot):
     entries = source_material.get('stateBitsEntry', [])
     states = source_material.get('stateBits', [])
     present = lambda i: i < len(entries) and 0 <= entries[i] < len(states)
-    index = source_slot(present, source_name, slot)
+    index = source_slot(present, source_name, slot, len(entries))
     state = states[entries[index]] if index is not None else None
     return bool(state) and state.get('blendOpRgb', 'disabled') != 'disabled' and state.get('dstBlendRgb') == 'invsrcalpha'
 
 
 def source_technique(original, source_name, slot):
     techniques = original['techniques']
-    index = source_slot(lambda i: i < len(techniques) and bool(techniques[i]), source_name, slot)
+    index = source_slot(lambda i: i < len(techniques) and bool(techniques[i]), source_name, slot, len(techniques))
     return techniques[index] if index is not None else None
 
 
@@ -1119,7 +1189,7 @@ def apply_source_pass_states(source_material, output_material, runtime):
     for slot in SLOTS:
         if slot >= len(entries) or not 0 <= entries[slot] < len(states):
             continue
-        index = source_slot(present, name, slot)
+        index = source_slot(present, name, slot, len(src_entries))
         if index is None:
             continue
         wanted, native = src_states[src_entries[index]], states[entries[slot]]
@@ -1161,11 +1231,11 @@ def _write_program(project_root, stage, code, source, contract, info):
     name = 'waw/runtime_' + hashlib.sha256(code).hexdigest()[:20]
     path = project_root / 'shader_bin' / f'{stage}_{name}.cso'
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(code)
+    write_shared(path, code)
     proof = project_root / 'content_source/shaders/runtime' / f'{name.rsplit("/", 1)[1]}.json'
     proof.parent.mkdir(parents=True, exist_ok=True)
-    proof.write_text(json.dumps({'source': str(source), 'bindings': contract, 'shader': name,
-                                 'sha256': hashlib.sha256(code).hexdigest(), **info}, indent=2))
+    write_shared(proof, json.dumps({'source': str(source), 'bindings': contract, 'shader': name,
+                                    'sha256': hashlib.sha256(code).hexdigest(), **info}, indent=2).encode())
     return name
 
 
@@ -1199,7 +1269,7 @@ def bind_material(source_material, output_material, roots, project_root, native_
     original = json.loads(source_file.read_text())
     pristine = json.loads(native_file.read_text())
     native = copy.deepcopy(pristine)
-    for slot, source_slot in SLOTS.items():
+    for slot in SLOTS:
         target = native['techniques'][slot]
         source = source_technique(original, source_name, slot)
         if not target or not source:
@@ -1396,7 +1466,7 @@ def bind_material(source_material, output_material, roots, project_root, native_
         native['name'] = ts_name
         path = project_root / 'techniquesets' / f'{ts_name}.json'
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(native, indent=2))
+        write_shared(path, json.dumps(native, indent=2).encode())
         output_material['techniqueSet'] = ts_name
     return result
 

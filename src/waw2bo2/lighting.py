@@ -113,7 +113,47 @@ def read_grid(path: Path) -> LightGrid:
     return grid
 
 
-def stage_grid(source: Path, destination: Path) -> dict:
+# BO1 (T5) grid samples are not WaW's gamma RGB bytes. Bit statistics over
+# Kino's 1.8M samples show a 24-bit word per sample: bits 12-23 a smooth
+# brightness, bits 6-11 and 0-5 two small fields centred near 15.5 whose sum
+# stays close to 31. Read as chromaticity (red = a/k, blue = b/k, green the
+# rest), the commonest sample decodes to Kino's own ambient colour
+# (0.31 0.33 0.34) at k = 46.5. Taken as RGB bytes the same words come out
+# green, which is how the converted map's models looked.
+T5_GRID_CHROMA_SCALE = 46.5
+# how much of the (over-saturated) BO1 grid chroma to keep; the rest blends to luma-grey so
+# bright samples never zero a channel and tint red-albedo models green (see t5_grid_sample_to_t6)
+T5_GRID_SATURATION = 0.4
+# linear light per brightness unit; keeps the grid's overall level where the
+# WaW reading left it (models matched the world brightness, only the hue was wrong)
+T5_GRID_BRIGHTNESS = 1.0 / 512.0
+
+
+def t5_grid_sample_to_t6(word: int) -> tuple[int, int, int]:
+    """One BO1 grid sample -> T6 palette bytes (T6 sub_755810 decodes 32*(c/255)^2)."""
+    luma = (word >> 12) * T5_GRID_BRIGHTNESS
+    red = ((word >> 6) & 63) / T5_GRID_CHROMA_SCALE
+    blue = (word & 63) / T5_GRID_CHROMA_SCALE
+    green = max(0.0, 1.0 - red - blue)
+    # chromaticity shares sum to 1; neutral grey is 1/3 each, so 3 * share keeps luma
+    chans = [min(255, round(255 * math.sqrt(max(0.0, 3 * share * luma) / 32))) for share in (red, green, blue)]
+    # The share model over-saturates on bright directional samples: when the red field is
+    # near zero the red channel is zeroed, so red-albedo models (the stair carpet) lose their
+    # red and read green. We cannot fully invert BO1's 24-bit sample, so desaturate toward the
+    # sample's own luma-grey; this keeps brightness and a hint of hue while never zeroing a
+    # channel, so model albedo shows through instead of a green cast.
+    grey = sum(chans) / 3.0
+    return tuple(int(round(grey + (c - grey) * T5_GRID_SATURATION)) for c in chans)
+
+
+def t5_palette_to_t6(colors: bytes) -> bytes:
+    out = bytearray()
+    for i in range(0, len(colors), 3):
+        out.extend(t5_grid_sample_to_t6(int.from_bytes(colors[i:i + 3], "little")))
+    return bytes(out)
+
+
+def stage_grid(source: Path, destination: Path, t5: bool = False) -> dict:
     """Stage T6's packed grid, preserving positions and directional samples.
 
     Native T6 sub_755810 decodes bytes as 32*(c/255)^2. WaW's model
@@ -130,13 +170,17 @@ def stage_grid(source: Path, destination: Path) -> dict:
     for color, primary, needs_trace in struct.iter_unpack("<HBB", grid.entries):
         entries.extend(struct.pack("<HBB", color, primary, 255 if primary else 0))
         trace_points += bool(needs_trace)
-    palette = bytes(round(c / math.sqrt(8)) for c in grid.colors)
+    if t5:
+        palette = t5_palette_to_t6(grid.colors)
+    else:
+        palette = bytes(round(c / math.sqrt(8)) for c in grid.colors)
     header = HEADER.pack(b"W2BT6LG1", 1, 0, grid.sun_index, *grid.mins, *grid.maxs,
                          grid.row_axis, grid.col_axis, len(grid.row_starts), len(grid.packed_rows),
                          len(entries) // 4, len(palette) // 168)
     destination.write_bytes(header + struct.pack(f"<{len(grid.row_starts)}H", *grid.row_starts)
                             + grid.packed_rows + entries + palette)
-    return {**grid.report(), "status": "runtime_T6_grid", "palette_encoding": "WaW_gamma2_to_T6_linear32",
+    return {**grid.report(), "status": "runtime_T6_grid",
+            "palette_encoding": "T5_luma12_chroma6x2_to_T6_linear32" if t5 else "WaW_gamma2_to_T6_linear32",
             "source_trace_mask_points": trace_points,
             "corner_obstruction_checks": "T4_runtime_traces_not_representable_in_T6_visibility"}
 
