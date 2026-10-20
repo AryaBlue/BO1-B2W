@@ -395,14 +395,16 @@ class SourceSlotTests(unittest.TestCase):
     def test_waw_table(self):
         present = lambda i: True
         got = {slot: runtime.source_slot(present, 'wc_l_sm_r0c0', slot, 59) for slot in runtime.SLOTS}
-        self.assertEqual(got, {0: 0, 1: 2, 2: 4, 3: 5, 4: 8, 5: 10, 6: 12, 7: 14, 8: 16, 13: 18, 14: 20})
+        self.assertEqual(got, {0: 0, 1: 2, 2: 4, 3: 5, 4: 8, 5: 10, 6: 12, 7: 14, 8: 16, 13: 18, 14: 20,
+                               15: None, 16: None, 17: None, 18: None, 19: None, 24: None, 25: None})
 
     def test_bo1_table(self):
         # T5 MaterialTechniqueType: LIT 10, LIT_SUN 11, LIT_SUN_SHADOW 12, LIT_SPOT 13,
-        # LIT_SPOT_SHADOW 14, LIT_OMNI 15, LIT_OMNI_SHADOW 16
+        # LIT_SPOT_SHADOW 14, LIT_OMNI 15, LIT_OMNI_SHADOW 16, LIT_*_DLIGHT_GLIGHT 31-37
         present = lambda i: True
         got = {slot: runtime.source_slot(present, 'wc_l_sm_r0c0', slot, 130) for slot in runtime.SLOTS}
-        self.assertEqual(got, {0: 0, 1: 2, 2: 4, 3: 5, 4: 10, 5: 11, 6: 12, 7: 13, 8: 14, 13: 15, 14: 16})
+        self.assertEqual(got, {0: 0, 1: 2, 2: 4, 3: 5, 4: 10, 5: 11, 6: 12, 7: 13, 8: 14, 13: 15, 14: 16,
+                               15: 31, 16: 32, 17: 33, 18: 34, 19: 35, 24: 36, 25: 37})
 
     def test_bo1_self_lit_alias_is_lit(self):
         # BO1 unlit variant drawn only through LIT (10) feeds T6 unlit/emissive

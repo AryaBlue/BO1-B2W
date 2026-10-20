@@ -32,6 +32,37 @@ class HudTechniqueTests(unittest.TestCase):
         self.assertEqual(techsets.match('wc_unlit_blend', ['wpc_unlit_blend_2840z6q0']).target,
                          'wpc_unlit_blend_2840z6q0')
 
+    def test_bo1_unlit_replace_and_decal_blends_get_unlit_donors(self):
+        donors = ['mc_unlit_replace_3j970129', 'mc_unlit_add_ww82zw88', 'wpc_unlit_replace_4688792e',
+                  'wpc_unlit_blend_2840z6q0']
+        def target(name, state=None):
+            t4 = {'techniqueSet': name, 'stateBitsEntry': [0] * 5, 'stateBits': [state or {}]}
+            return techsets.match(techsets.material_techset(t4), donors).target
+        self.assertEqual(target('mc_unlit_replace'), 'mc_unlit_replace_3j970129')
+        self.assertEqual(target('wc_unlit_replace'), 'wpc_unlit_replace_4688792e')
+        self.assertEqual(target('wc_unlit_replace', {'blendOpRgb': 'add', 'dstBlendRgb': 'one'}),
+                         'wpc_unlit_blend_2840z6q0')
+        self.assertEqual(target('wc_unlitdecalblend_add'), 'wpc_unlit_blend_2840z6q0')
+        self.assertEqual(target('wc_unlitdecalblend_multiply'), 'wpc_unlit_blend_2840z6q0')
+        self.assertEqual(target('mc_unlitdecalblend_add'), 'mc_unlit_add_ww82zw88')
+        self.assertEqual(techsets.match('mc_sm_treecanopy_sway', ['mc_treecanopy_sm_68zw237j',
+                                                                  'mc_lit_sm_t0c0_90wz6fe2']).target,
+                         'mc_lit_sm_t0c0_90wz6fe2')
+        self.assertEqual(techsets.match('mc_l_r0c0n0s0sc0x0', ['mc_lit_sm_r0c0n0s0_7426e277']).target,
+                         'mc_lit_sm_r0c0n0s0_7426e277')
+        # BO1 programs that read the tangent need a donor that streams it
+        tangent = ['mc_lit_sm_r0c0_77e21qq8', 'mc_lit_sm_r0c0n0_2z223015', 'mc_lit_sm_b0c0n0_10449597']
+        self.assertEqual(techsets.match('mc_sw4_3d_rotate', tangent).target, 'mc_lit_sm_r0c0n0_2z223015')
+        self.assertEqual(techsets.match('mc_sw4_3d_clan_tag_transparent', tangent).target, 'mc_lit_sm_b0c0n0_10449597')
+        # the world decal keeps its own multiply blend over the donor's
+        multiply = {'srcBlendRgb': 'destColor', 'dstBlendRgb': 'zero', 'blendOpRgb': 'add', 'colorWriteRgb': True}
+        donor = {'techniqueSet': 'wpc_unlit_blend_2840z6q0', 'textures': [],
+                 'stateBits': [{'srcBlendRgb': 'srcAlpha', 'dstBlendRgb': 'invSrcAlpha', 'colorWriteRgb': True}]}
+        out = techsets.build_material({'techniqueSet': 'wc_unlitdecalblend_multiply', 'stateBitsEntry': [0] * 5,
+                                       'stateBits': [multiply]}, donor, [])
+        self.assertEqual(out['stateBits'][0]['srcBlendRgb'], 'destColor')
+        self.assertEqual(out['stateBits'][0]['dstBlendRgb'], 'zero')
+
     def test_donor_thermal_variant_is_not_inherited(self):
         donor = {"techniqueSet": "mc_lit_sm_r0c0_x", "thermalMaterial": "mc/mtl_t6_wpn_zmb_raygun2_1_thermal",
                  "textures": [{"name": "colorMap", "semantic": "color", "image": "stock"}]}

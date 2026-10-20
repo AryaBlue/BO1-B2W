@@ -117,6 +117,18 @@ add oC0, r0, r1
                 self.assertAlmostEqual(x, words[2 * i] / 65535, places=6)
                 self.assertAlmostEqual(y, words[2 * i + 1] / 65535, places=6)
 
+    def test_vpos_reads_sv_position_at_d3d9_pixel_coordinates(self):
+        ps = 'ps_3_0\ndcl_texcoord v0\ndcl vPos.xy\nmul r0.xy, vPos, c0\nadd oC0, v0, r0.xyxy\n'
+        _, ir = shaders.translate(ps)
+        self.assertEqual(ir['inputs']['v1'], ('SV_Position', 4))
+        contract = {'inputs': {'v0': {'semantic': 'TEXCOORD0', 'width': 4}, 'v1': {'semantic': 'SV_Position', 'width': 4}},
+                    'outputs': {'oC0': {'semantic': 'SV_Target0', 'width': 4}},
+                    'constants': {'c0': {'buffer': 0, 'index': 0}}, 'samplers': {},
+                    'input_signature': [{'semantic': 'SV_Position', 'width': 4}, {'semantic': 'TEXCOORD0', 'width': 4}]}
+        hlsl, _ = shaders.translate(ps, contract)
+        self.assertIn('v1 = float4(input.link0.xy - 0.5, 0.0, 0.0);', hlsl)
+        shaders.compile_hlsl(hlsl, 'ps_5_0')
+
     def test_point_load_reads_texels_without_sampler_state(self):
         ps = 'ps_3_0\ndcl_texcoord v0\ndcl_2d s5\ntexldl r0, v0, s5\nmov oC0, r0\n'
         contract = {'inputs': {'v0': {'semantic': 'TEXCOORD0', 'width': 4}},
@@ -275,6 +287,74 @@ class LocalLightTests(unittest.TestCase):
             table.append({'type': 2, 'defName': 'other'})
             lights.write_text(json.dumps({'lights': table}))
             self.assertIsNone(runtime.light_falloff_placement(lights, [root]))
+
+
+class Bo1LinearTests(unittest.TestCase):
+    """BO1 programs are linear like T6: by-name light rows, dlight gating, compares."""
+    FIELDS = {**LocalLightTests.FIELDS, 'lightAttenuation': (0, 1296, 16), 'lightSpotMatrix3': (0, 1392, 16),
+              'glightReds': (0, 1024, 16), 'dlightDiffuse': (0, 1088, 16), 'dlightPosition': (0, 1072, 16),
+              'dlightSpotShadowmapPixelAdjust': (0, 1488, 16)}
+
+    def native(self):
+        return {'perPrimArgCount': 0, 'perObjArgCount': 0, 'stableArgCount': 0, 'args': []}
+
+    def test_per_light_rows_bind_by_name_and_become_pass_arguments(self):
+        native = self.native()
+        self.assertEqual(runtime.t5_constant('lightSpecular', self.FIELDS, native, 0),
+                         ({'buffer': 0, 'index': 78}, 'lightSpecular: T6 lightDiffuse'))
+        self.assertEqual(runtime.t5_constant('lightSpotMatrix3', self.FIELDS, native, 0), ({'buffer': 0, 'index': 87}, None))
+        self.assertEqual(runtime.t5_constant('lightAttenuation', self.FIELDS, native, 0)[0], {'buffer': 0, 'index': 81})
+        self.assertEqual([(a['location'], a['u']['value']) for a in native['args']],
+                         [(1248, 0x01000001), (1296, 0x01000004), (1392, 0x0100000A)])
+        # global PerScene rows (dlight position) take the generic by-name binding
+        self.assertIsNone(runtime.t5_constant('dlightPosition', self.FIELDS, native, 0))
+
+    def test_dynamic_lights_are_gated_by_the_t6_mask(self):
+        native = self.native()
+        diffuse, _ = runtime.t5_constant('dlightSpecular', self.FIELDS, native, 0)
+        self.assertEqual(diffuse['expr'], '(asuint(t6_cb3[11].x) != 0 ? t6_cb0[68] : float4(0.0, 0.0, 0.0, 0.0))')
+        self.assertIn([3, 11], diffuse['uses'])
+        reds, _ = runtime.t5_constant('glightReds', self.FIELDS, native, 0)
+        self.assertIn('t6_cb3[11].y', reds['expr'])
+        attenuation, _ = runtime.t5_constant('dlightAttenuation', self.FIELDS, native, 0)
+        self.assertEqual(attenuation, {'expr': 'float4(1.0, 0.0, 0.0, 0.0)', 'uses': []})
+        adjust, _ = runtime.t5_constant('dlightSpotShadowmapPixelAdjust', self.FIELDS, native, 0)
+        self.assertEqual(adjust['expr'], '(t6_cb0[93].xyxy * float4(1.0, 1.0, 1.0, -1.0))')
+        self.assertEqual(native['args'][-1]['u']['value'], 0x0100003D)
+        # the gated expressions compile against a declared cb3
+        ps = 'ps_3_0\ndcl_texcoord v0\nmul oC0, v0, c21\n'
+        contract = {'inputs': {'v0': {'semantic': 'TEXCOORD0', 'width': 4}},
+                    'outputs': {'oC0': {'semantic': 'SV_Target0', 'width': 4}},
+                    'constants': {'c21': diffuse}, 'samplers': {}}
+        hlsl, _ = shaders.translate(ps, contract)
+        self.assertIn('register(b3)', hlsl)
+        shaders.compile_hlsl(hlsl, 'ps_5_0')
+
+    def test_bo1_material_constants_use_the_t6_name_hash(self):
+        # dumped mc_sw4_3d_char_skin pass arguments (Kino mtl_c_ger_richtofen_head)
+        bo1 = {'_game': 't5', 'constants': [{'name': 'Reflection_Amount', 'literal': [0.1, 0, 0, 1]}]}
+        self.assertEqual(runtime.material_literal(bo1, 211931156), [0.1, 0.0, 0.0, 1.0])
+        waw = {'constants': [{'name': 'Reflection_Amount', 'literal': [0.1, 0, 0, 1]}]}
+        self.assertIsNone(runtime.material_literal(waw, 211931156))
+        self.assertEqual(runtime.material_literal(waw, runtime.waw_hash('Reflection_Amount')), [0.1, 0.0, 0.0, 1.0])
+
+    def test_cloak_tangent_input_is_recognised_by_its_unit_vector_decode(self):
+        # BO1 mc_cod7modelcloak_ck vertex program (Kino mtl_c_gen_arm_clean_zm)
+        vs = ('vs_3_0\ndef c12, 0.00787401572, 0.00392156886, -1, 0.752941191\ndcl_texcoord1 v3\n'
+              'mad r0, v3, c12.xxxy, c12.zzzw\nmov o0, r0\n')
+        self.assertTrue(runtime.unit_vector_input(vs, 'v3'))
+        self.assertFalse(runtime.unit_vector_input(vs.replace('mov o0, r0', 'mov o1, v3'), 'v3'))
+        self.assertFalse(runtime.unit_vector_input(vs.replace('0.752941191', '1'), 'v3'))
+
+    def test_hardware_shadow_fetch_becomes_a_comparison_sample(self):
+        ps = 'ps_3_0\ndcl_texcoord v0\ndcl_2d s2\ntexldp r0, v0, s2\ntexldl r1, v0, s2\nadd oC0, r0, r1\n'
+        contract = {'inputs': {'v0': {'semantic': 'TEXCOORD0', 'width': 4}},
+                    'outputs': {'oC0': {'semantic': 'SV_Target0', 'width': 4}}, 'constants': {},
+                    'samplers': {'s2': {'texture': 10, 'sampler': 10, 'compare': True}}}
+        hlsl, _ = shaders.translate(ps, contract)
+        self.assertIn('SamplerComparisonState samp_s2 : register(s10)', hlsl)
+        self.assertEqual(hlsl.count('SampleCmpLevelZero'), 2)
+        shaders.compile_hlsl(hlsl, 'ps_5_0')
 
 
 class LitSlotTests(unittest.TestCase):

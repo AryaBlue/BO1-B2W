@@ -111,6 +111,24 @@ class ShaderTests(unittest.TestCase):
             shaders.compile_hlsl(hlsl, 'ps_5_0')
 
     @unittest.skipUnless(os.name == 'nt', 'native D3D compiler requires Windows')
+    def test_address_register_reads_a_bound_constant_array(self):
+        # BO1 canopy sway: variantWindSpring[16] indexed by floor(15 * vertex colour)
+        source = '\n'.join(['vs_3_0', 'def c11, 15, 0, 0, 0', 'dcl_position v0', 'dcl_color v2',
+                            'dcl_position o0', 'mul r0.y, c11.x, v2.x', 'mova a0.w, r0.y',
+                            'add r0.xyz, v0, c40[a0.w].yzww', 'mov o0, r0'])
+        contract = {'inputs': {'v0': {'semantic': 'POSITION0'}, 'v2': {'semantic': 'COLOR0'}},
+                    'outputs': {'o0': {'semantic': 'SV_Position'}},
+                    'constants': {'c40': {'buffer': 0, 'index': 2, 'count': 16}}}
+        hlsl, _ = shaders.translate(source, contract)
+        self.assertIn('int4 value = int4(floor(', hlsl)
+        self.assertIn('t6_cb0[2 + clamp(a0.w, 0, 15)]', hlsl)
+        self.assertIn('float4 t6_cb0[18]', hlsl)
+        self.assertEqual(shaders.compile_hlsl(hlsl, 'vs_5_0')[:4], b'DXBC')
+        del contract['constants']['c40']['count']
+        with self.assertRaisesRegex(shaders.ShaderError, 'bound array'):
+            shaders.translate(source, contract)
+
+    @unittest.skipUnless(os.name == 'nt', 'native D3D compiler requires Windows')
     def test_actual_vertex_bytecode_roundtrip(self):
         original = shaders.compile_hlsl('''float4 main(float4 position : POSITION) : POSITION {
             return position * float4(1,2,3,1);
@@ -143,10 +161,12 @@ mov oC0, r0
 
     @unittest.skipUnless(os.name == 'nt', 'native D3D compiler requires Windows')
     def test_unsupported_translation_does_not_emit_bytecode(self):
-        original = shaders.compile_hlsl('''float4 values[32];
+        original = shaders.compile_hlsl('''int count;
             float4 main(float4 position : POSITION) : POSITION {
-                return values[(int)position.x];
-            }''', 'vs_3_0')
+                float4 r = position;
+                [loop] for (int i = 0; i < count; i++) r = r * position;
+                return r;
+            }''', 'vs_3_0')  # a uniform repeat count (rep i0) is not supported
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp)/'input.cso'
             source.write_bytes(original)

@@ -86,8 +86,15 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
     if not lines or lines[0] not in ('ps_3_0', 'vs_3_0'):
         raise ShaderError('requires ps_3_0 or vs_3_0 bytecode')
     stage = lines.pop(0)[:2]
+    vpos = None
+    if stage == 'ps' and any(re.search(r'\bvPos\b', s) for s in lines):
+        # SM3 vPos (screen pixel position) becomes a spare input register
+        # read from SV_Position; see the input initialisation below.
+        vpos = 'v%d' % (1 + max([int(n) for s in lines for n in re.findall(r'\bv(\d+)\b', s)], default=-1))
+        lines = ['dcl_vpos ' + vpos + s[len('dcl vPos'):] if s.startswith('dcl vPos')
+                 else re.sub(r'\bvPos\b', vpos, s) for s in lines]
     defs, integers, inputs, outputs, samplers, operations = {}, {}, {}, {}, {}, []
-    used, writes, centroid = set(), set(), set()
+    used, writes, centroid, relative = set(), set(), set(), set()
     for line in lines:
         op, _, tail = line.partition(' ')
         args = [s.strip() for s in tail.split(',')]
@@ -133,10 +140,13 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
                 raise ShaderError(f'unsupported declaration: {line}')
         else:
             operations.append((op, args, line))
-            used.update(re.findall(r'\b(?:r\d+|v\d+|c\d+|oC\d+|o\d+|oDepth)(?=[._,\s)]|$)', tail))
+            used.update(re.findall(r'\b(?:r\d+|v\d+|c\d+|oC\d+|o\d+|oDepth)(?=[._,\s)\[]|$)', tail))
+            relative.update(re.findall(r'\b(c\d+)\[a0\.', tail))
             if args and REG.fullmatch(args[0]):
                 writes.add(REG.fullmatch(args[0])[1])
 
+    if vpos in inputs:
+        inputs[vpos] = ('SV_Position', 4)
     for reg in writes:
         if reg.startswith('o') and reg not in outputs:
             if stage == 'ps' and re.fullmatch(r'oC\d+', reg):
@@ -148,7 +158,7 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
     if not outputs:
         raise ShaderError('shader has no output')
     constants = sorted((used - defs.keys()) & {r for r in used if r.startswith('c')})
-    resources, cb_sizes, reg_expr = [], {}, {}
+    resources, cb_sizes, reg_expr, reg_array = [], {}, {}, {}
 
     def use_buffers(uses):
         # uses: [[slot, index], ...] read by an adapter expression
@@ -163,13 +173,23 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
             raise ShaderError(f'missing target constant binding {reg}')
         if entry and 'expr' in entry:
             # measured adapter: an HLSL float4 expression over t6_cbN rows
+            if reg in relative and entry.get('uses'):
+                raise ShaderError(f'relative read of adapted constant {reg}')
             use_buffers(entry.get('uses', []))
             reg_expr[reg] = f'({entry["expr"]})'
             continue
         slot, index = (entry['buffer'], entry['index']) if entry else (0, int(reg[1:]))
         if type(slot) is not int or type(index) is not int or not 0 <= slot < 14 or not 0 <= index < 4096:
             raise ShaderError(f'invalid constant binding {reg}')
-        cb_sizes[slot] = max(cb_sizes.get(slot, 0), index + 1)
+        count = 1
+        if reg in relative:
+            # c<base>[a0.c]: the whole array must sit in one target buffer
+            # unbound ABI (cN = t6_cb0[N]): the rest of the 256-register D3D9 file
+            count = entry.get('count') if entry else (None if bound else 256 - index)
+            if type(count) is not int or not 1 <= count <= 4096 - index:
+                raise ShaderError(f'relative read needs a bound array for {reg}')
+            reg_array[reg] = (slot, index, count)
+        cb_sizes[slot] = max(cb_sizes.get(slot, 0), index + count)
         reg_expr[reg] = f't6_cb{slot}[{index}]'
     sample_scale, sample_alpha, sample_texel = {}, {}, {}
     for reg, entry in bindings.get('samplers', {}).items():
@@ -200,6 +220,12 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
         typ = {'2d': 'Texture2D', 'cube': 'TextureCube', 'volume': 'Texture3D'}[dim]
         if entry and entry.get('constant') is not None:
             continue  # neutral texel (shaderruntime: source system absent in T6)
+        if entry and entry.get('compare'):
+            if dim != '2d':
+                raise ShaderError(f'shadow compare adapter needs a 2D texture: {reg}')
+            resources += [f'Texture2D<float> tex_{reg} : register(t{tex});',
+                          f'SamplerComparisonState samp_{reg} : register(s{samp});']
+            continue
         if entry and entry.get('point_load'):
             # Point sampling without the target's sampler state (the target
             # binds a comparison sampler here): read the texel directly, with
@@ -261,6 +287,21 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
         modifier = re.fullmatch(r'(r\d+|v\d+|c\d+)_abs(\.[xyzwrgba]{1,4})?', token)
         if modifier:
             return f'abs({source(modifier[1] + (modifier[2] or ""))})'
+        indexed = re.fullmatch(r'(c\d+)\[a0\.([xyzw])\](?:\.([xyzwrgba]{1,4}))?', token)
+        if indexed:
+            # relative constant read; D3D9 leaves out-of-range rows undefined
+            reg, component, swizzle = indexed.groups()
+            if reg in defs or (reg not in reg_array and reg_expr.get(reg, '').startswith('t6_cb')):
+                raise ShaderError(f'relative read needs a bound array for {reg}')
+            if reg in reg_array:
+                slot, index, count = reg_array[reg]
+                expr = f't6_cb{slot}[{index} + clamp(a0.{component}, 0, {count - 1})]'
+            else:
+                expr = reg_expr[reg]  # constant adapter: every row reads the same value
+            if swizzle:
+                swizzle = swizzle.translate(SWIZZLE)
+                expr = f'({expr}).{swizzle + swizzle[-1] * (4 - len(swizzle))}'
+            return expr
         match = REG.fullmatch(token)
         if not match:
             raise ShaderError(f'unsupported operand {token}')
@@ -276,6 +317,7 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
 
     body, flow = [], []
     repeat_index = 0
+    addressed = bool(relative)
     comparison = {'gt': '>', 'lt': '<', 'ge': '>=', 'le': '<=', 'eq': '==', 'ne': '!='}
     for decorated, args, original in operations:
         flags = decorated.split('_')
@@ -314,6 +356,15 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
             raise ShaderError(f'unsupported instruction modifier: {original}')
         if op == 'texkill' and len(args) == 1 and stage == 'ps':
             body.append(f'clip(({source(args[0])}).xyz);')
+            continue
+        if op == 'mova' and len(args) == 2 and stage == 'vs' and 'sat' not in flags:
+            # vs_3_0 address register load: round to nearest
+            dst = re.fullmatch(r'a0(?:\.([xyzw]{1,4}))?', args[0])
+            if not dst or len(set(dst[1] or 'xyzw')) != len(dst[1] or 'xyzw'):
+                raise ShaderError(f'invalid address register write: {original}')
+            mask = dst[1] or 'xyzw'
+            body.append(f'{{ int4 value = int4(floor({source(args[1])} + 0.5)); a0.{mask} = value.{mask}; }}')
+            addressed = True
             continue
         arities = {'mov': 1, 'add': 2, 'sub': 2, 'mul': 2, 'mad': 3, 'dp3': 2,
                    'dp4': 2, 'dp2add': 3, 'min': 2, 'max': 2, 'rcp': 1, 'rsq': 1,
@@ -374,6 +425,14 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
                 if stage != 'ps':
                     raise ShaderError('vertex texture reads must use explicit LOD')
                 expr = f'tex_{sampler}.Sample(samp_{sampler}, {uv})'
+            if bindings.get('samplers', {}).get(sampler, {}).get('compare'):
+                # SM3 hardware shadow fetch (depth texture): the texel is the
+                # comparison of coord.z (texldp: z/w) with the stored depth.
+                # The target's comparison sampler supplies its own test.
+                if samplers[sampler] != '2d' or op not in ('texld', 'texldl', 'texldp') or v_remap or taps or point_load:
+                    raise ShaderError(f'shadow compare adapter cannot express {original}')
+                depth = f'(({coord}).z / ({coord}).w)' if op == 'texldp' else f'({coord}).z'
+                expr = f'tex_{sampler}.SampleCmpLevelZero(samp_{sampler}, {uv}, {depth}).xxxx'
             if point_load:
                 # reads mip 0 (WaW shadow lookups pass LOD 0; reported by the contract)
                 expr = f'load_{sampler}({uv})'
@@ -427,7 +486,7 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
     if flow:
         raise ShaderError('unclosed flow control')
     decls = [f'float4 {reg} = 0;' for reg in sorted(used | inputs.keys() | outputs.keys())
-             if reg.startswith(('r', 'v', 'o'))]
+             if reg.startswith(('r', 'v', 'o'))] + (['int4 a0 = 0;'] if addressed else [])
     fields = lambda items: ' '.join(f'{"centroid " if reg in centroid else ""}float{width if width > 1 else ""} {reg} : {sem};' for reg, (sem, width) in items.items())
     # A pixel shader paired with a translated vertex shader must declare the
     # vertex output signature exactly (D3D11 links by register order).
@@ -453,6 +512,10 @@ def translate(assembly: str, bindings: dict | None = None) -> tuple[str, dict]:
     for reg, (_, width) in inputs.items():
         adapter = bindings.get('inputs', {}).get(reg, {}).get('adapter')
         name = f'input.{field_of[reg]}'
+        if reg == vpos:
+            # D3D9 pixel centres sit on integer coordinates; SV_Position's on +0.5
+            init.append(f'{reg} = float4({name}.xy - 0.5, 0.0, 0.0);')
+            continue
         if adapter == 'waw_neutral':
             # the source system that fills this stream does not exist in T6
             init.append(f'{reg} = float4(' + ', '.join(repr(float(c)) for c in bindings['inputs'][reg]['constant']) + ');')

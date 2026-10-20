@@ -46,6 +46,9 @@ UNLIT_MAP = {
     "shadowcaster": ("shadowcaster", []),
     # BO1 custom (sw4) world shaders: keep the colour map on a plain unlit pass
     "sw4_3d_projector_ring": ("unlit_blend", ["BO1 projector ring shader drawn as unlit blend"]),
+    # BO1 decal blends: the unlit pass with the source's own add/multiply state
+    "unlitdecalblend_add": ("unlit_blend", ["BO1 additive decal drawn as unlit with its own blend"]),
+    "unlitdecalblend": ("unlit_blend", ["BO1 multiply decal drawn as unlit with its own blend"]),
 }
 
 
@@ -153,6 +156,7 @@ MODEL_UNLIT_MAP = {
     "unlit": "unlit_replace",
     "unlit_blend": "unlit_blend",
     "unlit_add": "unlit_add",
+    "unlitdecalblend_add": "unlit_add",
     "objective": "objective",
 }
 # Model techsets with no T6 equivalent in the donor zone. The replacement
@@ -168,7 +172,17 @@ MODEL_FALLBACK = {
     "sw4_3d_char_cloth": ("l_sm_r0c0n0s0", "BO1 character cloth shader approximated by lit_sm"),
     "sw4_3d_char_skin": ("l_sm_r0c0n0s0", "BO1 character skin shader approximated by lit_sm"),
     "cod7modelcloak_ck": ("l_sm_r0c0n0s0", "BO1 cloak shader approximated by lit_sm"),
-    "sw4_3d_rotate": ("l_sm_r0c0", "BO1 rotating-UV shader drawn static"),
+    # these BO1 programs read the tangent (TEXCOORD2): only normal-mapped donors stream it
+    "sw4_3d_rotate": ("l_sm_r0c0n0", "BO1 rotating-UV shader on the normal-mapped lit pass"),
+    "sw4_3d_clan_tag_transparent": ("l_sm_b0c0n0", "BO1 clan tag shader on the blended lit pass"),
+    "sw4_3d_player_icon_transparent": ("l_sm_b0c0n0", "BO1 player icon shader on the blended lit pass"),
+    # BO1 canopies light from the grid texture (modelLightingSampler); T6's
+    # canopy passes use grid SH constants instead, so take the lit model pass
+    "sm_treecanopy": ("l_sm_t0c0", "BO1 canopy drawn on the alpha-tested lit model pass"),
+    "sm_treecanopy_sway": ("l_sm_t0c0", "BO1 canopy drawn on the alpha-tested lit model pass"),
+    # BO1 lit sets without the shadow-map tag: the same layer on T6's lit_sm pass
+    "l_r0c0n0s0sc0x0": ("l_sm_r0c0n0s0", "BO1 lit (no shadow map) drawn as lit_sm"),
+    "l_r0c0n0s0_eyeball_hero": ("l_sm_r0c0n0s0", "BO1 hero eyeball drawn as lit_sm"),
     "sw4_3d_unlit_scroll": ("unlit", "BO1 scrolling unlit shader drawn static"),
     "sw4_3d_animated_unlit": ("unlit", "BO1 animated unlit shader drawn static"),
     "sw4_3d_animated_unlit_normals": ("unlit", "BO1 animated unlit shader drawn static"),
@@ -415,7 +429,8 @@ def build_material(t4: dict, donor: dict, notes: list[str]) -> dict:
             if 'cullFace' in state:
                 state['cullFace'] = 'none'
     source = parse(t4.get('techniqueSet', ''))
-    if source.family == 'world' and source.unlit_kind in ('unlit', 'unlit_blend', 'unlit_distfalloff', 'unlit_falloff_add'):
+    if source.family == 'world' and source.unlit_kind in ('unlit', 'unlit_blend', 'unlit_distfalloff', 'unlit_falloff_add',
+                                                          'unlitdecalblend_add', 'unlitdecalblend'):
         entries = t4.get('stateBitsEntry', [])
         index = entries[4] if len(entries) > 4 else -1
         states = t4.get('stateBits', [])
@@ -446,6 +461,8 @@ def only_casts_shadow(t4: dict) -> bool:
 def material_techset(t4: dict) -> str:
     """Unlit shader names alone do not encode a material's custom blending."""
     name = t4.get('techniqueSet', '')
+    # BO1 calls the opaque unlit set unlit_replace (as T6 does); WaW calls it unlit
+    name = re.sub(r'^(wc|mc)_unlit_replace$', r'\1_unlit', name)
     parsed = parse(name)
     entries, states = t4.get('stateBitsEntry', []), t4.get('stateBits', [])
     index = entries[4] if len(entries) > 4 else -1
