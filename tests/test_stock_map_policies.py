@@ -120,6 +120,19 @@ class StockMapPolicyTests(unittest.TestCase):
             self.assertIsNone(tr.extract_round_total())
             self.assertTrue(any("earlier locals players" in e for e in tr.report.errors))
 
+    def test_round_formula_resetting_an_earlier_local_in_its_block_is_ported(self):
+        # Verruckt: the dog-round branch sets players itself before reading it
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "maps").mkdir()
+            (root / "maps/_zombiemode.gsc").write_text(
+                "round_spawning() { players = get_players(); max = 24;"
+                " if ( flag( \"dog_round\" ) ) { players = get_players(); max = int( max / players.size ); }"
+                " level.zombie_total = max; }")
+            tr = gscport.Translator(gscport.Sources([root], [], None), _api(), gscport.PortReport())
+            self.assertEqual(tr.extract_round_total(), "zombiemode__round_spawning_total_register")
+            self.assertFalse(tr.report.errors)
+
     def test_custom_maps_keep_their_own_quick_revive_logic(self):
         with tempfile.TemporaryDirectory() as tmp:
             core, perks = _port(Path(tmp), stock_map=False)

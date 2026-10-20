@@ -1636,6 +1636,24 @@ class Translator:
                    if toks[start].kind == gsc.IDENT and toks[start + 1].text == "="}
         body = [t for start, end in spans[first:store] for t in toks[start:end]]
         used = {t.low for i, t in enumerate(body) if t.kind == gsc.IDENT and (i == 0 or body[i - 1].text != ".")}
+        # A local the formula sets itself before any read, with every use inside
+        # the block holding that assignment, never sees the earlier value
+        # (Verruckt: players = get_players(); in the dog-round branch).
+        for name in sorted(earlier & used):
+            at = [i for i, t in enumerate(body) if t.low == name and (i == 0 or body[i - 1].text != ".")]
+            if body[at[0] + 1].text != "=":
+                continue
+            depth, open_ = 0, None
+            for i in range(at[0] - 1, -1, -1):
+                if body[i].text == "}":
+                    depth += 1
+                elif body[i].text == "{":
+                    if depth == 0:
+                        open_ = i
+                        break
+                    depth -= 1
+            if open_ is not None and at[-1] < gsc._match(body, open_, "{", "}"):
+                used.discard(name)
         if earlier & used:
             self.report.errors.append(f"{where}: {function} count formula reads earlier locals "
                                       f"{', '.join(sorted(earlier & used))}; not ported")
