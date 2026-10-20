@@ -20,6 +20,11 @@ class ZoneGraphTests(unittest.TestCase):
         self.assertIn('init_zones[0] = "spawn";', patched)
         self.assertIn('init_zones[1] = "courtyard";', patched)
 
+    def test_script_ending_in_a_short_statement_has_no_zone_graph(self):
+        # Verruckt's script ends with fewer than six tokens after an identifier
+        self.assertEqual(zones.read_waw_zones('main()\n{\n    a = b;\n}\nfoo'), ([], []))
+        self.assertEqual(zones.read_waw_zones('x[ 0 ] ='), ([], []))
+
     def test_zombie_spawners_without_waw_force_flag_can_spawn_in_t6(self):
         source = [
             {"classname": "actor_zombie_ger_ber_sshonor", "script_noteworthy": "zombie_spawner",

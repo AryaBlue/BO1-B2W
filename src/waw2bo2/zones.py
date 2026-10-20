@@ -105,9 +105,11 @@ def read_waw_zones(waw_gsc: str) -> tuple[list[str], list[str]]:
         texts = [t.text for t in nxt]
         if token.kind == gsc.IDENT and (i == 0 or tokens[i - 1].text in (';', '{', '}')):
             # local array element / local string: name[ n ] = "x";  name = "x";
-            if texts[:5] == ['[', texts[1], ']', '=', texts[4]] and len(nxt) > 5 and nxt[1].kind == gsc.NUMBER                     and nxt[4].kind == gsc.STRING and texts[5] == ';':
+            # (the script's last statements leave fewer than six tokens ahead)
+            if len(nxt) > 5 and texts[0] == '[' and texts[2:4] == [']', '='] and texts[5] == ';' \
+                    and nxt[1].kind == gsc.NUMBER and nxt[4].kind == gsc.STRING:
                 arrays.setdefault(token.low, {})[int(float(nxt[1].text))] = nxt[4].text
-            elif texts[:3] == ['=', texts[1], ';'] and nxt[1].kind == gsc.STRING:
+            elif len(nxt) > 2 and texts[0] == '=' and texts[2] == ';' and nxt[1].kind == gsc.STRING:
                 scalars[token.low] = nxt[1].text
                 arrays.pop(token.low, None)
             elif texts[:4] == ['=', '[', ']', ';']:
