@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix zombies sinking into the floor at Project X windows while tearing boards and after climbing in. BO2 plays its tear and window-entry animations from the barrier's origin, with the zombie's feet a constant 30.9 units below it (stock animations); Project X's WaW window goals sit only 8-16 above the floor. Converted barriers now stand that height above the WaW collision floor under them. Windows whose boards are unnumbered or freely named (Project X: `window_south_1`) are now also aligned with their boards; before, all 23 stood ~17 units outside them.
+
 ## v0.2.15
 
 - Add **Resume: keep my edits to the staged files** to Build Map (off by default). Every build re-stages the map, which translates the WaW scripts again into `stage/zone_raw/<map>/`, so a hand fix to a staged file that failed script compilation or linking was overwritten on the next build. **Refresh source files** only re-extracts the WaW fastfiles. With Resume on, a build whose map sources, options and converter version match the last finished staging skips staging, lists the edited files, and reruns linking, script compilation and the audits. See [Desktop app](docs/DESKTOP.md).
