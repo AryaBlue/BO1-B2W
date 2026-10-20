@@ -58,6 +58,24 @@ class ZoneGraphTests(unittest.TestCase):
                   '    maps\\_zombiemode_zone_manager::add_adjacent_zone( "start_zone", "yard", "enter_yard" );\n')
         self.assertEqual(zones.read_waw_zones(script), (["start_zone"], ['"start_zone", "yard", "enter_yard"']))
 
+    def test_local_flag_arrays_resolve_and_dead_code_is_skipped(self):
+        script = ('zone_init()\n{\n'
+                  '    add_adjacent_zone( "a", "b", "door_ab" );\n'
+                  '    flag_array[0] = "door_ab";\n    flag_array[1] = "door_bc";\n'
+                  '    add_adjacent_zone( "a", "c", flag_array, true );\n'
+                  '    /*\n    add_adjacent_zone( "a", "ghost", flag_array, true );\n    */\n'
+                  '    // add_adjacent_zone( "a", "ghost2", "x" );\n'
+                  '    /# add_adjacent_zone( "a", "dev", "x" ); #/\n}\n')
+        initial, adjacency = zones.read_waw_zones(script)
+        self.assertEqual(adjacency, ['"a", "b", "door_ab"', '"a", "c", [ "door_ab", "door_bc" ], true'])
+        self.assertEqual(zones.zone_names(initial, adjacency), {"a", "b", "c"})
+        call = zones.adjacent_zone_call(adjacency[1])
+        # BO2's add_adjacent_zone indexes level.flag with its flag: arrays use make_zone_adjacent
+        self.assertNotIn('add_adjacent_zone', call)
+        self.assertIn('waw2bo2_flags[1] = "door_bc";', call)
+        self.assertIn('make_zone_adjacent( "a", "c", waw2bo2_flags );', call)
+        self.assertIn('if ( !( true ) )', call)
+
     def test_map_without_zone_graph_is_not_an_error(self):
         self.assertEqual(zones.read_waw_zones("main() { maps\\_zombiemode::main(); }"), ([], []))
 

@@ -270,7 +270,7 @@ class ZombieBehaviorTests(unittest.TestCase):
             native = root / 'bo2/raw/maps/mp/zombies/_zm_spawner.gsc'
             native.parent.mkdir(parents=True)
             native.write_text('zombie_spawn_init(){ self init_zombie_run_cycle(); self thread zombie_think(); } '
-                              'do_zombie_spawn(){spot=random(spots);} zombie_think(){}\n' + BO2_DEATH_POINTS)
+                              'do_zombie_spawn(){spot=random(spots); if(isdefined(spot.target)) self.target=spot.target;} zombie_think(){}\n' + BO2_DEATH_POINTS)
             out = root / 'out/maps/mp/waw'
             out.mkdir(parents=True)
             (out / '_waw2bo2_zombie_behavior.gsc').write_text('init(){}')
@@ -293,6 +293,10 @@ class ZombieBehaviorTests(unittest.TestCase):
             self.assertIn('::choose_spawn_location()', text)
             self.assertLess(text.index('::choose_spawn_location()'), text.index('::choose_spawner('))
             gsc.parse(text, 'active source membership round loop')
+            # the chosen location's target replaces the actor's, even when it has none
+            owned = (root / 'out/maps/mp/waw/_waw2bo2_spawner.gsc').read_text()
+            self.assertIn('self.target=spot.target;', owned)
+            self.assertNotIn('isdefined(spot.target)', owned)
 
     def test_source_tesla_deaths_skip_native_duplicate_points_and_drops(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -301,7 +305,7 @@ class ZombieBehaviorTests(unittest.TestCase):
             native = root / 'bo2/raw/maps/mp/zombies/_zm_spawner.gsc'
             native.parent.mkdir(parents=True)
             native.write_text('zombie_spawn_init(){ self init_zombie_run_cycle(); self thread zombie_think(); } '
-                              'do_zombie_spawn(){spot=random(spots);} zombie_think(){}\n' + BO2_DEATH_POINTS)
+                              'do_zombie_spawn(){spot=random(spots); if(isdefined(spot.target)) self.target=spot.target;} zombie_think(){}\n' + BO2_DEATH_POINTS)
             out = root / 'out/maps/mp/waw'
             out.mkdir(parents=True)
             (out / '_waw2bo2_zombie_behavior.gsc').write_text('init(){}')
@@ -379,7 +383,7 @@ class ZombieBehaviorTests(unittest.TestCase):
             native.parent.mkdir(parents=True)
             native.write_text('#include maps\\mp\\zombies\\_zm_spawner;\n'
                 'zombie_spawn_init(animname_set){ self init_zombie_run_cycle(); self thread zombie_think(); }\n'
-                'do_zombie_spawn(){ spot=random(spots); self.spawn_point = spot; }\n'
+                'do_zombie_spawn(){ spot=random(spots); self.spawn_point = spot; if ( isdefined( spot.target ) ) self.target = spot.target; }\n'
                 'zombie_think(){ wait 1; }\n' + BO2_DEATH_POINTS)
             runtime = root / 'out/maps/mp/waw/_waw2bo2_zombie_behavior.gsc'
             runtime.parent.mkdir(parents=True)

@@ -101,6 +101,9 @@ class PortReport:
     waw_hud_materials: list[str] = field(default_factory=list)
     # native T6 animtrees of non-human source actors (dog) -> WaW AI type
     native_actor_trees: dict[str, str] = field(default_factory=dict)
+    # string literals of the client listeners run on the server: client-only
+    # entities they name must exist on the server (t6bridge)
+    client_listener_strings: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict:
         return {"map_main": self.map_main, "ported": self.ported, "core_overrides": self.core_overrides,
@@ -109,7 +112,8 @@ class PortReport:
                 "unsupported": self.unsupported, "rewrites": dict(self.rewrites), "fx": self.fx,
                 "animtrees": self.animtrees, "errors": self.errors,
                 "waw_hud_materials": self.waw_hud_materials,
-                "native_actor_trees": self.native_actor_trees}
+                "native_actor_trees": self.native_actor_trees,
+                "client_listener_strings": self.client_listener_strings}
 
 
 class Sources:
@@ -2085,36 +2089,40 @@ class Translator:
         self.report.rewrites["WaW framework zombie_vars defaults"] += len(values)
         return name
 
-    # Client calls an effect-only listener may make once it runs on the server.
-    CLIENT_FX_CALLS = {"spawnfx", "triggerfx", "playfx", "getstructarray", "getstruct", "anglestoforward",
-                       "anglestoup", "anglestoright", "getlocalplayers", "isdefined", "randomfloat",
-                       "randomfloatrange", "randomint", "randomintrange", "delete", "realwait", "wait"}
-
     def client_fx_listeners(self) -> list[str]:
-        """Effect-only client listeners of the map's client scripts, run on the server.
+        """Client listeners of the map's client scripts, run on the server.
 
-        WaW maps answer a server clientnotify in their client scripts, e.g. Shi
-        No Numa's trap_fx_monitor waits for the trap's notify and spawns the
-        electric arcs on its structs. The port does not run the source client
-        scripts, so those effects never appeared. A listener main() threads
-        whose functions only spawn/trigger/delete effects becomes a server
-        thread: SpawnFx/PlayFx drop the local client argument, getlocalplayers
-        yields one entry, and level waittill( msg ) waits for the
-        "waw_client_" + msg notify that compat waw_clientnotify adds. The
-        client effects it reads are registered on the server."""
+        WaW maps answer a server clientnotify in their client scripts: Shi No
+        Numa's trap_fx_monitor spawns electric arcs on its structs, Der Riese
+        swaps its lamp models at power-on, lights its teleporter maps, runs
+        sparks along the pad wires and floats the fly-trap objects. The port
+        does not run the source client scripts, so a listener main() threads
+        becomes a server thread when every call it makes is one gsc_api
+        client_listener_calls defines (the local client argument dropped,
+        client-only builtins routed to the compat runtime). getlocalplayers
+        yields one entry, so per-client work happens once for everyone, on
+        networked server entities. The client's level messages live in the
+        "waw_client_" namespace: compat waw_clientnotify raises
+        "waw_client_" + msg, and the copies' own level notify/endon/waittill
+        use the same prefix. Client effects are registered on the server."""
         made: list[str] = []
-        for key in sorted(k for k in self.sources.text if k.endswith(".csc")):
+        effects: dict[str, str] = {}
+        csc = sorted(k for k in self.sources.text if k.endswith(".csc"))
+        for key in csc:
+            # level._effect is one client namespace across the client scripts
+            script = self.sources.get(key[:-4], ".csc")
+            toks = script.tokens if script is not None else []
+            for i in range(len(toks) - 9):
+                if [t.low for t in toks[i:i + 4]] == ["level", ".", "_effect", "["] and toks[i + 4].kind == gsc.STRING \
+                        and toks[i + 5].text == "]" and toks[i + 6].text == "=" and toks[i + 7].low == "loadfx" \
+                        and toks[i + 9].kind == gsc.STRING:
+                    effects.setdefault(toks[i + 4].text[1:-1].lower(), toks[i + 9].text)
+        for key in csc:
             script = self.sources.get(key[:-4], ".csc")
             main = script.functions.get("main") if script is not None else None
             if main is None:
                 continue
             toks = script.tokens
-            effects = {}
-            for i in range(len(toks) - 8):
-                if [t.low for t in toks[i:i + 4]] == ["level", ".", "_effect", "["] and toks[i + 4].kind == gsc.STRING \
-                        and toks[i + 5].text == "]" and toks[i + 6].text == "=" and toks[i + 7].low == "loadfx" \
-                        and toks[i + 9].kind == gsc.STRING:
-                    effects[toks[i + 4].text[1:-1].lower()] = toks[i + 9].text
             for ref in gsc.references(toks, main.body_open, main.body_close):
                 if ref.qualifier is not None or ref.pointer or ref.method or ref.name.lower() not in script.functions:
                     continue
@@ -2127,22 +2135,45 @@ class Translator:
                 args = gsc.emit(toks[ref.index + 1:end + 1]).strip()
                 name = f"waw2bo2_client_fx_{len(made)}"
                 self.level_state_parts.append(
-                    f"{name}()\n{{\n\t// {key}::main: client effect listener, on the server\n"
+                    f"{name}()\n{{\n\t// {key}::main: client listener, on the server\n"
                     f"{listener['effects']}\tlevel thread {listener['entry']}{args};\n}}\n")
                 made.append(name)
                 self.report.rewrites["client effect listeners -> server"] += 1
+                literals = {t.text[1:-1] for t in gsc.tokenize(listener["code"] + args) if t.kind == gsc.STRING}
+                self.report.client_listener_strings = sorted(set(self.report.client_listener_strings) | literals)
         return made
 
     def client_fx_listener(self, key: str, script, entry: str, effects: dict[str, str]) -> dict | None:
         """Server copies of ``entry`` and its local callees, or None if any
-        call is not effect-only (that listener stays unported and reported).
+        call has no server form (that listener stays unported and reported).
         Copies are emitted once however many threads main() starts."""
         cache = self.__dict__.setdefault("_client_listener_copies", {})
         if (key, entry) not in cache:
             cache[(key, entry)] = self._client_fx_listener_copy(key, script, entry, effects)
         return cache[(key, entry)]
 
+    @staticmethod
+    def _drop_argument(toks: list[gsc.Token], name_index: int, index: int) -> None:
+        """Blank argument ``index`` (and one adjacent comma) of the call at ``name_index``."""
+        close = gsc._match(toks, name_index + 1, "(", ")")
+        depth, commas = 0, []
+        for k in range(name_index + 2, close):
+            if toks[k].text == "," and depth == 0:
+                commas.append(k)
+            depth += toks[k].text in ("(", "[")
+            depth -= toks[k].text in (")", "]")
+        bounds = [name_index + 1, *commas, close]
+        if index >= len(bounds) - 1:
+            return
+        if index + 1 < len(bounds) - 1:
+            first, last = bounds[index] + 1, bounds[index + 1]          # the argument and its following comma
+        else:
+            first, last = (bounds[index] if index else bounds[index] + 1), bounds[index + 1] - 1
+        for k in range(first, last + 1):
+            toks[k].text = toks[k].pre = ""
+
     def _client_fx_listener_copy(self, key: str, script, entry: str, effects: dict[str, str]) -> dict | None:
+        calls = API["client_listener_calls"]
         names, pending = [], [entry]
         while pending:
             name = pending.pop()
@@ -2150,11 +2181,19 @@ class Translator:
                 continue
             names.append(name)
             fn = script.functions[name]
+            if any(t.text == "[[" for t in script.tokens[fn.body_open:fn.body_close]):
+                # a function pointer's target is not a call the table can vouch for
+                self.report.unsupported.setdefault(
+                    f"CSC function pointer call in client listener {entry} (client-only)", []).append(key)
+                return None
             for ref in gsc.references(script.tokens, fn.body_open, fn.body_close):
                 low = ref.name.lower()
+                rule = calls.get(low) if ref.qualifier is None else None
                 if ref.qualifier is None and low in script.functions:
                     pending.append(low)
-                elif ref.qualifier is not None or low not in self.CLIENT_FX_CALLS:
+                elif rule is not None and rule.get("skip"):
+                    return None     # another translation owns this listener (client_fog_monitors)
+                elif rule is None or (ref.method and "to" in rule):
                     self.report.unsupported.setdefault(
                         f"CSC {ref.name} in client listener {entry} (client-only)", []).append(key)
                     return None
@@ -2164,54 +2203,57 @@ class Translator:
             return None
         prefix = f"waw2bo2_{key.split(chr(92))[-1].removesuffix('.csc')}__"
         parts, used = [], set()
+        # listeners share helpers (Der Riese's map lights: get_guide_struct_angles):
+        # each source function is emitted once per client script
+        emitted = self.__dict__.setdefault("_client_listener_functions", set())
         for name in names:
             fn = script.functions[name]
+            if (key, name) in emitted:
+                continue
             toks = [gsc.Token(t.kind, t.text, t.pre, t.line) for t in script.tokens[fn.start:fn.body_close + 1]]
             i = 0
             while i < len(toks) - 1:
                 t = toks[i]
                 low = t.low
-                if t.kind == gsc.IDENT and low in names and toks[i + 1].text == "(":
+                call = t.kind == gsc.IDENT and toks[i + 1].text == "(" and (i == 0 or toks[i - 1].text != "::")
+                rule = calls.get(low) if call and i else None
+                if call and i and low in names:
                     t.text = prefix + low
-                elif low in ("spawnfx", "playfx") and toks[i + 1].text == "(":
-                    # drop the local client number argument
-                    j, depth = i + 2, 0
-                    while depth or toks[j].text != ",":
-                        depth += toks[j].text in ("(", "[")
-                        depth -= toks[j].text in (")", "]")
-                        j += 1
-                    for k in range(i + 2, j + 1):
-                        toks[k].text = toks[k].pre = ""
+                elif rule is not None:
+                    if "client_arg" in rule:
+                        self._drop_argument(toks, i, rule["client_arg"])
                     if low == "spawnfx":
                         # server spawnfx( fx, origin, forward, up ): no delay argument
-                        close = gsc._match(toks, i + 1, "(", ")")
-                        commas = [k for k in range(i + 2, close) if toks[k].text == "," and
-                                  sum((x.text in ("(", "[")) - (x.text in (")", "]")) for x in toks[i + 2:k]) == 0]
-                        if len(commas) >= 3:
-                            for k in range(commas[1], commas[2]):
-                                toks[k].text = toks[k].pre = ""
-                elif low == "getlocalplayers" and toks[i + 1].text == "(":
-                    t.text = COMPAT + "::waw_server_local_players"
-                elif low == "realwait":
-                    t.text = "wait"
+                        self._drop_argument(toks, i, 2)
+                    if "to" in rule:
+                        t.text = f"{COMPAT}::{rule['to']}" if rule["to"].startswith("waw_") else rule["to"]
                 elif low == "level" and toks[i + 1].text == "." and toks[i + 2].low == "_effect" \
                         and toks[i + 3].text == "[" and toks[i + 4].kind == gsc.STRING:
                     used.add(toks[i + 4].text[1:-1].lower())
                     toks[i + 2].text = "waw_effect"
-                elif low == "level" and toks[i + 1].low == "waittill" and toks[i + 2].text == "(":
+                elif low == "level" and toks[i + 1].low in ("waittill", "notify", "endon") and toks[i + 2].text == "(":
                     toks[i + 3].pre = " \"waw_client_\" + " + toks[i + 3].pre.lstrip()
                 i += 1
-            parts.append(gsc.emit(toks))
+            if toks[0].low in names:
+                toks[0].text = prefix + toks[0].low
+            parts.append((name, gsc.emit(toks)))
         missing = sorted(used - effects.keys())
         if missing:
             self.report.unsupported.setdefault(
                 f"CSC client effects {', '.join(missing)} in listener {entry} (no client registration)", []).append(key)
             return None
-        self.level_state_parts.append(f"\n// {key}: client effect listener {entry} (server copy)\n" + "\n".join(parts) + "\n")
+        done = {name for name, _ in parts}
+        emitted.update((key, name) for name in done)
+        parts = [text for _, text in parts]
+        code = "\n".join(parts)
+        self.level_state_parts.append(f"\n// {key}: client listener {entry} (server copy)\n" + code + "\n")
         registrations = "".join(
             f'\tif ( !isdefined( level.waw_effect["{k}"] ) )\n'
             f'\t\tlevel.waw_effect["{k}"] = {COMPAT}::waw_loadfx( {effects[k]} );\n' for k in sorted(used))
-        return {"entry": prefix + entry, "effects": registrations}
+        # helpers an earlier listener emitted belong to this one's code too
+        code += "".join(gsc.emit(script.tokens[script.functions[n].start:script.functions[n].body_close + 1])
+                        for n in names if n not in done)
+        return {"entry": prefix + entry, "effects": registrations, "code": code}
 
     def framework_hooks(self) -> list[str]:
         """Calls WaW's _zombiemode::main (usually the map's override) makes

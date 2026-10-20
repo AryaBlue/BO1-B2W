@@ -1465,6 +1465,52 @@ waw_server_local_players()
     return players;
 }
 
+// Client script calls in a server copy of a client listener (gsc_api
+// client_listener_calls); the local client number is already dropped.
+// WaW CSC Spawn( client, origin, classname ) creates a client entity; the
+// server entity is networked to every client instead.
+waw_client_spawn( origin, classname )
+{
+    if ( !isdefined( classname ) )
+        classname = "script_model";
+    return spawn( classname, origin );
+}
+
+// A CSC "fake entity" is a client-side sound source placed with
+// SetFakeEntOrg; on the server it is a script_origin playing the alias.
+waw_client_spawnfakeent()
+{
+    return spawn( "script_origin", ( 0, 0, 0 ) );
+}
+
+waw_client_setfakeentorg( ent, origin )
+{
+    if ( isdefined( ent ) )
+        ent.origin = origin;
+}
+
+waw_client_deletefakeent( ent )
+{
+    if ( isdefined( ent ) )
+        ent delete();
+}
+
+waw_client_playloopsound( ent, alias, fadetime )
+{
+    if ( isdefined( ent ) )
+        ent waw_playloopsound( alias, fadetime );
+}
+
+waw_client_stoploopsound( ent, fadetime )
+{
+    if ( !isdefined( ent ) )
+        return;
+    if ( isdefined( fadetime ) )
+        ent stoploopsound( fadetime );
+    else
+        ent stoploopsound();
+}
+
 // WaW drops a power-up only where it lands inside a "playable_area" trigger
 // (_zombiemode_powerups::powerup_drop). BO2 checks its zone volumes instead,
 // which converted maps synthesize around spawner groups, reaching outside.

@@ -8,13 +8,20 @@ import json
 import shutil
 import struct
 import subprocess
+import time
 
-from . import __version__, all2raw, modelhitboxes, progress
+from . import __version__, all2raw, knowledge, modelhitboxes, progress
 from .launcher import BuildPaths, Settings, cli_command
 from .resources import resource_root
 
 
+# the build step running now, for the knowledge ledger's failed_step
+_current_step: list[str] = []
+
+
 def run(command: list[str], log: Path | None = None) -> None:
+    if '-m' in command and command.index('-m') + 2 < len(command):
+        _current_step[:] = [command[command.index('-m') + 2]]
     if log is None:
         result = subprocess.run(command, check=False)
     else:
@@ -139,7 +146,36 @@ def build(settings: Settings, *, redump: bool = False, root: Path | None = None,
     with ExitStack() as locks:
         for cache in sorted({caches.waw, caches.bo2}, key=str):
             locks.enter_context(all2raw.cache_lock(cache))
-        return _build(settings, redump=redump, root=root, cache_paths=caches)
+        _current_step.clear()
+        started = time.time()
+        try:
+            result = _build(settings, redump=redump, root=root, cache_paths=caches)
+        except BaseException as exc:
+            remember(settings, root, 'failed', f'{type(exc).__name__}: {exc}', since=started)
+            raise
+        remember(settings, root, 'built', since=started)
+        return result
+
+
+def remember(settings: Settings, root: Path | None, outcome: str, error: str = '', *, since: float = 0) -> None:
+    """Record this map's observation in the knowledge ledger (knowledge.py).
+    Evidence only: a ledger problem never changes the build's result."""
+    try:
+        stage = (root.resolve() / 'stage') if root is not None else BuildPaths.for_settings(settings).stage
+        report_file = stage / 'zone_raw' / settings.project / knowledge.REPORT_NAME
+        # a report older than this build belongs to an earlier staging run
+        # (kept only when the build resumed it)
+        fresh = report_file.is_file() and (settings.resume or report_file.stat().st_mtime >= since)
+        report = json.loads(report_file.read_text(encoding='utf-8')) if fresh else None
+        obs = knowledge.observation(report, source=settings.fastfile, project=settings.project,
+                                    version=__version__, outcome=outcome,
+                                    step=_current_step[0] if outcome == 'failed' and _current_step else None,
+                                    error=error)
+        path = knowledge.record(Path(settings.work) / 'knowledge', obs)
+        gaps = sum(len(symbols) for symbols in obs['gaps'].values())
+        print(f'knowledge: {outcome}, {gaps} untranslated features recorded in {path}', flush=True)
+    except Exception as exc:  # noqa: BLE001 - evidence must not fail the build
+        print(f'knowledge: not recorded ({type(exc).__name__}: {exc})', flush=True)
 
 
 def _build(settings: Settings, *, redump: bool = False, root: Path | None = None,
